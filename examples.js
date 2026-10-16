@@ -60,8 +60,8 @@ var alice = getName({ name: "Alice", age: 30 });
 var rover = getName({ name: "Rover", breed: "Labrador" });
 var ship  = getName({ name: "USS Enterprise", warpFactor: 9 });
 
-// Inty infers \`getName<a, b>({name: a | b}) => a\` —
-// only \`name\` is required; the row variable \`b\` carries the rest.
+// Inty infers \`getName(a) -> b where a has {name: b}\` —
+// only \`name\` is required; any other fields come along unchecked.
 `,
             },
             {
@@ -86,23 +86,37 @@ var concat = add("foo", "bar");
                 id: "unions",
                 language: "javascript",
                 label: "unions.js",
-                blurb: "Control-flow joins",
+                blurb: "Declared unions",
                 expect: "ok",
-                code: `// Branches that disagree on type are *joined* into a closed union.
+                code: `// Unions are declared, not guessed: branches that disagree on type
+// are an error unless an annotation says they form a union. A branch
+// that is \`null\` or \`undefined\` is no different: \`T | Null\` is said too.
 
+/** function tag(Boolean) => Number | String */
 function tag(c) { return c ? 42 : "err"; }
 var t = tag(true);                  // Number | String
 
 // Arrays:
-var mixed = [1, "two", 3];          // (Number | String)[]
-var first = ["a", 2][0];            // Number | String
+/** var mixed: (Number | String)[] */
+var mixed = [1, "two", 3];
+var first = mixed[0];               // Number | String
 
 // Object branches with disjoint shapes:
+/** function pick(Boolean) => {x: Number, y: Number} | {x: Number, z: Number} */
 function pick(b) {
     return b ? { x: 1, y: 2 } : { x: 3, z: 4 };
 }
 var pt = pick(true);
-var x  = pt.x;                      // both branches expose \`x: Number\`
+var x  = pt.x;                      // both arms expose \`x: Number\`
+
+// Nullable: \`T | Null\` holds a \`T\` or \`null\`, and \`??\` or a test for
+// null gets the \`T\` back out.
+/** function find<a>(xs: a[], v: a) => a | Null */
+function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }
+var hit = find([1, 2], 2);          // Number | Null
+var n = hit ?? 0;                   // Number
+
+// Try this — remove an annotation above to see the branches rejected.
 `,
             },
             {
@@ -371,7 +385,7 @@ var msg   = "Got " + count + " items";
 // fails at the call site, not silently inside the body.
 
 function label(n) {
-    var name = n || "Guest";        // n: Number, fallback: String — mismatch
+    var name = n || "Guest";        // \`||\` gives both sides one type, so n: String
     return name;
 }
 
@@ -388,21 +402,21 @@ function label(n) {
                 label: "mixed-array.js",
                 blurb: "Mixed arrays look uniform in TS",
                 expect: "error",
-                code: `// Without annotations, TypeScript widens this to \`(string | number)[]\`
-// and lets you use any element as if it were either type.
-// Inty types it as a closed union and forces a narrow before use.
+                code: `// Without annotations, TypeScript quietly widens this literal to
+// \`(string | number)[]\`. In a plain .js file nothing is reported at
+// all, and the mix only surfaces when an element is used as the
+// wrong type at runtime.
+//
+// Inty doesn't guess unions. An array whose elements disagree is an
+// error right at the literal:
 
 var items = [1, "two", 3, "four"];
+//          ^^^^^^^^^^^^^^^^^^^^^
+// Inty: Array elements have different types: Number and String.
 
-// In TS: items[0].toFixed(2) compiles (because of \`number\` in the union).
-// At runtime: TypeError when the element is actually a string.
-//
-// Inty: \`.toFixed\` isn't on the union — you must narrow first.
-function describe(x) {
-    if (typeof x === "number") { return x.toFixed(2); }
-    else                       { return x.toUpperCase(); }
-}
-var first = describe(items[0]);
+// If the mix is intended, declare it (see unions.js):
+//   /** var items: (Number | String)[] */
+//   var items = [1, "two", 3, "four"];
 `,
             },
             {
@@ -423,7 +437,7 @@ function fullName(user) {
 
 var name = fullName({ name: "Alice", id: 42 });
 //                        ^^^^^^^^^^^^^^^^^^
-// Inty: \`firstName\` not found in \`{name: String, id: Number}\`.
+// Inty: Property 'firstName' not found on type {id: Number, name: String}.
 // TS (.js, no types): silently \`any\` — caller sees no error.
 `,
             },
@@ -516,9 +530,7 @@ label = "total = " + "done"
                 blurb: "Type hints enforced as constraints",
                 expect: "ok",
                 code: `# Type annotations are enforced as constraints, not discarded. A
-# program whose values match its annotations type-checks. Annotations
-# inty doesn't model (e.g. \`SomeProtocol\`) impose no constraint, so they
-# never cause a false positive.
+# program whose values match its annotations type-checks.
 
 def add_one(x: int) -> int:
     return x + 1
@@ -545,13 +557,6 @@ class Counter:
 
 c = Counter()
 out = c.scaled(3)
-
-# Unmodelled annotation: lowers to a fresh variable, constrains nothing.
-def use(p: SomeProtocol):
-    return 1
-
-ignored = use("anything")
-also = use(42)
 `,
             },
             {
@@ -677,7 +682,7 @@ class Cat:
     def meow(self):
         return "miaow"
 
-animal = Dog() if True else Cat()
+animal: Dog | Cat = Dog() if True else Cat()
 
 # Each branch narrows \`animal\` to a single brand, so the brand-
 # specific method type-checks here.
@@ -912,18 +917,18 @@ n: int = "not a number"
                 label: "field-mismatch.py",
                 blurb: "self.field type fixed by __init__",
                 expect: "error",
-                code: `# \`__init__\` ties each field to its initial type. Inside any method
-# that reads \`self.name\`, the field is a \`String\` — adding a Number
-# to it is a type error, by design.
+                code: `# \`__init__\` ties each field to its initial type. \`self.name\` is a
+# \`String\`, and \`+\` needs both sides to match, so \`shout\` only takes
+# a String — passing a Number is a type error, by design.
 
 class Greeter:
     def __init__(self, name):
         self.name = name
     def shout(self, times):
-        return self.name + times   # String + Number — rejected
+        return self.name + times   # fixes \`times\` to String
 
 g = Greeter("ada")
-out = g.shout(3)
+out = g.shout(3)   # String + Number — rejected
 `,
             },
             {
@@ -1004,9 +1009,10 @@ class Cat:
     def meow(self):
         return "miaow"
 
-animal = Dog() if True else Cat()
+animal: Dog | Cat = Dog() if True else Cat()
 
-# No narrowing yet — \`bark\` exists on Dog only.
+# No narrowing yet — \`bark\` exists on Dog only, so on the \`Cat\`
+# branch of the union it isn't there.
 sound = animal.bark()
 `,
             },

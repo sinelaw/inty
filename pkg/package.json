@@ -4,6 +4,10 @@
   "description": "Language Server Protocol server backed by inty",
   "version": "0.1.1",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sinelaw/inty"
+  },
   "files": [
     "inty_bg.wasm",
     "inty.js",
