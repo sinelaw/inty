@@ -104,6 +104,7 @@ fn error_code(err: &IntyError) -> &'static str {
             TypeError::UnifyDepth { .. } => "UnifyDepth",
             TypeError::UndefinedVariable { .. } => "UndefinedVariable",
             TypeError::PropertyNotFound { .. } => "PropertyNotFound",
+            TypeError::PropertyOfNullable { .. } => "PropertyOfNullable",
             TypeError::PresenceMismatch { .. } => "PresenceMismatch",
             TypeError::NotAFunction { .. } => "NotAFunction",
             TypeError::ArityMismatch { .. } => "ArityMismatch",

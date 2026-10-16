@@ -1268,6 +1268,22 @@ impl InferState {
             return Ok(result_type);
         }
 
+        // A value that may be nothing has no members: say so, and how to
+        // get the value out, rather than report the object shape the sum
+        // can't unify with.
+        if let Type::Maybe(nothing, _) = &receiver {
+            return Err(crate::error::TypeError::PropertyOfNullable {
+                prop: property.to_string(),
+                obj_type: self.show(&receiver),
+                nothing: match nothing {
+                    crate::types::Nothing::Null => "null",
+                    crate::types::Nothing::Undefined => "undefined",
+                },
+                span,
+            }
+            .into());
+        }
+
         // A primitive without the property (its built-ins were looked up
         // above): say so, rather than report the object shape it can't
         // unify with.
@@ -1299,7 +1315,9 @@ impl InferState {
             row_var,
         ));
 
-        self.unify(span, obj_type, &expected_row)?;
+        // The access needs the row: it is what's expected, the receiver
+        // what's found.
+        self.unify(span, &expected_row, obj_type)?;
 
         Ok(self.zonk_head_into(result_type))
     }
