@@ -1,15 +1,15 @@
-// Without annotations, TypeScript widens this to `(string | number)[]`
-// and lets you use any element as if it were either type.
-// Inty types it as a closed union and forces a narrow before use.
+// Without annotations, TypeScript quietly widens this literal to
+// `(string | number)[]`. In a plain .js file nothing is reported at
+// all, and the mix only surfaces when an element is used as the
+// wrong type at runtime.
+//
+// Inty doesn't guess unions. An array whose elements disagree is an
+// error right at the literal:
 
 var items = [1, "two", 3, "four"];
+//          ^^^^^^^^^^^^^^^^^^^^^
+// Inty: Array elements have different types: Number and String.
 
-// In TS: items[0].toFixed(2) compiles (because of `number` in the union).
-// At runtime: TypeError when the element is actually a string.
-//
-// Inty: `.toFixed` isn't on the union — you must narrow first.
-function describe(x) {
-    if (typeof x === "number") { return x.toFixed(2); }
-    else                       { return x.toUpperCase(); }
-}
-var first = describe(items[0]);
+// If the mix is intended, declare it (see unions.js):
+//   /** var items: (Number | String)[] */
+//   var items = [1, "two", 3, "four"];

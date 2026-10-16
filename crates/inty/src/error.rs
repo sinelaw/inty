@@ -153,8 +153,16 @@ pub struct SourceMap {
 }
 
 impl SourceMap {
-    /// Where the first module's spans start.
+    /// Where the first module's spans start: past any entry program's
+    /// spans. 2^40 doesn't fit a 32-bit `usize` (the wasm build of the
+    /// web playground), where 1 GiB of entry source is ample.
+    #[cfg(target_pointer_width = "64")]
     pub const BASE: usize = 1 << 40;
+    /// Where the first module's spans start: past any entry program's
+    /// spans. 2^40 doesn't fit a 32-bit `usize` (the wasm build of the
+    /// web playground), where 1 GiB of entry source is ample.
+    #[cfg(not(target_pointer_width = "64"))]
+    pub const BASE: usize = 1 << 30;
 
     /// Reserve a span range for `file`, returning its base.
     pub fn add(&mut self, path: String, text: String) -> usize {

@@ -7,5 +7,5 @@ var alice = getName({ name: "Alice", age: 30 });
 var rover = getName({ name: "Rover", breed: "Labrador" });
 var ship  = getName({ name: "USS Enterprise", warpFactor: 9 });
 
-// Inty infers `getName<a, b>({name: a | b}) => a` —
-// only `name` is required; the row variable `b` carries the rest.
+// Inty infers `getName(a) -> b where a has {name: b}` —
+// only `name` is required; any other fields come along unchecked.

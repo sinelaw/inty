@@ -914,6 +914,7 @@ impl Parser {
                             body,
                             type_annotation,
                             return_type_ast: _,
+                            name_span: _,
                             span,
                         } => Expr::Function {
                             name: Some(name),
@@ -1726,6 +1727,7 @@ impl Parser {
             body: Box::new(body_block),
             type_annotation: None,
             return_type_ast: None,
+            name_span: None,
             span,
         })
     }
@@ -1813,6 +1815,7 @@ impl Parser {
             body,
             type_annotation,
             return_type_ast,
+            name_span,
             span,
         } = decl
         {
@@ -1823,6 +1826,7 @@ impl Parser {
                 body: new_body,
                 type_annotation,
                 return_type_ast,
+                name_span,
                 span,
             }
         } else {
@@ -1877,6 +1881,7 @@ impl Parser {
         self.expect(&Token::Function)?;
 
         let name = self.expect_ident()?;
+        let name_span = self.prev_span();
 
         // Check for type annotation that matches this function name
         let type_annotation = self.try_get_type_annotation_for_function(func_span, &name);
@@ -1896,6 +1901,7 @@ impl Parser {
             body,
             type_annotation,
             return_type_ast: None,
+            name_span: Some(name_span),
             span: Span::new(start, self.prev_span().end),
         })
     }

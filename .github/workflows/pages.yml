@@ -1,0 +1,63 @@
+name: Deploy playground
+
+# Rebuilds the web playground (https://sinelaw.github.io/inty/) from
+# main and publishes it to the gh-pages branch, which GitHub Pages
+# serves. Does what web/deploy-gh-pages.sh does by hand.
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One deploy at a time; a newer push supersedes a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - uses: Swatinem/rust-cache@v2
+
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: wasm-pack
+
+    # Every example must still pass or fail as its manifest entry says
+    # (and its "uncomment to see the error" lines must still error)
+    # before it is published.
+    - name: Check the playground examples
+      run: cargo test -p inty --test web_examples
+
+    - name: Build
+      run: bash web/build.sh
+
+    - name: Assemble the site
+      run: |
+        mkdir _site
+        cp web/index.html web/styles.css web/app.js web/examples.js _site/
+        cp -r web/pkg _site/
+        # wasm-pack writes a `*` .gitignore into pkg/, which would keep
+        # the module out of the published commit.
+        rm -f _site/pkg/.gitignore
+
+    - name: Publish to gh-pages
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: _site
+        publish_branch: gh-pages
+        full_commit_message: "Deploy Inty web app from ${{ github.sha }}"

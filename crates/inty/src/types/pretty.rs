@@ -59,6 +59,10 @@ pub struct PrettyContext {
     /// body with its parameters (listed) instantiated (`Channel`,
     /// `DomEvent<a>`, rather than their records).
     aliases: Vec<(String, Vec<u32>, Type)>,
+    /// Inlay hints: leave out a named type's record arguments. A class
+    /// is generic over its instance's field row, so `c = Counter()`
+    /// would otherwise read `Counter<{value: Number | a}>`.
+    hide_row_args: bool,
 }
 
 impl PrettyContext {
@@ -77,7 +81,15 @@ impl PrettyContext {
             row_limit: None,
             focus: HashSet::new(),
             aliases: Vec::new(),
+            hide_row_args: false,
         }
+    }
+
+    /// Print named types without their record arguments (see the
+    /// field's doc): `Counter` rather than `Counter<{value: Number}>`.
+    pub fn hiding_row_args(mut self) -> Self {
+        self.hide_row_args = true;
+        self
     }
 
     /// Print records of more than `limit` fields trimmed to the `focus`
@@ -407,6 +419,10 @@ impl PrettyContext {
                     Some(name) => write!(w, "{}", name)?,
                     None => write!(w, "μ{}", id)?,
                 }
+                let args: Vec<&Type> = args
+                    .iter()
+                    .filter(|a| !(self.hide_row_args && matches!(a, Type::Row(_))))
+                    .collect();
                 if !args.is_empty() {
                     write!(w, "<")?;
                     for (i, arg) in args.iter().enumerate() {

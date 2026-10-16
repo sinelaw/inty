@@ -1652,6 +1652,7 @@ fn unexported(stmt: &Stmt) -> Stmt {
             body: body.clone(),
             type_annotation: type_annotation.clone(),
             return_type_ast: None,
+            name_span: None,
             span: *span,
         },
         ExportDecl::Default {
@@ -1671,6 +1672,7 @@ fn unexported(stmt: &Stmt) -> Stmt {
             body: body.clone(),
             type_annotation: type_annotation.clone(),
             return_type_ast: None,
+            name_span: None,
             span: *span,
         },
         ExportDecl::Default { value, span } => Stmt::Var {

@@ -14,7 +14,8 @@ class Cat:
     def meow(self):
         return "miaow"
 
-animal = Dog() if True else Cat()
+animal: Dog | Cat = Dog() if True else Cat()
 
-# No narrowing yet — `bark` exists on Dog only.
+# No narrowing yet — `bark` exists on Dog only, so on the `Cat`
+# branch of the union it isn't there.
 sound = animal.bark()

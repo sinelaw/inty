@@ -37,6 +37,7 @@ pub(in crate::infer) fn function_decl_parts(
             body,
             type_annotation,
             return_type_ast,
+            name_span: _,
             span,
         } => Some((
             name.as_str(),
@@ -228,6 +229,9 @@ pub(in crate::infer) fn hoistable_const_functions(
 fn hoisted_name_span(stmt: &Stmt, name: &str, span: Span) -> Span {
     if let Some((decl, ..)) = const_function_decl(stmt) {
         return decl.span;
+    }
+    if let Stmt::FunctionDecl { name_span, .. } = stmt {
+        return crate::ast::function_name_span(*name_span, span, name);
     }
     let keyword_len = if matches!(stmt, Stmt::Export { .. }) {
         "export function ".len()
@@ -1557,6 +1561,7 @@ impl InferState {
         body: &Stmt,
         type_annotation: &Option<TypeAnnotation>,
         return_type_ast: Option<&crate::types::TypeAst>,
+        name_span: Option<Span>,
         span: Span,
     ) -> InferResult<(Type, TypeEnv)> {
         // Reuse the type variable hoisted by the enclosing scope if
@@ -1594,8 +1599,7 @@ impl InferState {
 
         // Record the type at the *name* offset (not the `function`
         // keyword) so LSP go-to-def → hover lookups line up.
-        let name_offset = span.start + "function ".len();
-        let name_span = Span::new(name_offset, name_offset + name.len());
+        let name_span = crate::ast::function_name_span(name_span, span, name);
         self.record_decl_type(name_span, func_type.clone());
 
         // Generalize the function type. The enclosing scope may have

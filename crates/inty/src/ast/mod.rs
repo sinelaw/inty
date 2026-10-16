@@ -902,8 +902,23 @@ pub enum Stmt {
         /// Currently only the Python frontend sets this; others leave it
         /// `None`. Inference checks the body's result against it.
         return_type_ast: Option<crate::types::TypeAst>,
+        /// Where the function's name sits, when the frontend knows it.
+        /// `None` falls back to "just after `function `".
+        name_span: Option<Span>,
         span: Source,
     },
+}
+
+/// Where a function declaration's name sits. Frontends that know it
+/// record `name_span`; otherwise it's taken to follow `function ` at
+/// the start of `decl_span`, which holds for JavaScript declarations.
+/// Inference keys the function's type by this span and the LSP looks
+/// it up by the same span, so both must go through here.
+pub fn function_name_span(name_span: Option<Span>, decl_span: Span, name: &str) -> Span {
+    name_span.unwrap_or_else(|| {
+        let start = decl_span.start + "function ".len();
+        Span::new(start, start + name.len())
+    })
 }
 
 impl Stmt {

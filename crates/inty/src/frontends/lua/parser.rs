@@ -235,6 +235,7 @@ impl Parser {
                 body,
                 type_annotation: None,
                 return_type_ast: None,
+                name_span: None,
                 span: Span::new(start, self.prev_span().end),
             });
         }
@@ -349,6 +350,7 @@ impl Parser {
                 body,
                 type_annotation: None,
                 return_type_ast: None,
+                name_span: None,
                 span,
             });
         }

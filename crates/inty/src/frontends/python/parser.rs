@@ -740,6 +740,10 @@ impl Parser {
     /// Assign `value` to a target, declaring it first if it's a new name.
     fn assign_target(&mut self, target: Expr, value: Expr, span: Span) -> Result<Stmt> {
         if let Some(name) = self.bare_name(&target) {
+            // Start the binding at the target's own name: in `a, b = t`
+            // every target shares the statement span, and a declaration
+            // is located (and its type keyed) by where its span starts.
+            let span = Span::new(target.span().start, span.end);
             return Ok(self.declare_or_assign_single(name, Some(value), None, span));
         }
         if !target.is_valid_assignment_target() {
@@ -892,6 +896,7 @@ impl Parser {
         let start = self.cur_span().start;
         self.advance(); // def
         let name = self.expect_name("function name")?;
+        let name_span = self.prev_span();
         self.expect(&Tok::LParen, "'('")?;
         let mut params = Vec::new();
         if !self.check(&Tok::RParen) {
@@ -946,6 +951,7 @@ impl Parser {
             body,
             type_annotation: None,
             return_type_ast,
+            name_span: Some(name_span),
             span: Span::new(start, self.prev_span().end),
         })
     }
@@ -959,6 +965,7 @@ impl Parser {
         let start = self.cur_span().start;
         self.advance(); // class
         let name = self.expect_name("class name")?;
+        let name_span = self.prev_span();
 
         // Optional base-class list. Inheritance is out of scope
         // (instances are structural rows); accept only an empty `()`.
@@ -1164,6 +1171,7 @@ impl Parser {
             body,
             type_annotation: None,
             return_type_ast: None,
+            name_span: Some(name_span),
             span,
         })
     }
@@ -1685,9 +1693,14 @@ impl Parser {
     fn for_stmt(&mut self) -> Result<Stmt> {
         let start = self.cur_span().start;
         self.advance(); // for
+
+        // Each target keeps its own name span, so the LSP anchors the
+        // loop variable's type hint on the name, not the whole header.
         let mut targets = vec![self.expect_name("loop variable")?];
+        let mut target_spans = vec![self.prev_span()];
         while self.eat(&Tok::Comma) {
             targets.push(self.expect_name("loop variable")?);
+            target_spans.push(self.prev_span());
         }
         self.expect(&Tok::In, "'in'")?;
         let right = self.expr()?;
@@ -1697,10 +1710,9 @@ impl Parser {
         if targets.len() == 1 {
             let name = targets.pop().unwrap();
             self.declare(&name);
-            let span_so_far = Span::new(start, self.prev_span().end);
             let body = self.suite()?;
             return Ok(Stmt::ForOf {
-                left: ForInLhs::VarDecl(name, None, span_so_far, VarKind::Var),
+                left: ForInLhs::VarDecl(name, None, target_spans[0], VarKind::Var),
                 right,
                 body,
                 span: Span::new(start, self.prev_span().end),
@@ -1718,7 +1730,7 @@ impl Parser {
         let span_so_far = Span::new(start, self.prev_span().end);
         let inner = self.suite()?;
         let mut body = Vec::with_capacity(targets.len() + 1);
-        for (i, t) in targets.iter().enumerate() {
+        for (i, (t, t_span)) in targets.iter().zip(&target_spans).enumerate() {
             body.push(Stmt::Var {
                 kind: VarKind::Var,
                 declarations: vec![VarDeclarator {
@@ -1737,7 +1749,7 @@ impl Parser {
                     type_annotation: None,
                     type_ast: None,
                     kind: VarKind::Var,
-                    span: span_so_far,
+                    span: *t_span,
                 }],
                 span: span_so_far,
             });

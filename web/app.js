@@ -140,13 +140,16 @@ function byteToChar(byteOffset) {
 // ---- DOM -------------------------------------------------------------
 
 const statusEl = document.getElementById('status');
+const statusTextEl = statusEl.querySelector('.status-text');
 const errorPanel = document.getElementById('error-panel');
 const errorContent = document.getElementById('error-content');
 const errorSummary = document.getElementById('error-summary');
 const closeErrorsBtn = document.getElementById('close-errors');
 const tooltipEl = document.getElementById('hover-tooltip');
 const shareBtn = document.getElementById('share-btn');
+const shareLabelEl = document.getElementById('share-label');
 const hintsBtn = document.getElementById('hints-btn');
+const hintsLabelEl = document.getElementById('hints-label');
 const sidebarEl = document.getElementById('sidebar');
 const sidebarToggleBtn = document.getElementById('sidebar-toggle');
 const sidebarScrim = document.getElementById('sidebar-scrim');
@@ -155,6 +158,13 @@ const exampleStatusDot = document.getElementById('example-status');
 const exampleBlurbEl = document.getElementById('example-blurb');
 const titleSubEl = document.getElementById('title-sub');
 const langButtons = Array.from(document.querySelectorAll('.lang-btn'));
+
+// The status pill collapses to a coloured dot on narrow screens, so
+// the word also goes in the title for anyone who hovers or long-presses.
+function setStatus(text) {
+    statusTextEl.textContent = text;
+    statusEl.title = `Type checker ${text}`;
+}
 
 // ---- Init ------------------------------------------------------------
 
@@ -166,7 +176,7 @@ async function initialize() {
     try {
         await init();
         wasmReady = true;
-        statusEl.textContent = 'ready';
+        setStatus('ready');
         statusEl.classList.add('ready');
 
         inputEditor = CodeMirror.fromTextArea(
@@ -180,6 +190,8 @@ async function initialize() {
                 indentUnit: 4,
                 tabSize: 4,
                 indentWithTabs: false,
+                // A phone shows ~30 columns; wrap rather than scroll sideways.
+                lineWrapping: window.innerWidth <= MOBILE_BREAKPOINT,
             },
         );
 
@@ -223,7 +235,7 @@ async function initialize() {
         requestAnimationFrame(() => requestAnimationFrame(maybePlayOnboarding));
     } catch (e) {
         console.error('Failed to initialize WASM:', e);
-        statusEl.textContent = 'failed';
+        setStatus('failed');
         statusEl.classList.add('error');
     }
 }
@@ -468,7 +480,8 @@ closeErrorsBtn.addEventListener('click', hideErrors);
 
 function reflectHintsBtn() {
     hintsBtn.classList.toggle('off', !hintsEnabled);
-    hintsBtn.textContent = hintsEnabled ? 'Hints on' : 'Hints off';
+    hintsBtn.setAttribute('aria-pressed', String(hintsEnabled));
+    hintsLabelEl.textContent = hintsEnabled ? 'Hints on' : 'Hints off';
 }
 
 hintsBtn.addEventListener('click', () => {
@@ -496,13 +509,15 @@ shareBtn.addEventListener('click', async () => {
 });
 
 function flashShareLabel(text) {
-    const original = shareBtn.dataset.label || shareBtn.textContent;
+    const original = shareBtn.dataset.label || shareLabelEl.textContent;
     shareBtn.dataset.label = original;
-    shareBtn.textContent = text;
+    shareLabelEl.textContent = text;
+    shareBtn.title = text;
     shareBtn.classList.add('copied');
     clearTimeout(flashShareLabel._t);
     flashShareLabel._t = setTimeout(() => {
-        shareBtn.textContent = original;
+        shareLabelEl.textContent = original;
+        shareBtn.title = 'Copy a link to this snippet';
         shareBtn.classList.remove('copied');
     }, 1600);
 }
@@ -803,13 +818,21 @@ function playOnboarding() {
     document.addEventListener('mousedown', abort, true);
     document.addEventListener('touchstart', abort, true);
 
+    let cursorX = 0;
+    // Flip the caption to the cursor's other side when it would run
+    // past the right edge. Measured, since captions differ in width.
+    const placeCaption = () => {
+        const room = window.innerWidth - cursorX - 30;
+        cursor.classList.toggle('flip-caption', captionEl.offsetWidth > room);
+    };
     const setCaption = (html) => {
         captionEl.innerHTML = html;
+        placeCaption();
     };
     const moveTo = (x, y) => {
+        cursorX = x;
         cursor.style.transform = `translate(${x}px, ${y}px)`;
-        // Flip caption to the cursor's other side near the right edge.
-        cursor.classList.toggle('flip-caption', x > window.innerWidth - 260);
+        placeCaption();
     };
     const click = () => {
         cursor.classList.add('clicking');
