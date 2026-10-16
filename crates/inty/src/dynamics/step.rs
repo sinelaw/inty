@@ -685,12 +685,11 @@ fn read_member(heap: &Heap, obj: &Value, property: &str) -> Result<Value, Stuck>
                 })
             }
         }
+        // Any other member of a number is stuck as before numbers had
+        // methods, as in the Lean model (`notIndexable`).
         Value::Number(_) => builtin_method("number", property)
             .map(Value::Builtin)
-            .ok_or_else(|| Stuck::PropertyNotFound {
-                kind: "number",
-                property: property.to_string(),
-            }),
+            .ok_or_else(|| Stuck::NotIndexable(obj.type_string())),
         Value::String(s) => {
             if property == "length" {
                 Ok(Value::Number(s.chars().count() as f64))
