@@ -1,0 +1,753 @@
+//! What types mean: discovered from the values' behaviour.
+//!
+//! **Sorts.** A canonical-forms lemma says which values each eliminator
+//! accepts: `if` takes booleans, `-` numbers, a call functions of enough
+//! parameters. So a value's sort is read off which immediate contexts
+//! `c(…, [ ], …)` it gets stuck in *at the root*, the other positions
+//! filled by probe values. Two values with the same fingerprint share a
+//! sort. Only one-hole contexts one constructor deep count, and only the
+//! context's own step: a closure that gets stuck inside its body was still
+//! accepted by the call. (All contexts would give the Myhill-Nerode
+//! congruence of "doesn't get stuck", which is the exact semantics, not a
+//! type system.)
+//!
+//! **Refined sorts.** A sort whose eliminator's result depends on which
+//! member it is, beyond the sorts of the other arguments, carries code:
+//! `app1(f, 0)` is a number for one closure and a string for another. Such
+//! a sort is refined by what its eliminator gives: `T3<A -> R>` is the
+//! members that, given arguments of types `A`, run to an `R`. For
+//! closures under application that is the function type, found rather than
+//! given; its meaning is the logical relation's.
+//!
+//! **Membership** of a value in a type is tested: by fingerprint for a
+//! sort, and for a refined sort by running the eliminator on sampled
+//! members of the argument types.
+
+use crate::enumerate::product;
+use crate::lang::{Atom, Kind, Language, Outcome, Term};
+use crate::types::Ty;
+use std::collections::HashMap;
+
+/// A term and the environment it runs in.
+type Run<V> = (Term, Vec<V>);
+
+/// Evaluates through a cache: the same term in the same environment comes
+/// up again and again.
+pub struct Oracle<'a, L: Language> {
+    pub lang: &'a L,
+    cache: HashMap<Run<L::Value>, Outcome<L::Value>>,
+    pub evals: usize,
+    /// Whether to remember outcomes: worth it only for languages whose
+    /// runs cost more than hashing a term and its environment.
+    pub caching: bool,
+}
+
+impl<'a, L: Language> Oracle<'a, L> {
+    pub fn new(lang: &'a L) -> Self {
+        Oracle {
+            lang,
+            cache: HashMap::new(),
+            evals: 0,
+            caching: std::env::var_os("TYSEARCH_CACHE").is_some(),
+        }
+    }
+
+    /// Runs `t` on copies of `env` (`Language::isolate`).
+    pub fn eval_in(&mut self, t: &Term, env: &[L::Value]) -> Outcome<L::Value> {
+        self.evals += 1;
+        if !self.caching {
+            let env: Vec<L::Value> = env.iter().map(|v| self.lang.isolate(v)).collect();
+            return self.lang.eval_in(t, &env);
+        }
+        let key = (t.clone(), env.to_vec());
+        if let Some(o) = self.cache.get(&key) {
+            return o.clone();
+        }
+        let o = self.lang.eval_in(t, env);
+        self.cache.insert(key, o.clone());
+        o
+    }
+
+    pub fn eval(&mut self, t: &Term) -> Outcome<L::Value> {
+        self.eval_in(t, &[])
+    }
+
+    /// Runs `t` on `env` itself, so that what it stores stays stored: for
+    /// the tests that are about state.
+    pub fn eval_shared(&mut self, t: &Term, env: &[L::Value]) -> Outcome<L::Value> {
+        self.evals += 1;
+        self.lang.eval_in(t, env)
+    }
+}
+
+/// A one-hole context: `term` with the hole as the value of `var(0)` and
+/// the probes as `var(1)`, … (each shifted under its child's binders).
+struct Ctx<V> {
+    con: usize,
+    hole: usize,
+    term: Term,
+    probes: Vec<V>,
+}
+
+/// How a refined sort is eliminated: `term` mentions the member as
+/// `var(0)` and the other arguments as `var(1)` … `var(k)`.
+#[derive(Clone, Debug)]
+pub struct Template {
+    pub elim: usize,
+    pub hole: usize,
+    pub k: usize,
+    pub term: Term,
+}
+
+pub struct Semantics<V> {
+    contexts: Vec<Ctx<V>>,
+    by_print: HashMap<Vec<bool>, usize>,
+    sort_memo: HashMap<V, Option<usize>>,
+    /// Per value, what is known of its types: one entry per value, so a
+    /// value a run stored into is forgotten at once.
+    holds_memo: HashMap<V, HashMap<Ty, bool>>,
+    samples_memo: HashMap<Ty, Vec<V>>,
+    behaviour_memo: HashMap<V, Vec<i64>>,
+    /// Values per sort, smallest first.
+    pub members: Vec<Vec<V>>,
+    /// Per sort, eliminators that only repeat one of its refining ones with
+    /// extra arguments ignored: `(eliminator, hole, which template)`.
+    pub aliases: Vec<Vec<(usize, usize, usize)>>,
+    /// Per sort, the eliminators it's refined by (none if it isn't). A
+    /// refined type's parameters are, per eliminator in turn, its other
+    /// arguments' types and its result's.
+    pub templates: Vec<Vec<Template>>,
+    /// The ground types observation ranges over: the unrefined sorts, and
+    /// the refined ones one level deep, those with a member in the pool.
+    pub universe: Vec<Ty>,
+    pub samples_per_type: usize,
+    /// `le[s][t]`: sort `s` is accepted wherever sort `t` is.
+    pub le: Vec<Vec<bool>>,
+    /// Whether a sort's type includes its subsorts' values.
+    pub subtyping: bool,
+    pub forgets: usize,
+    /// Per sort, `(constructor, hole)`: where its values are used, as an
+    /// accepting context some other sort gets stuck in.
+    pub uses: Vec<Vec<(usize, usize)>>,
+    /// Per bound variable `(con, child, index)` whose value is another
+    /// child's, but which only some sorts' values reach (the branches of a
+    /// `typeof` test): those sorts. Its type is narrowed to them.
+    pub narrow: HashMap<(usize, usize, usize), Vec<usize>>,
+    /// The refinements `unrefine` took out of the types: still how members
+    /// of a sort differ, so samples of it stay diverse (functions that
+    /// give numbers, and ones that give strings).
+    hidden: Vec<Vec<Template>>,
+}
+
+/// Builds `con` with child `hole` the variable `var(0)` and the others
+/// `var(1)`, `var(2)`, …, each shifted past its child's binders.
+fn plug(sig: &[crate::lang::Con], con: usize, hole: usize) -> Term {
+    let c = &sig[con];
+    let var = sig.iter().position(|c| c.kind == Kind::Var).unwrap();
+    let mut next = 1;
+    let kids = (0..c.arity)
+        .map(|j| {
+            let i = if j == hole {
+                0
+            } else {
+                next += 1;
+                next - 1
+            };
+            Term::leaf(var, Atom::Int((i + c.binds[j]) as i64))
+        })
+        .collect();
+    Term::new(con, kids)
+}
+
+impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
+    pub fn discover<L: Language<Value = V>>(
+        oracle: &mut Oracle<L>,
+        pool: &[V],
+        probes: &[V],
+        samples_per_type: usize,
+    ) -> Self {
+        let sig = oracle.lang.signature();
+        let has_var = sig.iter().any(|c| c.kind == Kind::Var);
+        let mut contexts = Vec::new();
+        for (ci, c) in sig.iter().enumerate() {
+            if c.kind != Kind::Op || c.arity == 0 || !has_var {
+                continue;
+            }
+            for hole in 0..c.arity {
+                let term = plug(sig, ci, hole);
+                let pools: Vec<&[V]> = (1..c.arity).map(|_| probes).collect();
+                product(&pools, &mut Vec::new(), &mut |ps| {
+                    contexts.push(Ctx {
+                        con: ci,
+                        hole,
+                        term: term.clone(),
+                        probes: ps.to_vec(),
+                    })
+                });
+            }
+        }
+        let mut sem = Semantics {
+            contexts,
+            by_print: HashMap::new(),
+            sort_memo: HashMap::new(),
+            holds_memo: HashMap::new(),
+            samples_memo: HashMap::new(),
+            behaviour_memo: HashMap::new(),
+            members: Vec::new(),
+            templates: Vec::new(),
+            aliases: Vec::new(),
+            universe: Vec::new(),
+            samples_per_type,
+            le: Vec::new(),
+            subtyping: false,
+            forgets: 0,
+            uses: Vec::new(),
+            narrow: HashMap::new(),
+            hidden: Vec::new(),
+        };
+        for v in pool {
+            let print = sem.fingerprint(oracle, v);
+            let next = sem.by_print.len();
+            let id = *sem.by_print.entry(print).or_insert(next);
+            if id == sem.members.len() {
+                sem.members.push(Vec::new());
+            }
+            sem.members[id].push(v.clone());
+            sem.sort_memo.insert(v.clone(), Some(id));
+        }
+        let mut prints = vec![Vec::new(); sem.members.len()];
+        for (p, &id) in &sem.by_print {
+            prints[id] = p.clone();
+        }
+        // Uses: the immediate contexts a sort is accepted in and some other
+        // sort is not.
+        sem.uses = (0..sem.members.len())
+            .map(|s| {
+                let mut out: Vec<(usize, usize)> = Vec::new();
+                for (i, ctx) in sem.contexts.iter().enumerate() {
+                    if !prints[s][i]
+                        && prints.iter().any(|p| p[i])
+                        && !out.contains(&(ctx.con, ctx.hole))
+                    {
+                        out.push((ctx.con, ctx.hole));
+                    }
+                }
+                out
+            })
+            .collect();
+        sem.aliases = vec![Vec::new(); sem.members.len()];
+        sem.templates = (0..sem.members.len())
+            .map(|s| sem.refinement(oracle, s))
+            .collect();
+        sem.universe = sem.build_universe(oracle);
+        // And the type of every value, for what is bound to a value of no
+        // known source (what a `catch` catches). It is no value's own type
+        // (`types_of`): a child is typed by what can be done with it.
+        sem.universe.push(Ty::Top);
+        // The order: `s <: t` when `s` gets stuck in no context `t` is
+        // accepted in. Refined sorts are ordered only by equality.
+        let n = sem.count();
+        sem.le = (0..n)
+            .map(|a| {
+                (0..n)
+                    .map(|b| {
+                        a == b
+                            || (sem.templates[a].is_empty()
+                                && sem.templates[b].is_empty()
+                                && prints[a].iter().zip(&prints[b]).all(|(x, y)| !*x || *y))
+                    })
+                    .collect()
+            })
+            .collect();
+        sem
+    }
+
+    /// Forgets the refinements: every sort plain, the universe the sorts
+    /// alone (and `unknown`, if it was there).
+    pub fn unrefine(&mut self) {
+        let n = self.count();
+        self.hidden = std::mem::replace(&mut self.templates, vec![Vec::new(); n]);
+        self.aliases = vec![Vec::new(); n];
+        let top = self.universe.contains(&Ty::Top);
+        self.universe = (0..n).map(Ty::Base).collect();
+        if top {
+            self.universe.push(Ty::Top);
+        }
+        self.holds_memo.clear();
+        self.samples_memo.clear();
+    }
+
+    /// Whether the fingerprints order any two sorts.
+    pub fn has_order(&self) -> bool {
+        (0..self.count()).any(|a| (0..self.count()).any(|b| a != b && self.le[a][b]))
+    }
+
+    /// Reads a sort's type as all values of it and its subsorts, or as its
+    /// own values only. Memos depend on it, so they are cleared.
+    pub fn set_subtyping(&mut self, on: bool) {
+        if on != self.subtyping {
+            self.subtyping = on;
+            self.holds_memo.clear();
+            self.samples_memo.clear();
+        }
+    }
+
+    /// The least sort above both, if there is one.
+    pub fn join(&self, a: usize, b: usize) -> Option<usize> {
+        let ups: Vec<usize> = (0..self.count())
+            .filter(|&t| self.le[a][t] && self.le[b][t])
+            .collect();
+        ups.iter()
+            .copied()
+            .find(|&t| ups.iter().all(|&u| self.le[t][u]))
+    }
+
+    fn env(v: &V, rest: &[V]) -> Vec<V> {
+        let mut env = vec![v.clone()];
+        env.extend(rest.iter().cloned());
+        env
+    }
+
+    fn fingerprint<L: Language<Value = V>>(&self, oracle: &mut Oracle<L>, v: &V) -> Vec<bool> {
+        self.contexts
+            .iter()
+            .map(|ctx| {
+                matches!(
+                    oracle.eval_in(&ctx.term, &Self::env(v, &ctx.probes)),
+                    Outcome::Stuck { root: true, .. }
+                )
+            })
+            .collect()
+    }
+
+    /// The sort of any value, or `None` if it behaves like no pool value.
+    pub fn sort<L: Language<Value = V>>(&mut self, oracle: &mut Oracle<L>, v: &V) -> Option<usize> {
+        if let Some(s) = self.sort_memo.get(v) {
+            return *s;
+        }
+        let s = self.by_print.get(&self.fingerprint(oracle, v)).copied();
+        self.sort_memo.insert(v.clone(), s);
+        s
+    }
+
+    pub fn count(&self) -> usize {
+        self.members.len()
+    }
+
+    /// The contexts that accept the sort's members and whose result's sort
+    /// depends on the member although the other arguments all have one
+    /// sort: one per eliminator and position, in signature order. A pair
+    /// is refined by `fst` and by `snd`, a closure by its call. An
+    /// eliminator that only repeats another one with extra arguments
+    /// ignored (a two-argument call of a one-parameter function) adds
+    /// nothing, and is dropped.
+    fn refinement<L: Language<Value = V>>(
+        &mut self,
+        oracle: &mut Oracle<L>,
+        s: usize,
+    ) -> Vec<Template> {
+        let members: Vec<V> = self.spread(&self.members[s].clone(), 8);
+        let mut out: Vec<Template> = Vec::new();
+        for i in 0..self.contexts.len() {
+            let (con, hole, term, probes) = {
+                let c = &self.contexts[i];
+                (c.con, c.hole, c.term.clone(), c.probes.clone())
+            };
+            if out.iter().any(|t| t.elim == con && t.hole == hole) {
+                continue;
+            }
+            let probe_sorts: Vec<Option<usize>> =
+                probes.iter().map(|p| self.sort(oracle, p)).collect();
+            if probe_sorts.windows(2).any(|w| w[0] != w[1]) {
+                continue;
+            }
+            let mut results = Vec::new();
+            for m in &members {
+                let r = match oracle.eval_in(&term, &Self::env(m, &probes)) {
+                    Outcome::Stuck { root: true, .. } => None,
+                    Outcome::Value(w) => Some(self.sort(oracle, &w).map_or(-3, |s| s as i64)),
+                    Outcome::Stuck { .. } => Some(-1),
+                    // An allowed fault (an index out of bounds) is no
+                    // behaviour of the member's: as an index, 0 and 1 differ
+                    // only in where they fault.
+                    Outcome::Fault(_) | Outcome::Timeout | Outcome::Return(_) => continue,
+                };
+                results.push(r);
+            }
+            if results.iter().any(Option::is_none) {
+                continue;
+            }
+            results.sort();
+            results.dedup();
+            if results.len() > 1 {
+                out.push(Template {
+                    elim: con,
+                    hole,
+                    k: oracle.lang.signature()[con].arity - 1,
+                    term,
+                });
+            }
+        }
+        // Drop an eliminator that agrees with one of fewer arguments on
+        // every member and probe.
+        let all_probes: Vec<V> = self
+            .contexts
+            .iter()
+            .flat_map(|c| c.probes.iter().cloned())
+            .take(16)
+            .collect();
+        let mut keep = vec![true; out.len()];
+        for j in 0..out.len() {
+            for i in 0..out.len() {
+                if i == j || !keep[i] || out[i].k >= out[j].k {
+                    continue;
+                }
+                let mut same = true;
+                'check: for m in &members {
+                    for a in all_probes.chunks(out[j].k).take(4) {
+                        if a.len() < out[j].k {
+                            continue;
+                        }
+                        let long = oracle.eval_in(&out[j].term, &Self::env(m, a));
+                        let short = oracle.eval_in(&out[i].term, &Self::env(m, &a[..out[i].k]));
+                        if !oracle.lang.same_outcome(&long, &short) {
+                            same = false;
+                            break 'check;
+                        }
+                    }
+                }
+                if same {
+                    keep[j] = false;
+                }
+            }
+        }
+        // A dropped one is an alias of the one it repeats.
+        let kept: Vec<usize> = (0..out.len()).filter(|&i| keep[i]).collect();
+        for j in 0..out.len() {
+            if keep[j] {
+                continue;
+            }
+            if let Some(i) = kept.iter().position(|&i| out[i].k < out[j].k) {
+                self.aliases[s].push((out[j].elim, out[j].hole, i));
+            }
+        }
+        out.into_iter()
+            .zip(keep)
+            .filter(|(_, k)| *k)
+            .map(|(t, _)| t)
+            .collect()
+    }
+
+    /// Where each of a refined sort's eliminators' parameters start in its
+    /// type's parameters, and how many (its other arguments, and result).
+    pub fn slices(&self, s: usize) -> Vec<(usize, usize)> {
+        let mut at = 0;
+        self.templates[s]
+            .iter()
+            .map(|t| {
+                at += t.k + 1;
+                (at - t.k - 1, t.k + 1)
+            })
+            .collect()
+    }
+
+    /// How many parameters a refined sort's type takes.
+    pub fn arity(&self, s: usize) -> usize {
+        self.templates[s].iter().map(|t| t.k + 1).sum()
+    }
+
+    fn build_universe<L: Language<Value = V>>(&mut self, oracle: &mut Oracle<L>) -> Vec<Ty> {
+        let base: Vec<Ty> = (0..self.count())
+            .filter(|&s| self.templates[s].is_empty())
+            .map(Ty::Base)
+            .collect();
+        let mut out = base.clone();
+        for s in 0..self.count() {
+            if self.templates[s].is_empty() {
+                continue;
+            }
+            let pools: Vec<&[Ty]> = (0..self.arity(s)).map(|_| base.as_slice()).collect();
+            let mut cands = Vec::new();
+            product(&pools, &mut Vec::new(), &mut |ps| {
+                cands.push(Ty::Ref(s, ps.to_vec()))
+            });
+            for c in cands {
+                if !self.samples(oracle, &c).is_empty() {
+                    out.push(c);
+                }
+            }
+        }
+        out
+    }
+
+    fn spread(&self, items: &[V], n: usize) -> Vec<V> {
+        if items.len() <= n {
+            return items.to_vec();
+        }
+        (0..n)
+            .map(|i| items[i * (items.len() - 1) / (n - 1).max(1)].clone())
+            .collect()
+    }
+
+    /// Whether `v` is in ground type `t`.
+    pub fn holds<L: Language<Value = V>>(&mut self, oracle: &mut Oracle<L>, v: &V, t: &Ty) -> bool {
+        if let Some(b) = self.holds_memo.get(v).and_then(|m| m.get(t)) {
+            return *b;
+        }
+        let b = match t {
+            Ty::Var(_) | Ty::Never => false,
+            Ty::Top => true,
+            Ty::Union(ts) => {
+                let ts = ts.clone();
+                ts.iter().any(|t| self.holds(oracle, v, t))
+            }
+            Ty::Base(s) => match self.sort(oracle, v) {
+                Some(v) if self.subtyping => self.le[v][*s],
+                v => v == Some(*s),
+            },
+            Ty::Ref(s, ps) => {
+                self.sort(oracle, v) == Some(*s)
+                    && self.templates[*s]
+                        .clone()
+                        .into_iter()
+                        .zip(self.slices(*s))
+                        .all(|(tmpl, (at, n))| {
+                            let (res, args) = ps[at..at + n].split_last().unwrap();
+                            let arg_samples: Vec<Vec<V>> =
+                                args.iter().map(|a| self.samples(oracle, a)).collect();
+                            let refs: Vec<&[V]> =
+                                arg_samples.iter().map(|a| a.as_slice()).collect();
+                            let mut envs = Vec::new();
+                            product(&refs, &mut Vec::new(), &mut |xs| {
+                                envs.push(Self::env(v, xs))
+                            });
+                            // Fewer runs where the result's type is itself
+                            // judged by runs: deep function types (from
+                            // generated programs) would cost 3^depth.
+                            let limit = match res.depth() {
+                                0 => 81,
+                                1 => 9,
+                                _ => 1,
+                            };
+                            envs.into_iter().take(limit).all(|env| {
+                                // On copies, so that what the run stores into
+                                // its arguments can be checked: a member must
+                                // leave each argument in its type (Kripke
+                                // monotonicity), or a function that stores a
+                                // boolean into a number reference would pass
+                                // as taking number references.
+                                let env: Vec<V> =
+                                    env.iter().map(|x| oracle.lang.isolate(x)).collect();
+                                let o = oracle.eval_shared(&tmpl.term, &env);
+                                self.in_e(oracle, &o, res)
+                                    && env[1..].iter().zip(args).all(|(x, a)| {
+                                        !matches!(a, Ty::Ref(..)) || {
+                                            self.forget(x);
+                                            self.holds(oracle, x, a)
+                                        }
+                                    })
+                            })
+                        })
+            }
+        };
+        self.holds_memo
+            .entry(v.clone())
+            .or_default()
+            .insert(t.clone(), b);
+        b
+    }
+
+    /// Forgets what is known of `v`'s types: after a run stored into it.
+    pub fn memo_size(&self) -> usize {
+        self.holds_memo.len()
+    }
+
+    pub fn forget(&mut self, v: &V) {
+        self.forgets += 1;
+        self.holds_memo.remove(v);
+    }
+
+    /// Whether an outcome is good for ground type `t`: a value of it, an
+    /// allowed fault, or out of fuel.
+    pub fn in_e<L: Language<Value = V>>(
+        &mut self,
+        oracle: &mut Oracle<L>,
+        o: &Outcome<V>,
+        t: &Ty,
+    ) -> bool {
+        self.in_x(oracle, o, t, None)
+    }
+
+    /// Whether outcome `o` is safe for type `t` where what a `return`
+    /// carries must be an `exit` (no `return` is, without one).
+    pub fn in_x<L: Language<Value = V>>(
+        &mut self,
+        oracle: &mut Oracle<L>,
+        o: &Outcome<V>,
+        t: &Ty,
+        exit: Option<&Ty>,
+    ) -> bool {
+        match o {
+            Outcome::Value(w) => self.holds(oracle, w, t),
+            Outcome::Stuck { .. } => false,
+            Outcome::Fault(_) | Outcome::Timeout => true,
+            Outcome::Return(w) => exit.is_some_and(|e| self.holds(oracle, w, e)),
+        }
+    }
+
+    /// Members of ground type `t` from the pool, spread from smallest to
+    /// largest.
+    pub fn samples<L: Language<Value = V>>(&mut self, oracle: &mut Oracle<L>, t: &Ty) -> Vec<V> {
+        if let Some(s) = self.samples_memo.get(t) {
+            return s.clone();
+        }
+        let n = self.samples_per_type;
+        let out = match t {
+            Ty::Var(_) | Ty::Never => Vec::new(),
+            // Some of each.
+            Ty::Union(ts) => {
+                let mut out = Vec::new();
+                for t in ts.clone() {
+                    out.extend(self.samples(oracle, &t));
+                }
+                out
+            }
+            // The smallest member of each sort.
+            Ty::Top => self
+                .members
+                .iter()
+                .filter_map(|m| m.first().cloned())
+                .collect(),
+            Ty::Base(s) => {
+                // The smallest members first (0 and 1 are the indices an
+                // array of two has), then one from the far end. A sort whose
+                // refinement is hidden: members that behave apart.
+                let ms = self.members[*s].clone();
+                let mut out: Vec<V> = if self.hidden.get(*s).is_some_and(|h| !h.is_empty()) {
+                    let some: Vec<V> = ms.iter().take(64).cloned().collect();
+                    self.diverse(oracle, &some, n.max(4))
+                } else {
+                    let mut out: Vec<V> = ms.iter().take(n.saturating_sub(1)).cloned().collect();
+                    if ms.len() >= n {
+                        out.extend(ms.last().cloned());
+                    }
+                    out
+                };
+                // A subsort's values are the type's too: one of each.
+                if self.subtyping {
+                    for u in 0..self.count() {
+                        if u != *s && self.le[u][*s] {
+                            out.extend(self.members[u].first().cloned());
+                        }
+                    }
+                }
+                out
+            }
+            Ty::Ref(s, _) => {
+                let ms = self.members[*s].clone();
+                let fit: Vec<V> = ms
+                    .iter()
+                    .filter(|m| self.holds(oracle, m, t))
+                    .take(64)
+                    .cloned()
+                    .collect();
+                self.diverse(oracle, &fit, n)
+            }
+        };
+        self.samples_memo.insert(t.clone(), out.clone());
+        out
+    }
+
+    /// What `v`'s eliminator gives on a few probe arguments, as sorts (or
+    /// -1 stuck, -2 fault, -3 out of fuel, -4 unsorted): a cheap
+    /// fingerprint of a refined value's behaviour.
+    pub fn behaviour<L: Language<Value = V>>(&mut self, oracle: &mut Oracle<L>, v: &V) -> Vec<i64> {
+        if let Some(b) = self.behaviour_memo.get(v) {
+            return b.clone();
+        }
+        let mut out = Vec::new();
+        // Through every eliminator of its sort (an object's `.x` and `.y`
+        // both), refined or hidden.
+        let tmpls: Vec<Template> = self
+            .sort(oracle, v)
+            .map(|s| {
+                if self.templates[s].is_empty() {
+                    self.hidden.get(s).cloned().unwrap_or_default()
+                } else {
+                    self.templates[s].clone()
+                }
+            })
+            .unwrap_or_default();
+        for t in tmpls {
+            let probes: Vec<Vec<V>> = self
+                .contexts
+                .iter()
+                .filter(|c| c.con == t.elim && c.hole == t.hole)
+                .map(|c| c.probes.clone())
+                .take(12)
+                .collect();
+            for p in probes {
+                let o = oracle.eval_in(&t.term, &Self::env(v, &p));
+                out.push(match o {
+                    Outcome::Value(w) => self.sort(oracle, &w).map_or(-4, |s| s as i64),
+                    Outcome::Stuck { .. } => -1,
+                    Outcome::Fault(_) => -2,
+                    Outcome::Timeout => -3,
+                    Outcome::Return(_) => -5,
+                });
+            }
+        }
+        self.behaviour_memo.insert(v.clone(), out.clone());
+        out
+    }
+
+    /// Up to `n` of `items` that behave differently (`behaviour`), round
+    /// robin, smallest first. The
+    /// identity and a constant function are both `T<num -> num>`, and a
+    /// test of a rule needs both.
+    fn diverse<L: Language<Value = V>>(
+        &mut self,
+        oracle: &mut Oracle<L>,
+        items: &[V],
+        n: usize,
+    ) -> Vec<V> {
+        let mut groups: Vec<(Vec<i64>, Vec<V>)> = Vec::new();
+        for v in items {
+            let sig = self.behaviour(oracle, v);
+            match groups.iter_mut().find(|(s, _)| *s == sig) {
+                Some((_, vs)) => vs.push(v.clone()),
+                None => groups.push((sig, vec![v.clone()])),
+            }
+        }
+        let mut out = Vec::new();
+        for round in 0.. {
+            let mut any = false;
+            for (_, vs) in &groups {
+                if let Some(v) = vs.get(round) {
+                    any = true;
+                    if out.len() < n {
+                        out.push(v.clone());
+                    }
+                }
+            }
+            if !any || out.len() >= n {
+                break;
+            }
+        }
+        out
+    }
+
+    /// The ground types in the universe that `v` is in, but `Top`.
+    pub fn types_of<L: Language<Value = V>>(
+        &mut self,
+        oracle: &mut Oracle<L>,
+        v: &V,
+    ) -> Vec<usize> {
+        (0..self.universe.len())
+            .filter(|&i| {
+                let t = self.universe[i].clone();
+                t != Ty::Top && self.holds(oracle, v, &t)
+            })
+            .collect()
+    }
+}

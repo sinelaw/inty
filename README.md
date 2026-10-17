@@ -37,6 +37,11 @@ model doesn't cover all of inty yet. See [lean/README.md](lean/README.md)
 for what is proved, and [lean/ROADMAP.md](lean/ROADMAP.md) for what is
 left.
 
+**Type system discovery (experimental).** [tysearch](tysearch/README.md)
+is a separate project that searches for a type system given only an
+operational semantics. Its prototype rediscovers TAPL's `Bool`/`Nat` rules
+and inty's `Plus` class. See [tysearch/DESIGN.md](tysearch/DESIGN.md).
+
 Try it online at: https://sinelaw.github.io/inty/
 
 inty is based on [infernu](https://github.com/sinelaw/infernu).
