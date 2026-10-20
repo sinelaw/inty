@@ -705,25 +705,55 @@ fn dom_reads_that_may_find_nothing() {
     err("document.activeElement.focus();");
 }
 
+/// The warnings checking `src` against the stdlib gives; it must type-check.
+#[track_caller]
+fn warnings(src: &str) -> Vec<String> {
+    let program = parse(src).unwrap_or_else(|e| panic!("parse error: {e}\n{src}"));
+    let (env, mut state) = initial_env_with_stdlib().unwrap();
+    let result = state.infer_program_with_env(&env, &program);
+    let errors = state.take_errors();
+    assert!(
+        errors.is_empty() && result.is_ok(),
+        "{errors:?} {:?}\n{src}",
+        result.err()
+    );
+    state.warnings.iter().map(|w| w.message.clone()).collect()
+}
+
+/// `src` type-checks with exactly one warning, which mentions `needle`.
+#[track_caller]
+fn warns(src: &str, needle: &str) {
+    let w = warnings(src);
+    assert!(w.len() == 1 && w[0].contains(needle), "{w:?}\n{src}");
+}
+
 // A promise is always truthy: testing one, negating it or putting it on
-// the left of `&&` / `||` is a forgotten `await`.
+// the left of `&&` / `||` is a forgotten `await`. Warned about, like a
+// non-exhaustive `switch`: the program is well-typed, only suspicious.
 #[test]
 fn a_promise_is_not_a_condition() {
-    ok("
+    let quiet = warnings(
+        "
         async function isAdmin() { return false; }
         async function main() {
             if (await isAdmin()) { console.log(1); }
             const p = isAdmin();
             p.then(function (b) { return b ? 1 : 0; });
         }
-    ");
-    let e = err("async function isAdmin() { return false; } if (isAdmin()) { console.log(1); }");
-    assert!(e.contains("a promise is always truthy"), "{e}");
-    err("async function isAdmin() { return false; } if (!isAdmin()) { console.log(1); }");
-    err("async function ok() { return true; } while (ok()) { console.log(1); }");
-    err("async function isAdmin() { return false; } const n = isAdmin() ? 1 : 2;");
-    err("async function isAdmin() { return false; } const b = isAdmin() && true;");
-    err("async function isAdmin() { return false; } const b = isAdmin() || true;");
+    ",
+    );
+    assert!(quiet.is_empty(), "{quiet:?}");
+    let decl = "async function isAdmin() { return false; }";
+    for test in [
+        "if (isAdmin()) { console.log(1); }",
+        "if (!isAdmin()) { console.log(1); }",
+        "while (isAdmin()) { console.log(1); }",
+        "const n = isAdmin() ? 1 : 2;",
+        "const b = isAdmin() && true;",
+        "const b = isAdmin() || true;",
+    ] {
+        warns(&format!("{decl} {test}"), "a promise is always truthy");
+    }
 }
 
 // A function is always truthy: testing one, or putting it on the left of
@@ -731,7 +761,8 @@ fn a_promise_is_not_a_condition() {
 // `@type` placeholder or a host feature may be missing at run time).
 #[test]
 fn a_function_is_not_a_condition() {
-    ok("
+    let quiet = warnings(
+        "
         const hooks = {
             /** @type {() => Undefined} */
             mark: null,
@@ -744,14 +775,19 @@ fn a_function_is_not_a_condition() {
         if (isReady()) { console.log(1); }
         class C { m() { return 1; } }
         if (C) { new C(); }
-    ");
-    let e = err("function isReady() { return true; } if (isReady) { console.log(1); }");
-    assert!(e.contains("a function is always truthy"), "{e}");
-    err("function isReady() { return true; } while (isReady) { break; }");
-    err("function isReady() { return true; } const n = isReady ? 1 : 2;");
-    err("const user = { isAdmin() { return false; } }; if (user.isAdmin) { console.log(1); }");
-    err("function isReady() { return true; } const b = isReady && true;");
-    err("function f() { return 1; } function g() { return 2; } if (f) { g(); }");
+    ",
+    );
+    assert!(quiet.is_empty(), "{quiet:?}");
+    for src in [
+        "function isReady() { return true; } if (isReady) { console.log(1); }",
+        "function isReady() { return true; } while (isReady) { break; }",
+        "function isReady() { return true; } const n = isReady ? 1 : 2;",
+        "const user = { isAdmin() { return false; } }; if (user.isAdmin) { console.log(1); }",
+        "function isReady() { return true; } const b = isReady && true;",
+        "function f() { return 1; } function g() { return 2; } if (f) { g(); }",
+    ] {
+        warns(src, "a function is always truthy");
+    }
 }
 
 // The standard library's host methods that throw when called detached

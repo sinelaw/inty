@@ -283,8 +283,8 @@ impl InferState {
         guarded: Guarded<'_>,
     ) -> InferResult<(TypeEnv, TypeEnv)> {
         let test_type = self.infer_expr(env, test)?;
-        self.reject_promise_test(&test_type, test.span())?;
-        self.reject_uncalled_function_test(test, &test_type, guarded)?;
+        self.warn_promise_test(&test_type, test.span());
+        self.warn_uncalled_function_test(test, &test_type, guarded);
         let facts = test_facts(test, &|e| self.fact_of(env, e));
         let span = test.span();
         let cons_env = apply_facts(
@@ -311,22 +311,16 @@ impl InferState {
     /// A promise is always truthy, so a promise tested as a condition
     /// (`if (isAdmin())` with `isAdmin` async), negated, or on the left
     /// of `&&` / `||` is a forgotten `await`: the outcome is the same
-    /// whatever the promise resolves to.
-    pub(in crate::infer) fn reject_promise_test(
-        &mut self,
-        ty: &Type,
-        span: Span,
-    ) -> InferResult<()> {
+    /// whatever the promise resolves to. A warning, like a non-exhaustive
+    /// `switch`: the program is well-typed, only suspicious.
+    pub(in crate::infer) fn warn_promise_test(&mut self, ty: &Type, span: Span) {
         if let Type::Promise(_) = self.zonk_head(ty) {
-            return Err(crate::error::TypeError::TypeMismatch {
-                expected: "a value that may be falsy (a promise is always truthy: `await` it)"
-                    .to_string(),
-                found: format!("{}", self.display_type(ty)),
+            self.warn(
                 span,
-            }
-            .into());
+                "a promise is always truthy, so this test always comes out the same: \
+                 `await` it",
+            );
         }
-        Ok(())
     }
 
     /// A function is always truthy too, so testing one is a forgotten
@@ -334,15 +328,15 @@ impl InferState {
     /// `if (hooks.mark) hooks.mark()` and `cb && cb()` test a function
     /// that may not be there at run time (a `@type` placeholder, a host
     /// feature), as TypeScript allows. A value that may also be nothing
-    /// (`(() => T) | Undefined`) is tested as usual.
-    pub(in crate::infer) fn reject_uncalled_function_test(
+    /// (`(() => T) | Undefined`) is tested as usual. A warning, as above.
+    pub(in crate::infer) fn warn_uncalled_function_test(
         &mut self,
         test: &Expr,
         ty: &Type,
         guarded: Guarded<'_>,
-    ) -> InferResult<()> {
+    ) {
         if !self.zonk_head(ty).is_func() {
-            return Ok(());
+            return;
         }
         if let Some(path) = callee_path(test) {
             let called = match guarded {
@@ -350,16 +344,13 @@ impl InferState {
                 Guarded::Expr(expr) => called_paths_in_expr(expr),
             };
             if called.contains(&path) {
-                return Ok(());
+                return;
             }
         }
-        Err(crate::error::TypeError::TypeMismatch {
-            expected: "a value that may be falsy (a function is always truthy: call it)"
-                .to_string(),
-            found: format!("{}", self.display_type(ty)),
-            span: test.span(),
-        }
-        .into())
+        self.warn(
+            test.span(),
+            "a function is always truthy, so this test always comes out the same: call it",
+        );
     }
 
     /// The environment for code that runs only if `test` came out
