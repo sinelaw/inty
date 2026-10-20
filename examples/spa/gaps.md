@@ -21,7 +21,7 @@ what changed and why.
 | 10| No ergonomic way to seed an empty typed collection   | *resolved*   |
 | 11| No arrow functions                                   | *resolved*   |
 | 12| No `let`                                             | *resolved*   |
-| 13| No destructuring / spread / rest                     | *resolved* (rest params, spread in calls, defaults) |
+| 13| No destructuring / spread / rest                     | *resolved* (spread in calls, defaults; rest parameters rejected — no variadic calls) |
 | 14| No `class`                                           | *resolved* (no prototype chain — by design) |
 | 14| No `async`/`await`                                   | *resolved*   |
 | — | Inline `/*: T */` annotations not captured           | *resolved*   |
@@ -141,9 +141,9 @@ inty has unions and now exposes them as `T?` in annotations:
 `T?` desugars to `T | Undefined`. `?.` / `??` / `=== null` /
 `=== undefined` / `typeof === "undefined"` narrow through unions
 the same way `=== "circle"` narrows discriminator fields. The DOM
-stubs that previously pretended `getElementById` always succeeds
-can be migrated to `(String) => Element?` incrementally; the
-infrastructure is in place.
+stubs no longer pretend `getElementById`, `querySelector` and
+`closest` always succeed: they return `Element | Null`, and
+`app.js` checks through one `byId` helper.
 
 For DOM APIs that return `null` (not `undefined`), users write
 the long form `Element | Null` — `T?` adds `Undefined` only,

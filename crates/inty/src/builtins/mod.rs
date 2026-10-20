@@ -335,9 +335,9 @@ pub fn python_string_method_type(state: &mut InferState, method: &str) -> Option
 }
 
 /// Look up a built-in Regex prototype method by name. Each call gets a
-/// fresh function type. `test` returns Boolean; `match`/`exec` return
-/// the match-info row directly (without modelling the "no match"
-/// `null` fallback, which would require nullable types).
+/// fresh function type. `test` returns Boolean; `exec` returns the whole
+/// match and the capture groups, or `null` when nothing matches, as
+/// `String.prototype.match` does.
 pub fn regex_method_type(state: &mut InferState, method: &str) -> Option<Type> {
     let _ = state;
     let s = Type::String;
@@ -345,7 +345,10 @@ pub fn regex_method_type(state: &mut InferState, method: &str) -> Option<Type> {
     let b = Type::Boolean;
     Some(match method {
         "test" => Type::simple_func(vec![s.clone()], b.clone()),
-        "exec" => Type::simple_func(vec![s.clone()], Type::array(s.clone())),
+        "exec" => Type::simple_func(
+            vec![s.clone()],
+            Type::union(vec![Type::array(s.clone()), Type::Null]),
+        ),
         "toString" => Type::simple_func(vec![], s.clone()),
         // Direct properties.
         "source" => s.clone(),
@@ -447,8 +450,10 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
     let arr = Type::array(elem.clone());
     Some(match method {
         "push" => Type::simple_func(vec![elem.clone()], Type::Number),
-        "pop" => Type::simple_func(vec![], elem.clone()),
-        "shift" => Type::simple_func(vec![], elem.clone()),
+        // `pop()` / `shift()`: the removed element, or `undefined` when
+        // the array is empty.
+        "pop" => Type::simple_func(vec![], Type::union(vec![elem.clone(), u.clone()])),
+        "shift" => Type::simple_func(vec![], Type::union(vec![elem.clone(), u.clone()])),
         "unshift" => Type::simple_func(vec![elem.clone()], Type::Number),
         // `Array.prototype.splice(start, deleteCount?, ...items)`, returning
         // the removed elements. There are no variadic function types, so

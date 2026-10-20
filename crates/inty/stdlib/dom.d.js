@@ -146,9 +146,9 @@
     addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
     removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
     dispatchEvent: (T) => Boolean,
-    querySelector: (String) => T,
+    querySelector: (String) => T | Null,
     querySelectorAll: (String) => T[],
-    closest: (String) => T,
+    closest: (String) => T | Null,
     matches: (String) => Boolean,
     contains: (T) => Boolean,
     cloneNode: (Boolean) => T,
@@ -239,10 +239,10 @@
     } */
 
 /** const document: <T>{
-        getElementById: (String) => Element<T>,
+        getElementById: (String) => Element<T> | Null,
         createElement: (String) => Element<T>,
         createDocumentFragment: () => T,
-        querySelector: (String) => T,
+        querySelector: (String) => T | Null,
         querySelectorAll: (String) => T[],
         addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
         removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
@@ -466,7 +466,7 @@ const AbortController;
 // FormData / URLSearchParams. Construct from a form Element or with no
 // arguments; both expose the same get/set/append surface.
 /** const FormData: <T>(T) => {
-        get: (String) => String,
+        get: (String) => String | Null,
         getAll: (String) => String[],
         has: (String) => Boolean,
         set: (String, String) => Undefined,
@@ -476,7 +476,7 @@ const AbortController;
 const FormData;
 
 /** const URLSearchParams: () => {
-        get: (String) => String,
+        get: (String) => String | Null,
         getAll: (String) => String[],
         has: (String) => Boolean,
         set: (String, String) => Undefined,
@@ -584,7 +584,7 @@ const localStorage;
         hash: String,
         origin: String,
         searchParams: {
-            get: (String) => String,
+            get: (String) => String | Null,
             has: (String) => Boolean,
             set: (String, String) => Undefined,
             append: (String, String) => Undefined,

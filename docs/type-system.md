@@ -722,7 +722,7 @@ Quick reference for the JavaScript surface inty accepts:
 |----------------|-----------------------------------------------------------------------------------------------------------|
 | Literals       | template literals, regex literals, object property shorthand (`{a, b}`)                                   |
 | Variables      | `var` (function-scoped), `const`, `let` (block-scoped; a `for (const x of …)` binding is the loop body's)  |
-| Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), rest (`...args`), spread in calls (`f(...arr)`) |
+| Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), spread in calls (`f(...arr)`, one argument: the array's element) |
 | Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of` — see [Iteration](#iteration)                              |
 | Classes        | declarations + `export default class`, instance methods, fields, getters (no setters), private fields (`#x`) (see [Class Bodies](#class-bodies-fields-private-fields-accessors)), external classes declared without a body (`/** class X extends B { … } */ class X;`); no `extends` in a class with a body, no `static` members |
@@ -730,7 +730,7 @@ Quick reference for the JavaScript surface inty accepts:
 | Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`; `e` may be any thrown value, so its type is opaque: it can be passed on, tested and rethrown, but not used as a number, string or object |
 | Primitive methods | the `String.prototype` and `Array.prototype` methods (`replace`/`replaceAll` take a string or a function of the match, `(String) => String`: the capture groups and offset JavaScript also passes have pattern-dependent types and aren't modelled — read them from `match`/`exec` instead); on numbers `toFixed`, `toPrecision`, `toExponential`, `toString(radix?)`, `toLocaleString`, `valueOf`; on booleans `toString`, `valueOf` |
 | ASI            | inserted before `return` / `break` / `continue` / `throw` / postfix `++` / `--` when a line terminator separates the next token |
-| Rejected       | `delete` (soft type-time diagnostic pointing at workaround — accepted by the parser, the expression's result is `Type::Error` so the rest of the file still checks); `super.member`, `static` members |
+| Rejected       | `delete` (soft type-time diagnostic pointing at workaround — accepted by the parser, the expression's result is `Type::Error` so the rest of the file still checks); `super.member`, `static` members; rest parameters (`...args`: no variadic calls, take an array) |
 | Modules        | ES `import`/`export` with `inty.json` paths/baseUrl — see [Modules](#modules-es-import--export) above     |
 | Annotations    | inline `var x /*: T */`, doc-comment `/** var x: T */`, postfix `T?` for `T \| Undefined` — see [../declare.md](../declare.md) |
 

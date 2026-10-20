@@ -253,10 +253,11 @@ const RegExp;
 
 // Keyed collections. Map and Set are widely used in htmx-class code
 // for caching and deduplication; WeakMap is used for DOM-keyed metadata.
-// `<K, V>` quantifies fresh per construction.
+// `<K, V>` quantifies fresh per construction. `get` of a key that isn't
+// there is `undefined`, so its result must be checked (`?? d`, `has`).
 // `Map<K, V>` and `Set<T>` also name the instance types in annotations.
 /** type Map<K, V> = {
-        get: (this: Map<K, V>, K) => V,
+        get: (this: Map<K, V>, K) => V | Undefined,
         set: (this: Map<K, V>, K, V) => Undefined,
         has: (this: Map<K, V>, K) => Boolean,
         delete: (this: Map<K, V>, K) => Boolean,
@@ -287,7 +288,7 @@ const Map;
 const Set;
 
 /** type WeakMap<K, V> = {
-        get: (this: WeakMap<K, V>, K) => V,
+        get: (this: WeakMap<K, V>, K) => V | Undefined,
         set: (this: WeakMap<K, V>, K, V) => Undefined,
         has: (this: WeakMap<K, V>, K) => Boolean,
         delete: (this: WeakMap<K, V>, K) => Boolean

@@ -66,8 +66,10 @@ let popKey = 0;
 function heapPop(heapKey, heapVal) {
   const top = heapVal[0];
   popKey = heapKey[0];
-  const lastK = heapKey.pop();
-  const lastV = heapVal.pop();
+  const lastK = heapKey[heapKey.length - 1];
+  const lastV = heapVal[heapVal.length - 1];
+  heapKey.pop();
+  heapVal.pop();
   const n = heapKey.length;
   if (n > 0) {
     heapKey[0] = lastK;

@@ -636,6 +636,44 @@ fn gap_g_array_at() {
     err("const xs = [1, 2]; const n = xs.at(-1) + 1;");
 }
 
+// Lookups that may find nothing say so, as `find` and `at` do: `Map` and
+// `WeakMap` `get` and an empty array's `pop`/`shift` give `undefined`;
+// `exec` without a match, a DOM lookup without an element and a query
+// string's `get` without the key give `null`.
+#[test]
+fn lookups_that_may_find_nothing() {
+    ok("
+        const m = new Map([[\"a\", 1]]);
+        /** const n: Number */
+        const n = m.get(\"a\") ?? 0;
+        const w = new WeakMap(); const k = {a: 1}; w.set(k, 1);
+        const wv = w.get(k);
+        if (wv !== undefined) { wv.toFixed(); }
+        /** const xs: Number[] */
+        const xs = [1, 2];
+        const last = xs.pop();
+        if (last !== undefined) { last.toFixed(); }
+        const first = xs.shift() ?? 0;
+        const r = /a(b)/.exec(\"ab\");
+        if (r !== null) { r[1].length; }
+        const el = document.getElementById(\"go\");
+        if (el !== null) { el.textContent = \"ok\"; }
+        const q = document.querySelector(\"p\");
+        if (q) { q.textContent = \"ok\"; }
+        const p = new URLSearchParams().get(\"a\") ?? \"\";
+    ");
+    err("const m = new Map([[\"a\", 1]]); const n = m.get(\"b\") + 1;");
+    err("const w = new WeakMap(); const k = {a: 1}; w.set(k, 1); w.get(k).toFixed();");
+    err("/** const xs: Number[] */ const xs = []; xs.pop().toFixed();");
+    err("/** const xs: Number[] */ const xs = []; xs.shift().toFixed();");
+    err("const r = /a/.exec(\"b\"); r.length;");
+    err("document.getElementById(\"x\").textContent = \"hi\";");
+    err("document.querySelector(\"p\").textContent = \"hi\";");
+    err("const el = document.createElement(\"div\"); el.closest(\"p\").textContent = \"hi\";");
+    err("new URLSearchParams().get(\"a\").length;");
+    err("new FormData(document.createElement(\"form\")).get(\"a\").length;");
+}
+
 // The standard library's host methods that throw when called detached
 // ("Illegal invocation") say their `this`: called on their object, not
 // taken off it or passed as a callback.
@@ -645,7 +683,7 @@ fn stdlib_host_methods_are_called_on_their_object() {
         localStorage.setItem(\"k\", \"v\");
         const v = localStorage.getItem(\"k\");
         const m = Map(); m.set(\"a\", 1);
-        const n = m.get(\"a\") + m.size;
+        const n = (m.get(\"a\") ?? 0) + m.size;
         history.pushState(1, \"\", \"/a\");
         const r = [1.5].map(Math.round);
     ");

@@ -2826,16 +2826,36 @@ fn destructuring_default_in_function_param() {
     );
 }
 
-/// Phase 1.5 regression: rest parameters bind a single name and don't
-/// disturb earlier parameters. inty has no variadic-call shape so
-/// callers must match arity exactly — `f(1, [2, 3])` would work but
-/// `f(1, 2, 3)` would error on arity. This test exercises the parse
-/// + the single-name binding shape only.
+/// A rest parameter is rejected: typed as one parameter it would bind
+/// `rest` to `[2, 3]` in `f(1, [2, 3])`, which at run time is
+/// `[[2, 3]]`, and inty has no variadic call shape to type it as an
+/// array of the remaining arguments.
 #[test]
-fn rest_parameter_parses_and_binds() {
-    let src = "function f(first, ...rest) { return first; } var n = f(1, [2, 3]);";
-    let result = infer_program_via_program(src);
-    assert!(result.is_ok(), "rest param must work: {:?}", result.err());
+fn rest_parameter_is_rejected() {
+    for src in [
+        "function f(first, ...rest) { return first; } var n = f(1, [2, 3]);",
+        "function f(...xs) { return xs; } f(1).toFixed();",
+        "const f = (...xs) => xs.length;",
+        "const o = { m(...xs) { return xs; } };",
+    ] {
+        let mut scanner = Scanner::new(src);
+        let mut tokens = Vec::new();
+        loop {
+            let tok = scanner.next_token().unwrap();
+            let is_eof = matches!(tok.value, Token::Eof);
+            tokens.push(tok);
+            if is_eof {
+                break;
+            }
+        }
+        let mut parser =
+            Parser::with_source(tokens, scanner.type_annotations().to_vec(), src.to_string());
+        let err = parser
+            .parse_program()
+            .expect_err("a rest parameter must be rejected");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("a rest parameter"), "{src}: {msg}");
+    }
 }
 
 /// Phase 1.6 regression: spread in a call argument unwraps the array

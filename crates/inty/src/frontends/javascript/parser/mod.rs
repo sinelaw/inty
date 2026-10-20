@@ -1944,29 +1944,25 @@ impl Parser {
                     params.push(Param::new(temp, pattern_span));
                 } else if self.check(&Token::DotDotDot) {
                     // `...args` rest parameter. inty has no variadic
-                    // call shape, so we treat the rest binding as a
-                    // single regular parameter — its type ends up as
-                    // a fresh variable that the body's uses constrain
-                    // (typically to `T[]`). Callers that pass
-                    // individual arguments will error on arity, which
-                    // matches inty's "no variadic calls" stance. The
-                    // `...` token is consumed and discarded.
+                    // call shape: a call passes as many arguments as the
+                    // function type has parameters, and a function with
+                    // fewer parameters stands for one with more, the
+                    // extra arguments ignored. A rest parameter collects
+                    // exactly those extra arguments, so no single type
+                    // for it is right (as one parameter, `f(1)` would
+                    // bind `xs` to `1`, not `[1]`). Rejected, as setters
+                    // are; an array parameter says the same thing.
+                    let dots_span = self.current_span();
                     self.advance();
-                    let name_span = self.current_span();
                     let name = self.expect_ident()?;
-                    let actual_span = Span::new(name_span.start, name_span.start + name.len());
-                    params.push(Param::new(name, actual_span));
-                    // Rest param must be last per spec. Don't allow a
-                    // trailing comma to start another parameter.
-                    if self.consume_if(&Token::Comma) {
-                        return Err(ParseError::UnexpectedToken {
-                            found: ",".to_string(),
-                            expected: ") (rest parameter must be last)".to_string(),
-                            span: self.current_span(),
-                        }
-                        .into());
+                    return Err(ParseError::Unsupported {
+                        feature: format!(
+                            "a rest parameter (`...{name}`): inty has no variadic calls; take \
+                             an array instead (`function f({name}) {{…}}`, called as `f([a, b])`)"
+                        ),
+                        span: Span::new(dots_span.start, self.prev_span().end),
                     }
-                    break;
+                    .into());
                 } else {
                     let name_span = self.current_span();
                     let name = self.expect_ident()?;
