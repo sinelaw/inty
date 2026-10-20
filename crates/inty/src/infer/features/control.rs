@@ -13,6 +13,15 @@ use super::super::narrow::{
     Narrowing, Path,
 };
 use super::super::state::InferState;
+use crate::ast::free_idents::{called_paths_in_expr, called_paths_in_stmt, callee_path};
+
+/// The code a test guards: what runs when it holds (an `if`'s
+/// consequent, a loop's body, a conditional's or `&&`'s right side).
+#[derive(Clone, Copy)]
+pub(in crate::infer) enum Guarded<'a> {
+    Stmt(&'a Stmt),
+    Expr(&'a Expr),
+}
 use super::super::InferResult;
 
 /// If `ty` is a closed union whose every member is a literal type
@@ -271,9 +280,11 @@ impl InferState {
         &mut self,
         env: &TypeEnv,
         test: &Expr,
+        guarded: Guarded<'_>,
     ) -> InferResult<(TypeEnv, TypeEnv)> {
         let test_type = self.infer_expr(env, test)?;
         self.reject_promise_test(&test_type, test.span())?;
+        self.reject_uncalled_function_test(test, &test_type, guarded)?;
         let facts = test_facts(test, &|e| self.fact_of(env, e));
         let span = test.span();
         let cons_env = apply_facts(
@@ -318,6 +329,39 @@ impl InferState {
         Ok(())
     }
 
+    /// A function is always truthy too, so testing one is a forgotten
+    /// call (`if (isReady)`), unless the code the test guards calls it:
+    /// `if (hooks.mark) hooks.mark()` and `cb && cb()` test a function
+    /// that may not be there at run time (a `@type` placeholder, a host
+    /// feature), as TypeScript allows. A value that may also be nothing
+    /// (`(() => T) | Undefined`) is tested as usual.
+    pub(in crate::infer) fn reject_uncalled_function_test(
+        &mut self,
+        test: &Expr,
+        ty: &Type,
+        guarded: Guarded<'_>,
+    ) -> InferResult<()> {
+        if !self.zonk_head(ty).is_func() {
+            return Ok(());
+        }
+        if let Some(path) = callee_path(test) {
+            let called = match guarded {
+                Guarded::Stmt(stmt) => called_paths_in_stmt(stmt),
+                Guarded::Expr(expr) => called_paths_in_expr(expr),
+            };
+            if called.contains(&path) {
+                return Ok(());
+            }
+        }
+        Err(crate::error::TypeError::TypeMismatch {
+            expected: "a value that may be falsy (a function is always truthy: call it)"
+                .to_string(),
+            found: format!("{}", self.display_type(ty)),
+            span: test.span(),
+        }
+        .into())
+    }
+
     /// The environment for code that runs only if `test` came out
     /// `outcome`: the right operand of `&&` (`true`) or `||` (`false`).
     pub(in crate::infer) fn env_given(
@@ -344,7 +388,8 @@ impl InferState {
         alternate: &Expr,
         span: Span,
     ) -> InferResult<Type> {
-        let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
+        let (cons_env, alt_env) =
+            self.infer_branching_test(env, test, Guarded::Expr(consequent))?;
 
         let cons_type = self.infer_expr(&cons_env, consequent)?;
         let alt_type = self.infer_expr(&alt_env, alternate)?;
@@ -410,7 +455,8 @@ impl InferState {
                 alternate,
                 ..
             } => {
-                let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
+                let (cons_env, alt_env) =
+                    self.infer_branching_test(env, test, Guarded::Expr(consequent))?;
                 let cons = self.infer_discarded(&cons_env, consequent)?;
                 let alt = self.infer_discarded(&alt_env, alternate)?;
                 if is_never(&self.zonk_head(&cons)) && is_never(&self.zonk_head(&alt)) {
@@ -510,7 +556,8 @@ impl InferState {
         alternate: &Option<Box<Stmt>>,
         span: Span,
     ) -> InferResult<(Type, TypeEnv)> {
-        let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
+        let (cons_env, alt_env) =
+            self.infer_branching_test(env, test, Guarded::Stmt(consequent))?;
 
         let (cons_type, _) = self.infer_stmt(&cons_env, consequent)?;
 
@@ -556,7 +603,7 @@ impl InferState {
         // The body runs while the test holds, and without a `break` the
         // loop is left only when it doesn't. (Narrowed bindings are never
         // written, so a test that held stays true for the iteration.)
-        let (body_env, exit_env) = self.infer_branching_test(env, test)?;
+        let (body_env, exit_env) = self.infer_branching_test(env, test, Guarded::Stmt(body))?;
         self.infer_stmt(&body_env, body)?;
         let after = if breaks_out(body) {
             env.clone()
@@ -574,7 +621,7 @@ impl InferState {
         test: &Expr,
     ) -> InferResult<(Type, TypeEnv)> {
         self.infer_stmt(env, body)?;
-        let (_, exit_env) = self.infer_branching_test(env, test)?;
+        let (_, exit_env) = self.infer_branching_test(env, test, Guarded::Stmt(body))?;
         let after = if breaks_out(body) {
             env.clone()
         } else {
@@ -606,7 +653,7 @@ impl InferState {
         // The body, and the update after it, run while the test holds,
         // as in the loop's `while` form.
         let (body_env, exit_env) = match test {
-            Some(test) => self.infer_branching_test(&loop_env, test)?,
+            Some(test) => self.infer_branching_test(&loop_env, test, Guarded::Stmt(body))?,
             None => (loop_env.clone(), loop_env.clone()),
         };
 

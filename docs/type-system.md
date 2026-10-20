@@ -722,7 +722,7 @@ Quick reference for the JavaScript surface inty accepts:
 |----------------|-----------------------------------------------------------------------------------------------------------|
 | Literals       | template literals, regex literals, object property shorthand (`{a, b}`)                                   |
 | Variables      | `var` (function-scoped), `const`, `let` (block-scoped; a `for (const x of …)` binding is the loop body's)  |
-| Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), spread in calls (`f(...arr)`, one argument: the array's element) |
+| Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), spread in calls (`f(...arr)`, one argument: the array's element); a function is always truthy, so testing one (`if (isReady)`, `isReady && …`, `isReady ? … : …`) is an error unless the guarded code calls it (`if (hooks.mark) hooks.mark()`) |
 | Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of` — see [Iteration](#iteration)                              |
 | Classes        | declarations + `export default class`, instance methods, fields, getters (no setters), private fields (`#x`) (see [Class Bodies](#class-bodies-fields-private-fields-accessors)), external classes declared without a body (`/** class X extends B { … } */ class X;`); no `extends` in a class with a body, no `static` members |

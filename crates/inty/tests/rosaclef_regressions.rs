@@ -726,6 +726,34 @@ fn a_promise_is_not_a_condition() {
     err("async function isAdmin() { return false; } const b = isAdmin() || true;");
 }
 
+// A function is always truthy: testing one, or putting it on the left of
+// `&&`, is a forgotten call, unless the code the test guards calls it (a
+// `@type` placeholder or a host feature may be missing at run time).
+#[test]
+fn a_function_is_not_a_condition() {
+    ok("
+        const hooks = {
+            /** @type {() => Undefined} */
+            mark: null,
+        };
+        if (hooks.mark) { hooks.mark(); }
+        if (hooks.mark) { [1].forEach(function () { hooks.mark?.(); }); }
+        const done = hooks.mark && hooks.mark();
+        if (!hooks.mark) { console.log(\"no mark\"); }
+        function isReady() { return true; }
+        if (isReady()) { console.log(1); }
+        class C { m() { return 1; } }
+        if (C) { new C(); }
+    ");
+    let e = err("function isReady() { return true; } if (isReady) { console.log(1); }");
+    assert!(e.contains("a function is always truthy"), "{e}");
+    err("function isReady() { return true; } while (isReady) { break; }");
+    err("function isReady() { return true; } const n = isReady ? 1 : 2;");
+    err("const user = { isAdmin() { return false; } }; if (user.isAdmin) { console.log(1); }");
+    err("function isReady() { return true; } const b = isReady && true;");
+    err("function f() { return 1; } function g() { return 2; } if (f) { g(); }");
+}
+
 // The standard library's host methods that throw when called detached
 // ("Illegal invocation") say their `this`: called on their object, not
 // taken off it or passed as a callback.

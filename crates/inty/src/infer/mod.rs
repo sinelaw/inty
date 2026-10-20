@@ -1432,7 +1432,8 @@ impl InferState {
             },
         ) = (known, expr)
         {
-            let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
+            let (cons_env, alt_env) =
+                self.infer_branching_test(env, test, features::control::Guarded::Expr(consequent))?;
             self.check_expr(&cons_env, consequent, &expected)?;
             self.check_expr(&alt_env, alternate, &expected)?;
             let ty = self.zonk_head(&expected);

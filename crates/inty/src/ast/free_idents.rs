@@ -127,6 +127,36 @@ pub fn mentions_this_in_stmt(stmt: &Stmt) -> bool {
     state.saw_this
 }
 
+/// The dotted path an expression names: `f` for an identifier, `o.m`
+/// and `a.b.c` for member reads of one. `None` for anything else.
+pub fn callee_path(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Ident { name, .. } => Some(name.clone()),
+        Expr::Member {
+            object, property, ..
+        } => callee_path(object).map(|o| format!("{o}.{property}")),
+        _ => None,
+    }
+}
+
+/// The paths (see [`callee_path`]) of what `stmt` calls or constructs,
+/// inside nested functions too.
+pub fn called_paths_in_stmt(stmt: &Stmt) -> HashSet<String> {
+    let mut state = State::new();
+    state.enter_block();
+    state.collect_block_bindings(std::slice::from_ref(stmt));
+    state.visit_stmt(stmt);
+    state.callees
+}
+
+/// The paths (see [`callee_path`]) of what `expr` calls or constructs,
+/// inside nested functions too.
+pub fn called_paths_in_expr(expr: &Expr) -> HashSet<String> {
+    let mut state = State::new();
+    state.visit_expr(expr);
+    state.callees
+}
+
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
@@ -149,6 +179,8 @@ struct State {
     counts: HashMap<String, usize>,
     /// Whether a `this` occurs anywhere, nested functions included.
     saw_this: bool,
+    /// The paths of the callees of the calls and `new`s seen.
+    callees: HashSet<String>,
 }
 
 impl State {
@@ -158,6 +190,7 @@ impl State {
             free: HashSet::new(),
             counts: HashMap::new(),
             saw_this: false,
+            callees: HashSet::new(),
         }
     }
 
@@ -650,6 +683,7 @@ impl State {
             | Expr::New {
                 callee, arguments, ..
             } => {
+                self.callees.extend(callee_path(callee));
                 self.visit_expr(callee);
                 for a in arguments {
                     self.visit_expr(a);
@@ -680,13 +714,20 @@ impl State {
             }
             Expr::OptionalChain { head, segments, .. } => {
                 self.visit_expr(head);
+                // `o.m?.()` calls `o.m`; the path ends at the first
+                // segment that isn't a member read.
+                let mut path = callee_path(head);
                 for seg in segments {
                     match seg {
-                        ChainSegment::Member { .. } => {}
+                        ChainSegment::Member { property, .. } => {
+                            path = path.map(|p| format!("{p}.{property}"));
+                        }
                         ChainSegment::Computed { property, .. } => {
+                            path = None;
                             self.visit_expr(property);
                         }
                         ChainSegment::Call { arguments, .. } => {
+                            self.callees.extend(path.take());
                             for a in arguments {
                                 self.visit_expr(a);
                             }
