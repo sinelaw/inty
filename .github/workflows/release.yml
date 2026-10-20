@@ -1,5 +1,10 @@
 # Release workflow - builds binaries, creates a GitHub Release,
 # and publishes to crates.io and npm.
+#
+# Runs on a pushed v* tag, or when dispatched on one: the Cut release
+# workflow (cut-release.yml) dispatches it, since a tag pushed with
+# GITHUB_TOKEN doesn't trigger workflows. Dispatching it by hand on an
+# existing tag re-runs a release.
 
 name: Release
 permissions:
@@ -10,6 +15,7 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,6 +32,10 @@ jobs:
       - name: Extract version info
         id: version
         run: |
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "Run this workflow on a release tag (e.g. v0.1.2), not on ${{ github.ref_name }}" >&2
+            exit 1
+          fi
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
           if [[ "$VERSION" == *-* ]]; then
@@ -50,8 +60,10 @@ jobs:
             os: ubuntu-22.04
             archive_ext: tar.xz
             cross: true
+          # Cross-compiled on Apple Silicon: the Intel macOS runners
+          # (macos-13) are gone, and a job asking for one never starts.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
             archive_ext: tar.xz
           - target: aarch64-apple-darwin
             os: macos-latest
@@ -189,7 +201,7 @@ jobs:
             "description": "A static type checker for JavaScript",
             "repository": {
               "type": "git",
-              "url": "https://github.com/sinelaw/minfern.git"
+              "url": "https://github.com/sinelaw/inty.git"
             },
             "license": "MIT",
             "bin": {
@@ -253,7 +265,7 @@ jobs:
           const { getBinaryInfo } = require('./binary');
 
           const VERSION = require('./package.json').version;
-          const REPO = 'sinelaw/minfern';
+          const REPO = 'sinelaw/inty';
 
           function download(url, dest) {
             return new Promise((resolve, reject) => {

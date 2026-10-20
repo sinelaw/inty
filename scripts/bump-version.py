@@ -97,6 +97,11 @@ def main() -> None:
         action="store_true",
         help="Skip version bump, just tag and push current version.",
     )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Don't ask for confirmation (used by the Cut release workflow).",
+    )
     args = parser.parse_args()
     bump_type: BumpType = args.bump_type
     skip_bump: bool = args.skip_bump
@@ -134,7 +139,7 @@ def main() -> None:
     print("GitHub Actions will then build, release, and publish to crates.io and npm.")
     print("")
 
-    reply = input("Proceed? (y/N) ").strip().lower()
+    reply = "y" if args.yes else input("Proceed? (y/N) ").strip().lower()
     if reply != "y":
         print("Aborted.")
         sys.exit(0)
@@ -172,7 +177,7 @@ def main() -> None:
         print(f"{GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
         print(f"{GREEN}✓ {tag} tagged and pushed.{NC}")
         print("")
-        print(f"Monitor: {BLUE}https://github.com/sinelaw/minfern/actions{NC}")
+        print(f"Monitor: {BLUE}https://github.com/sinelaw/inty/actions{NC}")
 
     except subprocess.CalledProcessError as e:
         print(f"{RED}Git operation failed: {e}{NC}")

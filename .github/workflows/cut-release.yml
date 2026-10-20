@@ -1,0 +1,63 @@
+# Cut a release from the Actions tab: bumps the version on main, commits,
+# tags v<version>, pushes both, then starts the Release workflow on the
+# tag. Does what scripts/bump-version.py does by hand.
+#
+# A tag pushed with GITHUB_TOKEN doesn't trigger other workflows, so the
+# tag push alone wouldn't start release.yml; it is dispatched explicitly
+# instead (workflow_dispatch is the exception to that rule).
+
+name: Cut release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to bump
+        required: true
+        default: patch
+        type: choice
+        options: [ patch, minor, major ]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require main
+      if: github.ref != 'refs/heads/main'
+      run: |
+        echo "Cut releases from main, not ${{ github.ref_name }}" >&2
+        exit 1
+
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # bump-version.py runs `cargo build` to refresh Cargo.lock.
+    - uses: dtolnay/rust-toolchain@stable
+
+    - name: Bump, commit, tag and push
+      env:
+        BUMP: ${{ inputs.bump }}
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        python3 scripts/bump-version.py "$BUMP" --yes
+
+    - name: Start the Release workflow on the tag
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+        gh workflow run release.yml --ref "v${VERSION}"
+        echo "Started the release of v${VERSION}: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/release.yml" >> "$GITHUB_STEP_SUMMARY"
