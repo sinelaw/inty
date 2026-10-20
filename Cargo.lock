@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "inty"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ariadne",
  "im",
@@ -351,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "inty-bundle"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "inty",
  "rquickjs",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "inty-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "inty",
  "inty-bundle",
@@ -370,14 +370,14 @@ dependencies = [
 
 [[package]]
 name = "inty-go"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "inty",
 ]
 
 [[package]]
 name = "inty-lsp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "console_error_panic_hook",
  "inty",
