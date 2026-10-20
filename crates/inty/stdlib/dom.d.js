@@ -139,7 +139,7 @@
         replace: (String, String) => Boolean
     },
     setAttribute: (String, String) => Undefined,
-    getAttribute: (String) => String,
+    getAttribute: (String) => String | Null,
     hasAttribute: (String) => Boolean,
     removeAttribute: (String) => Undefined,
     toggleAttribute: (String) => Boolean,
@@ -166,15 +166,15 @@
     submit: () => Undefined, requestSubmit: () => Undefined, reset: () => Undefined,
     showModal: () => Undefined, show: () => Undefined, close: () => Undefined,
     open: Boolean,
-    children: T[], parentElement: T,
-    firstElementChild: T, lastElementChild: T,
-    nextElementSibling: T, previousElementSibling: T,
+    children: T[], parentElement: T | Null,
+    firstElementChild: T | Null, lastElementChild: T | Null,
+    nextElementSibling: T | Null, previousElementSibling: T | Null,
     style: {
         setProperty: (String, String) => Undefined,
         removeProperty: (String) => String,
         getPropertyValue: (String) => String
     },
-    form: T,
+    form: T | Null,
     getRootNode: ({composed: Boolean}) => T,
     compareDocumentPosition: (T) => Number,
     async: Boolean,
@@ -183,7 +183,7 @@
     defer: Boolean
     ,
     width: Number, height: Number,
-    getContext: (String) => CanvasRenderingContext2D<T>,
+    getContext: (String) => CanvasRenderingContext2D<T> | Null,
     toDataURL: () => String,
     setPointerCapture: (Number) => Undefined, releasePointerCapture: (Number) => Undefined,
     hasPointerCapture: (Number) => Boolean,
@@ -199,7 +199,7 @@
 
 /** type Node<T> = {
     nodeName: String, textContent: String,
-    parentElement: T, parentNode: T,
+    parentElement: T | Null, parentNode: T | Null,
     appendChild: (T) => T, removeChild: (T) => T,
     insertBefore: (T, T) => T, replaceChild: (T, T) => T,
     cloneNode: (Boolean) => T,
@@ -216,7 +216,7 @@
         setItem: (this: Storage, String, String) => Undefined,
         removeItem: (this: Storage, String) => Undefined,
         clear: (this: Storage) => Undefined,
-        key: (this: Storage, Number) => String,
+        key: (this: Storage, Number) => String | Null,
         length: Number
     } */
 /** type Location = {
@@ -250,7 +250,7 @@
         head: T,
         body: T,
         documentElement: T,
-        activeElement: T,
+        activeElement: T | Null,
         title: String,
         cookie: String,
         location: Location

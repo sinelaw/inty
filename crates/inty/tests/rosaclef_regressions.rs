@@ -423,6 +423,7 @@ window.addEventListener("resize", (e) => { console.log(window.innerWidth * windo
 document.addEventListener("keyup", (e) => console.log(e.code));
 const n = window.prompt("name?", "x");
 const g = el.getContext("2d");
+if (g === null) throw new Error("no 2d context");
 g.fillStyle = "#fff";
 g.fillRect(0, 0, el.width, el.height);
 const w = g.measureText("hi").width;
@@ -674,6 +675,57 @@ fn lookups_that_may_find_nothing() {
     err("new FormData(document.createElement(\"form\")).get(\"a\").length;");
 }
 
+// The DOM's links between elements and its attribute reads may find
+// nothing: a root has no parent, a last child no next sibling, a missing
+// attribute reads `null`, as does an input outside a form, an unsupported
+// canvas context, a storage key past the end and the active element of an
+// unfocused document.
+#[test]
+fn dom_reads_that_may_find_nothing() {
+    ok("
+        const el = document.createElement(\"div\");
+        const p = el.parentElement;
+        if (p !== null) { p.textContent = \"ok\"; }
+        const next = el.nextElementSibling;
+        if (next) { next.remove(); }
+        const id = el.getAttribute(\"data-id\") ?? \"\";
+        const ctx = el.getContext(\"2d\");
+        if (ctx !== null) { ctx.fillRect(0, 0, 1, 1); }
+        const k = localStorage.key(0) ?? \"\";
+    ");
+    err("document.createElement(\"div\").parentElement.remove();");
+    err("document.createElement(\"div\").firstElementChild.remove();");
+    err("document.createElement(\"div\").lastElementChild.remove();");
+    err("document.createElement(\"div\").nextElementSibling.remove();");
+    err("document.createElement(\"div\").previousElementSibling.remove();");
+    err("const n = document.createElement(\"div\").getAttribute(\"x\").length;");
+    err("document.createElement(\"input\").form.submit();");
+    err("document.createElement(\"canvas\").getContext(\"2d\").fillRect(0, 0, 1, 1);");
+    err("const n = localStorage.key(0).length;");
+    err("document.activeElement.focus();");
+}
+
+// A promise is always truthy: testing one, negating it or putting it on
+// the left of `&&` / `||` is a forgotten `await`.
+#[test]
+fn a_promise_is_not_a_condition() {
+    ok("
+        async function isAdmin() { return false; }
+        async function main() {
+            if (await isAdmin()) { console.log(1); }
+            const p = isAdmin();
+            p.then(function (b) { return b ? 1 : 0; });
+        }
+    ");
+    let e = err("async function isAdmin() { return false; } if (isAdmin()) { console.log(1); }");
+    assert!(e.contains("a promise is always truthy"), "{e}");
+    err("async function isAdmin() { return false; } if (!isAdmin()) { console.log(1); }");
+    err("async function ok() { return true; } while (ok()) { console.log(1); }");
+    err("async function isAdmin() { return false; } const n = isAdmin() ? 1 : 2;");
+    err("async function isAdmin() { return false; } const b = isAdmin() && true;");
+    err("async function isAdmin() { return false; } const b = isAdmin() || true;");
+}
+
 // The standard library's host methods that throw when called detached
 // ("Illegal invocation") say their `this`: called on their object, not
 // taken off it or passed as a callback.
@@ -699,6 +751,7 @@ fn stdlib_host_methods_are_called_on_their_object() {
 fn canvas_methods_are_called_on_their_context() {
     ok("
         const g = document.createElement(\"canvas\").getContext(\"2d\");
+        if (g === null) throw new Error(\"no 2d context\");
         g.beginPath(); g.moveTo(0, 0); g.lineTo(1, 1); g.stroke();
         const grad = g.createLinearGradient(0, 0, 1, 0);
         grad.addColorStop(0, \"red\");
@@ -710,6 +763,12 @@ fn canvas_methods_are_called_on_their_context() {
         function run(p) {}
         run((c, w, h) => { c.fillStyle = \"red\"; c.fillRect(0, 0, w, h); });
     ");
-    err("const g = document.createElement(\"canvas\").getContext(\"2d\"); const f = g.fillRect; f(0, 0, 1, 1);");
-    err("const g = document.createElement(\"canvas\").getContext(\"2d\"); const a = g.createLinearGradient(0, 0, 1, 0).addColorStop; a(0, \"red\");");
+    let ctx = "const g = document.createElement(\"canvas\").getContext(\"2d\"); \
+               if (g === null) throw new Error(\"no 2d context\");";
+    let e = err(&format!("{ctx} const f = g.fillRect; f(0, 0, 1, 1);"));
+    assert!(e.contains("detached"), "{e}");
+    let e = err(&format!(
+        "{ctx} const a = g.createLinearGradient(0, 0, 1, 0).addColorStop; a(0, \"red\");"
+    ));
+    assert!(e.contains("detached"), "{e}");
 }

@@ -272,7 +272,8 @@ impl InferState {
         env: &TypeEnv,
         test: &Expr,
     ) -> InferResult<(TypeEnv, TypeEnv)> {
-        let _test_type = self.infer_expr(env, test)?;
+        let test_type = self.infer_expr(env, test)?;
+        self.reject_promise_test(&test_type, test.span())?;
         let facts = test_facts(test, &|e| self.fact_of(env, e));
         let span = test.span();
         let cons_env = apply_facts(
@@ -294,6 +295,27 @@ impl InferState {
             )),
         );
         Ok((cons_env, alt_env))
+    }
+
+    /// A promise is always truthy, so a promise tested as a condition
+    /// (`if (isAdmin())` with `isAdmin` async), negated, or on the left
+    /// of `&&` / `||` is a forgotten `await`: the outcome is the same
+    /// whatever the promise resolves to.
+    pub(in crate::infer) fn reject_promise_test(
+        &mut self,
+        ty: &Type,
+        span: Span,
+    ) -> InferResult<()> {
+        if let Type::Promise(_) = self.zonk_head(ty) {
+            return Err(crate::error::TypeError::TypeMismatch {
+                expected: "a value that may be falsy (a promise is always truthy: `await` it)"
+                    .to_string(),
+                found: format!("{}", self.display_type(ty)),
+                span,
+            }
+            .into());
+        }
+        Ok(())
     }
 
     /// The environment for code that runs only if `test` came out
