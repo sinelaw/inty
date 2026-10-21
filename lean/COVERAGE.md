@@ -19,7 +19,7 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.funcCheck` | `check_function_literal`, `infer_function_expecting`, `infer_body_return_type_expecting` |
 | `HasTypeS.app` | `infer_call` |
 | `HasTypeS.let_` | `infer_stmt_var`, `infer_stmt_function_decl`, `generalize`, `infer_function_group`, `infer_group_with_deps`, `infer_ready_groups` (a group of mutually recursive functions is const G = function () { return {f: …, g: …}; } and each name a function calling G().f, as the front end writes it; a module's import is the exporting module's binding) |
-| `HasTypeS.letPoly` | `check_polymorphic_annotation`, `skolemize` |
+| `HasTypeS.letPoly` | `check_polymorphic_annotation`, `check_function_annotation` (a `function` declaration's), `skolemize` |
 | `HasTypeS.assign` | `infer_assign`, `infer_store_target`, `infer_unary` (x += e is x = x + e, and x++ whose value is dropped is x = x - -1, as the front end writes them) |
 | `HasTypeS.assignCheck` | `infer_assign`, `subsume` (the value subsumed into the variable's type; a rule of the system Sys.inty, not of HasType) |
 | `HasTypeS.cond` | `infer_conditional`, `infer_stmt_if`, `infer_binary` (a && b and a \|\| b are const t = a; t ? b : t, as the front end writes them) |

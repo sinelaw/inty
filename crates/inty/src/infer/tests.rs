@@ -5819,16 +5819,16 @@ fn an_array_at_may_be_undefined() {
 // the absent case apart first does it.
 #[test]
 fn a_field_of_an_empty_default_is_not_read() {
-    let src = "/** function f<T>(raw: T) => String[] */\n\
-               function f(raw) { return ((raw.c ?? {}).off ?? []).map((x) => x); }";
+    let src = "function f(raw) { return ((raw.c ?? {}).off ?? []).map((x) => x); }";
     let err = check_program(src, &[]).unwrap_err();
     assert!(err.to_string().contains("'off' not found"), "{err}");
-    let src = "/** function decode<T>(c: T) => String[] */\n\
+    let src = "/** type Opts = {off: String[]?} */\n\
+               /** function decode(c: Opts?) => String[] */\n\
                function decode(c) {\n\
                  if (!c) return [];\n\
                  return (c.off ?? []).map((x) => x);\n\
                }\n\
-               /** function f<T>(raw: T) => String[] */\n\
+               /** function f(raw: {c: Opts?}) => String[] */\n\
                function f(raw) { return decode(raw.c); }\n\
                const r = 1;";
     assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);

@@ -580,17 +580,17 @@ fn gap_c_a_detached_method_call_says_this() {
 #[test]
 fn gap_d_a_field_of_an_empty_default() {
     let e = err("
-        /** function f<T>(raw: T) => String[] */
         function f(raw) { return ((raw.c ?? {}).off ?? []).map((x) => String(x)); }
     ");
     assert!(e.contains("'off' not found"), "{e}");
     ok("
-        /** function decode<T>(c: T) => String[] */
+        /** type Opts = {off: Number[]?} */
+        /** function decode(c: Opts?) => String[] */
         function decode(c) {
           if (!c) return [];
           return (c.off ?? []).map((x) => String(x));
         }
-        /** function f<T>(raw: T) => String[] */
+        /** function f(raw: {c: Opts?}) => String[] */
         function f(raw) { return decode(raw.c); }
     ");
 }
@@ -768,6 +768,41 @@ fn a_function_is_not_a_condition() {
             "{src}: {e}"
         );
     }
+}
+
+// A `function` declaration's annotation with type parameters is its type,
+// as a `const`'s is: the body is checked with them rigid, so it must have
+// every instance, and each call instantiates the declared scheme (it used
+// to instantiate the parameters by the body: `<T>(x: T) => T` returning
+// `1` was `(1) => 1`).
+#[test]
+fn a_function_annotations_type_parameters_are_rigid() {
+    ok("
+        /** function id<T>(x: T) => T */
+        function id(x) { return x; }
+        const n = id(1) + 1;
+        const s = id(\"a\").length;
+        /** function first<T>(xs: T[]) => T? */
+        function first(xs) { return xs.length > 0 ? xs[0] : undefined; }
+        const a = (first([1]) ?? 0) + 1;
+        /** function len<T>(xs: T[]) => Number */
+        function len(xs) { return xs.length === 0 ? 0 : 1 + len(xs.slice(1)); }
+        const k = len([1]) + len([\"a\"]);
+        /** function decode<T>(text: String) => T */
+        function decode(text) { return JSON.parse(text); }
+    ");
+    for body in [
+        "return 1;",
+        "return x + x;",
+        "if (x) {} return x;",
+        "return x.length;",
+    ] {
+        err(&format!(
+            "/** function f<T>(x: T) => T */ function f(x) {{ {body} }}"
+        ));
+    }
+    let e = err("let g = 0; /** function f<T>(x: T) => T */ function f(x) { g = x; return x; }");
+    assert!(e.contains("'"), "{e}");
 }
 
 // The standard library's host methods that throw when called detached

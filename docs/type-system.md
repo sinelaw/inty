@@ -660,7 +660,12 @@ Quantifiers go at the outermost level (Rank-1):
 ```javascript
 /** const id: <T>(T) => T */
 const id = function(x) { return x; };
+
+/** function first<T>(xs: T[]) => T? */
+function first(xs) { return xs.length > 0 ? xs[0] : undefined; }
 ```
+
+The type parameters are rigid in the body, which must work for every instance: `/** function f<T>(x: T) => T */` with a body that returns `1`, adds `x + x`, tests `x` or reads `x.length` is an error. Each use instantiates the declared type. (A `function` that the program reassigns, or an annotation with a `where` clause, keeps the older reading, the parameters filled in by the body.)
 
 Constraints are not written explicitly: type-class obligations like `Plus a` are inferred from operator use, not declared.
 

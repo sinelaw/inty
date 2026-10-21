@@ -9,7 +9,9 @@ use crate::types::{TVarName, Type, TypePred, TypeScheme};
 
 use super::super::env::{Mutability, TypeEnv};
 use super::super::state::InferState;
-use super::super::type_parser::parse_type_annotation_with_pvars;
+use super::super::type_parser::{
+    parse_type_annotation_with_preds, parse_type_annotation_with_pvars,
+};
 use super::super::InferResult;
 
 /// Borrow-able view of a function declaration that abstracts over
@@ -1264,12 +1266,29 @@ impl InferState {
                 function_decl_parts(stmt)
             {
                 let key = self.key_of(hoisted_key_span(stmt).expect("a hoisted function"), name);
-                let func_var = hoisted
+                let hoisted_scheme = hoisted
                     .lookup_key(&key)
                     .expect("hoisted name must be in env")
                     .scheme
-                    .ty()
                     .clone();
+                // A polymorphic annotation: the body is checked against it.
+                if !hoisted_scheme.is_mono() {
+                    let ann_span = type_annotation
+                        .as_ref()
+                        .map(|a| Span::new(a.span.start, a.span.end))
+                        .unwrap_or(span);
+                    let ty = self.check_function_annotation(
+                        &hoisted,
+                        params,
+                        body,
+                        span,
+                        &hoisted_scheme,
+                        ann_span,
+                    )?;
+                    self.record_decl_type(hoisted_name_span(stmt, name, span), ty);
+                    continue;
+                }
+                let func_var = hoisted_scheme.ty().clone();
                 let func_type = self.infer_function(
                     &hoisted,
                     Some(name),
@@ -1320,7 +1339,11 @@ impl InferState {
         let too_large = group.iter().find_map(|stmt| {
             let (name, _, _, _, _, span) = function_decl_parts(stmt)?;
             let key = self.key_of(hoisted_key_span(stmt)?, name);
-            let ty = hoisted.lookup_key(&key)?.scheme.ty().clone();
+            let scheme = &hoisted.lookup_key(&key)?.scheme;
+            if !scheme.is_mono() {
+                return None;
+            }
+            let ty = scheme.ty().clone();
             self.too_large_to_generalise(&ty)
                 .then(|| (name.to_string(), span))
         });
@@ -1347,12 +1370,21 @@ impl InferState {
                     self.constraint_removals += 1;
                     let key =
                         self.key_of(hoisted_key_span(stmt).expect("a hoisted function"), name);
-                    let ty = hoisted
+                    let hoisted_scheme = hoisted
                         .lookup_key(&key)
                         .expect("function must be in env after pass 1")
                         .scheme
-                        .ty()
                         .clone();
+                    // A polymorphic annotation's scheme is the function's
+                    // already (`hoist_function_names`).
+                    if !hoisted_scheme.is_mono() {
+                        self.record_decl_scheme(
+                            hoisted_name_span(stmt, name, span),
+                            hoisted_scheme,
+                        );
+                        continue;
+                    }
+                    let ty = hoisted_scheme.ty().clone();
                     let ty = self.zonk(&ty);
                     // A factory lowered from a `class` gets its inferred
                     // return row branded nominally, so two structurally
@@ -1534,21 +1566,144 @@ impl InferState {
     ) -> InferResult<TypeEnv> {
         let mut new_env = env.clone();
         for stmt in stmts {
-            if let Some((name, _, _, _, _, _)) = function_decl_parts(stmt) {
-                let var = self.fresh_type_var();
+            if let Some((name, _, _, type_annotation, return_type_ast, _)) =
+                function_decl_parts(stmt)
+            {
                 let key_span = hoisted_key_span(stmt).expect("a hoisted function");
+                // A polymorphic annotation is the function's scheme from
+                // the start: its peers, and its own body, use it at any
+                // instance (see `function_annotation_scheme`).
+                let scheme = match self.function_annotation_scheme(
+                    env,
+                    name,
+                    type_annotation,
+                    return_type_ast,
+                    key_span,
+                )? {
+                    Some((scheme, _)) => scheme,
+                    None => TypeScheme::mono(self.fresh_type_var()),
+                };
                 let key = self.key_of(key_span, name);
                 new_env = self.rebind(
                     &new_env,
                     key,
                     key_span,
                     name,
-                    TypeScheme::mono(var),
+                    scheme,
                     hoisted_mutability(stmt),
                 )?;
             }
         }
         Ok(new_env)
+    }
+
+    /// A function declaration's annotation with type parameters and no
+    /// constraints (`/** function id<T>(x: T) => T */`) is its scheme, as a
+    /// `const`'s is (`check_polymorphic_annotation`): the function gets it,
+    /// and its body is checked with the type parameters rigid
+    /// (`check_function_annotation`), so a body that doesn't have every
+    /// instance (`return 1`, `x + x`, `if (x)`) is rejected rather than the
+    /// annotation's variables being instantiated by it. `None` for any
+    /// other declaration, and for one the program reassigns (whose
+    /// annotation's variables stay flexible, as a reassigned `let`'s do).
+    pub(in crate::infer) fn function_annotation_scheme(
+        &mut self,
+        env: &TypeEnv,
+        name: &str,
+        type_annotation: &Option<TypeAnnotation>,
+        return_type_ast: Option<&crate::types::TypeAst>,
+        key_span: Span,
+    ) -> InferResult<Option<(TypeScheme, Span)>> {
+        let Some(annotation) = type_annotation else {
+            return Ok(None);
+        };
+        if return_type_ast.is_some() || self.resolution.written_at(key_span, name) {
+            return Ok(None);
+        }
+        let annotation_span = Span::new(annotation.span.start, annotation.span.end);
+        let (ann_ty, var_map, next_pvar, preds) = parse_type_annotation_with_preds(
+            &annotation.content,
+            annotation_span,
+            self.next_var_id(),
+            self.next_pvar_id(),
+            &self.type_aliases,
+        )?;
+        self.bump_pvar_id_to(next_pvar);
+        if let Some(&max) = var_map.values().max() {
+            self.bump_var_id_to(max + 1);
+        }
+        if var_map.is_empty() || !preds.is_empty() {
+            return Ok(None);
+        }
+        // Called detached unless it says otherwise, as for a monomorphic
+        // annotation (`infer_function_expecting`).
+        let ann_ty = crate::infer::lower::annotation_this(&ann_ty, &Type::ArrowThis);
+        Ok(Some((
+            self.generalize(&env.free(), &ann_ty),
+            annotation_span,
+        )))
+    }
+
+    /// Check a function declaration's body against its polymorphic
+    /// annotation's `scheme` with the type variables rigid (skolems), as a
+    /// `const`'s initialiser is, and with no skolem escaping. The body sees
+    /// the function's own name at the scheme (the hoisted binding in
+    /// `env`), so it may call itself at any instance.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::infer) fn check_function_annotation(
+        &mut self,
+        env: &TypeEnv,
+        params: &[Param],
+        body: &Stmt,
+        span: Span,
+        scheme: &TypeScheme,
+        ann_span: Span,
+    ) -> InferResult<Type> {
+        let env_free_before = env.free_vars();
+        // Only the type variables are rigid: an optional field's presence
+        // stays flexible, as under a monomorphic annotation.
+        let (skolems, rigid_ty) = self.skolemize(&TypeScheme {
+            pvars: Vec::new(),
+            ..scheme.clone()
+        });
+        let func = Expr::Function {
+            name: None,
+            params: params.to_vec(),
+            body: Box::new(body.clone()),
+            type_annotation: None,
+            arrow: false,
+            span,
+        };
+        self.check_expr(env, &func, &rigid_ty)?;
+        self.simplify_has_props()?;
+        self.reject_escaped_skolems(&env_free_before, skolems.clone(), ann_span)?;
+        // What the body's declarations and expressions were found to be
+        // (for hovers and inlay hints) is at the annotation's type
+        // parameters, not at the skolems that stood for them in the check.
+        let mut back = crate::types::Subst::empty();
+        for (skolem, var) in skolems.iter().zip(&scheme.vars) {
+            back.insert(skolem.clone(), Type::Var(var.clone()));
+        }
+        let inside = |at: usize| span.start <= at && at < span.end;
+        let keys: Vec<usize> = self
+            .decl_types
+            .keys()
+            .copied()
+            .filter(|&k| inside(k))
+            .collect();
+        for k in keys {
+            let ty = self.zonk(&self.decl_types[&k].clone());
+            self.decl_types.insert(k, back.apply(&ty));
+        }
+        if let Some(mut types) = self.expr_types.take() {
+            for ((start, _), ty) in types.iter_mut() {
+                if inside(*start) {
+                    *ty = back.apply(&self.zonk(ty));
+                }
+            }
+            self.expr_types = Some(types);
+        }
+        Ok(back.apply(&rigid_ty))
     }
 
     /// Handle a top-level `function` declaration statement.
@@ -1569,6 +1724,22 @@ impl InferState {
         // Re-using the hoisted var is what lets mutually recursive
         // functions see each other's inferred types.
         let key = self.key_of(span, name);
+        // A polymorphic annotation is the function's scheme, which its body
+        // is checked against (`function_annotation_scheme`).
+        if let Some((scheme, ann_span)) =
+            self.function_annotation_scheme(env, name, type_annotation, return_type_ast, span)?
+        {
+            let pre_env = self.rebind(env, key, span, name, scheme.clone(), Mutability::Mutable)?;
+            let ty =
+                self.check_function_annotation(&pre_env, params, body, span, &scheme, ann_span)?;
+            let name_span = crate::ast::function_name_span(name_span, span, name);
+            self.record_decl_type(name_span, ty);
+            self.record_decl_scheme(name_span, scheme.clone());
+            return Ok((
+                Type::Undefined,
+                self.bind(env, span, name, scheme, Mutability::Mutable)?,
+            ));
+        }
         let func_var = match env.lookup_key(&key) {
             Some(b) if b.scheme.is_mono() => b.scheme.ty().clone(),
             _ => self.fresh_type_var(),
