@@ -743,6 +743,10 @@ impl PrettyContext {
                 write!(w, "IndexWrite ")?;
                 self.write_type(w, &pred.types[0], true)?;
             }
+            ClassName::Testable => {
+                write!(w, "Testable ")?;
+                self.write_type(w, &pred.types[0], true)?;
+            }
             ClassName::FieldWrite => {
                 write!(w, "FieldWrite ")?;
                 for (i, t) in pred.types.iter().enumerate() {
@@ -916,6 +920,7 @@ impl Display for ClassName {
             ClassName::Indexable => write!(f, "Indexable"),
             ClassName::Iterable => write!(f, "Iterable"),
             ClassName::IndexWrite => write!(f, "IndexWrite"),
+            ClassName::Testable => write!(f, "Testable"),
             ClassName::FieldWrite => write!(f, "FieldWrite"),
             ClassName::HasProp => write!(f, "HasProp"),
             ClassName::Inject => write!(f, "Inject"),

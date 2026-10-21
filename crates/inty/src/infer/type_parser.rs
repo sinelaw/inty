@@ -316,6 +316,13 @@ impl<'a> TypeParser<'a> {
             self.preds.push(TypePred::index_write(t));
             return Ok(());
         }
+        if keyword("Testable") {
+            self.pos += "Testable".len();
+            self.skip_whitespace();
+            let t = self.parse_simple_type()?;
+            self.preds.push(TypePred::testable(t));
+            return Ok(());
+        }
         if keyword("Iterable") {
             self.pos += "Iterable".len();
             self.skip_whitespace();

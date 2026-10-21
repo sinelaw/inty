@@ -3194,7 +3194,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
     refine Safe.lift hC hτ₀ ?_
     cases ht with
-    | cond hc htt hte =>
+    | cond hc _ htt hte =>
       simp only [run]
       refine Safe.bindC (ihc hc hC hG hH) fun v W₁ _ hW₁ hH₁ _ => ?_
       have hc₁ := run_clock_le k env h c
@@ -3207,7 +3207,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
     refine Safe.lift hC hτ₀ ?_
     cases ht with
-    | unop hop he =>
+    | unop hop _ he =>
       simp only [run]
       exact Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ hv =>
         UnOp.eval_sound hop hv (Nat.le_refl _) (List.prefix_refl W₁) hH₁
@@ -3259,7 +3259,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
     refine Safe.lift hC hτ₀ ?_
     cases ht with
-    | while_ hc hb =>
+    | while_ hc _ hb =>
       -- By induction on the clock: each iteration takes a tick.
       induction k using Nat.strongRecOn generalizing W h with
       | _ k ihk =>

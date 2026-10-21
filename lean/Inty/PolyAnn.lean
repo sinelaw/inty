@@ -130,7 +130,7 @@ theorem polyGap_typed : HasType L [] [] none .synth .synth polyGap .number := by
     (.ret (.inj (.var_mono rfl) rfl (.inl (Inst.instEq (.injectSelf rfl)))))
   simp only [Scheme.open, Scheme.openPreds, Scheme.instPreds, Scheme.mono, Scheme.inst, annMode,
     List.append_nil, List.map_nil]
-  refine .cond (.lit .boolean) ?_ ?_
+  refine .cond (.lit .boolean) (.of_inst (.testable (by simp [Con.isRigid]))) ?_ ?_
   · refine .func (τs := [P]) rfl (.get (.var_mono rfl) (k := .data) (.inl (Inst.instEq (.hasProp ?_))))
     rfl
   · exact .func (τs := [P]) rfl (.var_mono rfl)

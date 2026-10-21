@@ -79,8 +79,9 @@ pub fn instances_of(class: ClassName) -> &'static [InstanceDecl] {
     match class {
         ClassName::Plus => PLUS_INSTANCES,
         ClassName::Indexable => INDEXABLE_INSTANCES,
-        // Any container but a string: no catalog shape says that.
-        ClassName::IndexWrite | ClassName::FieldWrite => &[],
+        // Any container but a string, any type but a function's: no
+        // catalog shape says that.
+        ClassName::IndexWrite | ClassName::FieldWrite | ClassName::Testable => &[],
         // Structural: any type with the property is an instance.
         ClassName::HasProp => &[],
         // Relations between a type and a sum, not catalogued shapes.

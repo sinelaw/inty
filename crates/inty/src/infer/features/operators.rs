@@ -8,7 +8,6 @@ use crate::types::{LitValue, Type};
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
 use super::super::InferResult;
-use super::control::Guarded;
 
 impl InferState {
     /// Infer the type of a unary expression.
@@ -42,8 +41,8 @@ impl InferState {
             }
 
             UnaryOp::Not => {
-                // ! works on any type, returns boolean
-                self.warn_promise_test(&arg_type, argument.span());
+                // `!` works on any type that may be tested, returns boolean
+                self.require_testable(&arg_type, argument.span())?;
                 Ok(Type::Boolean)
             }
 
@@ -118,10 +117,7 @@ impl InferState {
     ) -> InferResult<Type> {
         let left_type = self.infer_expr(env, left)?;
         if matches!(op, BinOp::And | BinOp::Or) {
-            self.warn_promise_test(&left_type, left.span());
-        }
-        if op == BinOp::And {
-            self.warn_uncalled_function_test(left, &left_type, Guarded::Expr(right));
+            self.require_testable(&left_type, left.span())?;
         }
         // The right operand of `&&` runs only when the left is truthy,
         // that of `||` only when it is falsy: `node !== null && node.ok`.

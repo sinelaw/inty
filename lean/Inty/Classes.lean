@@ -283,6 +283,9 @@ inductive Inst : Pred → Prop where
   /-- `NotNew τ`, for every type but `newTarget`, and but a rigid type
   variable, which may stand for it. -/
   | notNew : ¬ (c = .newTarget ∨ c.isRigid) → Inst ⟨.notNew, [.app c args]⟩
+  /-- `Testable τ`, for every type but a function's, and but a rigid type
+  variable, which may stand for one. -/
+  | testable : ¬ (c = .fn ∨ c.isRigid) → Inst ⟨.testable, [.app c args]⟩
   /-- `Inject T T`, for a `T` without type variables. -/
   | injectSelf : T.ftv = [] → Inst ⟨.inject T, [T]⟩
   /-- `Inject (Nullable σ) Null` and `Inject (Optional σ) Undefined`. -/
@@ -336,6 +339,7 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
   | indexString => exact .indexString
   | writeArray => exact .writeArray
   | notNew hc => exact .notNew hc
+  | testable hc => exact .testable hc
   | injectSelf hT =>
     simp only [Pred.subst, List.map_cons, List.map_nil]
     rw [Ty.subst_id (by simp [hT])]
@@ -620,6 +624,7 @@ def Pred.isInst : Pred → Bool
   | ⟨.indexable, [.string, .number, .string]⟩ => true
   | ⟨.indexWrite, [.array _]⟩ => true
   | ⟨.notNew, [.app c _]⟩ => decide ¬ (c = .newTarget ∨ c.isRigid)
+  | ⟨.testable, [.app c _]⟩ => decide ¬ (c = .fn ∨ c.isRigid)
   | ⟨.inject T, [τ]⟩ => Pred.injectInst T τ
   | ⟨.strip, [τ, σ]⟩ => Pred.stripInst τ σ
   | _ => false
@@ -642,6 +647,7 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   · exact .indexString
   · exact .writeArray
   · exact .notNew (by simpa using h)
+  · exact .testable (by simpa using h)
   · exact Pred.injectInst_sound h
   · exact Pred.stripInst_sound h
   · cases h

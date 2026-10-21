@@ -167,6 +167,13 @@ theorem Inst.rsub {ρ : RSubst} (hρ : ρ.Renaming) {p : Pred} (h : Inst p) : In
       · exact absurd (.inr hc') hn
     simpa [Pred.rsub, Ty.rsub_app_nr hr] using
       Inst.notNew (c := c) (args := args.map (·.rsub ρ)) hn
+  | @testable c args hn =>
+    have hr : c.isRigid = false := by
+      cases hc' : c.isRigid
+      · rfl
+      · exact absurd (.inr hc') hn
+    simpa [Pred.rsub, Ty.rsub_app_nr hr] using
+      Inst.testable (c := c) (args := args.map (·.rsub ρ)) hn
   | @injectSelf T hT =>
     simpa [Pred.rsub, Cls.rsub] using
       Inst.injectSelf (T := T.rsub ρ) (by rw [Ty.ftv_rsub_ren hρ]; exact hT)

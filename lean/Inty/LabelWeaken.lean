@@ -916,6 +916,11 @@ theorem Inst.ext (L L' : List String) {p : Pred} (h : Inst p) : Inst (p.ext L L'
       rw [Con.extL_eq_iff (by simp), Con.extL_isRigid]; exact hn
     simpa [Pred.ext, Cls.ext] using Inst.notNew (args := args.map (·.ext L L') ++
       c.padL L L' Ty.absSlot) hn'
+  | @testable c args hn =>
+    have hn' : ¬ (c.extL L L' = .fn ∨ (c.extL L L').isRigid) := by
+      rw [Con.extL_eq_iff (by simp), Con.extL_isRigid]; exact hn
+    simpa [Pred.ext, Cls.ext] using Inst.testable (args := args.map (·.ext L L') ++
+      c.padL L L' Ty.absSlot) hn'
   | @injectSelf T hT =>
     simpa [Pred.ext, Cls.ext] using Inst.injectSelf (T := T.ext L L') (by rw [Ty.ftv_ext, hT])
   | injectNothing he hT =>
@@ -1173,12 +1178,13 @@ theorem HasTypeS.extLabels {S : Sys} {L L' : List String} (hS : S.LExtable L L')
       (by simp [Scheme.ext, hp]) ?_ (hS.closed hc) ih
     have := TyEq.ext L L' hT
     rwa [← Scheme.inst_ext, List.map_nil] at this
-  | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
-  | unop hop _ ih =>
+  | cond _ hx _ _ ihc iht ihe => exact .cond ihc (by simpa using hx.extS hS) iht ihe
+  | unop hop hx _ ih =>
+    have hx' := fun h => by simpa using (hx h).extS hS
     cases hop with
-    | not => exact .unop .not ih
-    | typeof => exact .unop .typeof ih
-    | neg => exact .unop .neg ih
+    | not => exact .unop .not hx' ih
+    | typeof => exact .unop .typeof hx' ih
+    | neg => exact .unop .neg hx' ih
   | binop hop _ _ ih₁ ih₂ =>
     cases hop with
     | plus hc => exact .binop (.plus (by simpa using hc.extS hS)) ih₁ ih₂
@@ -1188,7 +1194,7 @@ theorem HasTypeS.extLabels {S : Sys} {L L' : List String} (hS : S.LExtable L L')
   | ret _ ih => exact .ret ih
   | throw_ _ ih => exact .throw_ ih
   | seq _ _ ih₁ ih₂ => exact .seq ih₁ ih₂
-  | while_ _ _ ihc ihb => exact .while_ ihc ihb
+  | while_ _ hx _ ihc ihb => exact .while_ ihc (by simpa using hx.extS hS) ihb
   | break_ => exact .break_
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa [Scheme.mono_ext] using ihh)

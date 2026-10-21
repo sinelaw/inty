@@ -8,7 +8,7 @@
 use crate::error::{IntyError, TypeError};
 use crate::infer::{InferState, TypeEnv};
 use crate::span::Span;
-use crate::types::{ClassName, RowType, TVarName, Type, TypePred, TypeScheme};
+use crate::types::{ClassName, Presence, PropName, RowType, TVarName, Type, TypePred, TypeScheme};
 
 /// Create the initial type environment with built-in bindings.
 ///
@@ -1106,6 +1106,7 @@ impl InferState {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
             ClassName::IndexWrite => self.resolve_index_write(&pred.types[0], span),
+            ClassName::Testable => self.resolve_testable(&pred.types[0], span),
             ClassName::FieldWrite => {
                 let (recv, name) = pred
                     .as_field_write()
@@ -1367,6 +1368,61 @@ impl InferState {
                 Ok(())
             }
             _ => self.resolve_field_write(receiver, name, span),
+        }
+    }
+
+    /// Resolve `Testable τ`: a value of `τ` may be tested for truthiness
+    /// but a function or a promise, which are always truthy, and but a
+    /// value of an annotation's type parameter (a skolem), which may stand
+    /// for a function. A caught exception may be anything and is tested
+    /// like the model's `unknown`; a variable nothing pinned down holds no
+    /// value, so its tests never run.
+    pub(crate) fn resolve_testable(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
+        let ty = self.apply_subst(ty);
+        // A row may carry a call signature whose presence isn't decided
+        // yet (a spread of an operand not known yet): it waits, as on a
+        // variable.
+        let call = match &ty {
+            Type::Func { .. } => Some(Presence::Pre),
+            Type::Row(row) => row
+                .props
+                .get(&PropName(crate::types::CALLABLE_KEY.to_string()))
+                .map(|entry| entry.presence.clone()),
+            _ => None,
+        };
+        if let Some(Presence::Var(_)) = call {
+            self.add_constraint(TypePred::testable(ty.clone()), span);
+            return Ok(());
+        }
+        let why = match &ty {
+            Type::Promise(_) => {
+                "a promise is always truthy, so this test always comes out the same: `await` it"
+            }
+            _ if call == Some(Presence::Pre) => {
+                "a function is always truthy, so this test always comes out the same: call it"
+            }
+            Type::Var(TVarName::Skolem(id)) if !self.caught_exceptions.contains(id) => {
+                "a type parameter may stand for a function, which is always truthy"
+            }
+            _ => return Ok(()),
+        };
+        Err(TypeError::ConstraintNotSatisfied {
+            class: format!("Testable ({why})"),
+            ty: self.show(&ty),
+            span,
+        }
+        .into())
+    }
+
+    /// A value is tested for truthiness (`Testable`): decided now for a
+    /// known type, posed for a variable.
+    pub(crate) fn require_testable(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
+        match self.apply_subst(ty) {
+            Type::Var(TVarName::Flex(_)) => {
+                self.add_constraint(TypePred::testable(ty.clone()), span);
+                Ok(())
+            }
+            _ => self.resolve_testable(ty, span),
         }
     }
 

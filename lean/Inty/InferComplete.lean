@@ -1064,6 +1064,18 @@ theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pr
       · simp [ha, Ty.isVar] at hnv
       simp only [hxs, Pred.decide₀, hc₀, ↓reduceIte, Improve.Holds]
       exact TyEq.refl _
+  | @testable c₀ xs₀ hc₀ =>
+    match args, hl with
+    | [t], _ =>
+      obtain ⟨rfl, ht⟩ := PredEq.one hq
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rcases Ty.whnf_app_of_tyEq ht with ⟨a, ha⟩ | ⟨xs, hxs, -, -⟩
+      · simp [ha, Ty.isVar] at hnv
+      simp only [hxs, Pred.decide₀, hc₀, ↓reduceIte, Improve.Holds]
+      exact TyEq.refl _
   | @injectSelf T hT =>
     match args, hl with
     | [t], _ =>
@@ -2246,7 +2258,7 @@ theorem Inst.fundep_tv {q : Pred} (h : Inst q) {ds rs : List Ty} (hf : q.fundep 
     obtain ⟨rfl, rfl⟩ := hf
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
     rcases hr with rfl | rfl <;> exact absurd hb Ty.tv_con
-  | writeArray | notNew _ =>
+  | writeArray | notNew _ | testable _ =>
     simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
     obtain ⟨rfl, rfl⟩ := hf
     simp at hr
@@ -2894,7 +2906,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
     {e : Expr} {T : Ty} (hC : ∀ p ∈ C, p.AssumableAt false) (h : HasType L C Γ R rm .check e T)
     (hT : T.ftv = []) (hp : e.pushes T) : HasTypeTop L C Γ R rm .check e T := by
   cases h with
-  | cond hc ht he => exact .cond hc ht he
+  | cond hc hx ht he => exact .cond hc hx ht he
   | let_ s F h₁ hv hs ha h₂ => exact .let_ s F h₁ hv hs ha h₂
   | letPoly a K h0 hp' hf hr h₁ hv hw h₂ => exact .letPoly a K h0 hp' hf hr h₁ hv hw h₂
   | ret h => exact .ret h
@@ -2915,7 +2927,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
     have hi' : Entails C ⟨.inject T, [τ₀]⟩ :=
       hi.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons he.symm zip_tyEq_nil))
     cases ht with
-    | cond hc ht he' => exact .cond hc (.inj ht hT hi') (.inj he' hT hi')
+    | cond hc hx ht he' => exact .cond hc hx (.inj ht hT hi') (.inj he' hT hi')
     | let_ s F h₁ hv hs ha h₂ => exact .let_ s F h₁ hv hs ha (.inj h₂ hT hi')
     | letPoly a K h0 hp' hf hr h₁ hv hw h₂ => exact .letPoly a K h0 hp' hf hr h₁ hv hw (.inj h₂ hT hi')
     | ret h => exact .ret h
@@ -2997,7 +3009,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
     -- `unknown` in its place.
     obtain ⟨_, -, ht⟩ := h'.top_synth
     cases ht with
-    | cond hc ht he' => exact .cond hc (.drop ht) (.drop he')
+    | cond hc hx ht he' => exact .cond hc hx (.drop ht) (.drop he')
     | let_ s F h₁ hv hs ha h₂ => exact .let_ s F h₁ hv hs ha (.drop h₂)
     | letPoly a K h0 hp' hf hr h₁ hv hw h₂ => exact .letPoly a K h0 hp' hf hr h₁ hv hw (.drop h₂)
     | ret h => exact .ret h
@@ -3555,10 +3567,16 @@ theorem infer_complete_cond (L : List String) (c : Expr) (t : Expr) (e : Expr) (
   obtain ⟨τ₀, hτ₀, hτT, ht⟩ := ht.top_ex hC hex (fun T hT => hmT T hT rfl) (fun _ _ => rfl)
   generalize hmd' : Ex.mode ex = md' at ht
   cases ht with
-  | cond hc htt hte =>
+  | cond hc hx htt hte =>
     subst hmd'
-    obtain ⟨o₁, h₁, φ₁, hag₁, _, hsat₁⟩ := ihc (by ret_ok) (by ret_eq) .none .none hΓ hR hC hΓ' hR' hc
+    obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁c, hsat₁⟩ := ihc (by ret_ok) (by ret_eq) .none .none hΓ hR hC hΓ' hR' hc
     obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L c (by ret_ok) .none hΓ hR h₁
+    -- The test's `Testable`, at the type inference found for it.
+    have hsat₁ : Sat C (o₁.preds ++ [Pred.mk .testable [o₁.τ]]) φ₁ :=
+      Sat.append.mpr ⟨hsat₁, Sat.singleton.mpr (by
+        simpa [Pred.subst] using
+          hx.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons hτ₁c.symm zip_tyEq_nil)))⟩
+    replace hp₁ := Pred.Below.testable_append hp₁ hτb₁
     have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
     have hR₁ := hσ₁.ret_below (hR.mono hn₁)
     have hc₁ := hΓ'.trans (hag₁.ctx hΓ).symm
@@ -3799,12 +3817,16 @@ theorem infer_complete_unop (L : List String) (op : UnOp) (e : Expr) (ih : e.Pol
   rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
   obtain ⟨τ₀, hτ₀, ht⟩ := ht.top_synth
   cases ht with
-  | unop hop he =>
+  | unop hop hx he =>
     obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ih (by ret_ok) (by ret_eq) .none .none hΓ hR hC hΓ' hR' he
     cases hop with
     | not =>
-      exact ⟨⟨o₁.σ, .boolean, o₁.preds, o₁.next⟩, by simp only [infer, h₁], φ₁, hag₁, hτ₀,
-        hsat₁⟩
+      -- The operand's `Testable`, at the type inference found for it.
+      exact ⟨⟨o₁.σ, .boolean, o₁.preds ++ [Pred.mk .testable [o₁.τ]], o₁.next⟩,
+        by simp only [infer, h₁], φ₁, hag₁, hτ₀,
+        Sat.append.mpr ⟨hsat₁, Sat.singleton.mpr (by
+          simpa [Pred.subst] using
+            (hx rfl).of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons hτ₁.symm zip_tyEq_nil)))⟩⟩
     | typeof =>
       exact ⟨⟨o₁.σ, .string, o₁.preds, o₁.next⟩, by simp only [infer, h₁], φ₁, hag₁, hτ₀,
         hsat₁⟩
@@ -3960,15 +3982,22 @@ theorem infer_complete_while_ (L : List String) (c : Expr) (body : Expr) (ihc : 
   rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
   obtain ⟨τ₀, hτ₀, ht⟩ := ht.top_synth
   cases ht with
-  | while_ hc hb =>
-    obtain ⟨o₁, h₁, φ₁, hag₁, _, hsat₁⟩ := ihc (by ret_ok) (by ret_eq) .none .none hΓ hR hC hΓ' hR' hc
-    obtain ⟨hn₁, hσ₁, _, hp₁⟩ := infer_inv L c (by ret_ok) .none hΓ hR h₁
+  | while_ hc hx hb =>
+    obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁c, hsat₁⟩ := ihc (by ret_ok) (by ret_eq) .none .none hΓ hR hC hΓ' hR' hc
+    obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L c (by ret_ok) .none hΓ hR h₁
+    -- The test's `Testable`, at the type inference found for it.
+    have hsat₁ : Sat C (o₁.preds ++ [Pred.mk .testable [o₁.τ]]) φ₁ :=
+      Sat.append.mpr ⟨hsat₁, Sat.singleton.mpr (by
+        simpa [Pred.subst] using
+          hx.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons hτ₁c.symm zip_tyEq_nil)))⟩
+    replace hp₁ := Pred.Below.testable_append hp₁ hτb₁
     have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
     have hR₁ := hσ₁.ret_below (hR.mono hn₁)
     obtain ⟨o₂, h₂, φ₂, hag₂, _, hsat₂⟩ := InferComplete.check ihb (by ret_ok) (by ret_eq)
       (Ex.Closed.some rfl) (fun _ h => by cases h; rfl) (ψ := φ₁) hΓ₁ hR₁ hC
       (hΓ'.trans (hag₁.ctx hΓ).symm) (hR'.trans (hag₁.ret hR).symm) hb
-    exact ⟨⟨Subst.compose o₂.σ o₁.σ, .undefined, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
+    exact ⟨⟨Subst.compose o₂.σ o₁.σ, .undefined,
+      (o₁.preds ++ [Pred.mk .testable [o₁.τ]]).map (·.subst o₂.σ) ++ o₂.preds,
       o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₀,
       Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
 

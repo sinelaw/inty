@@ -342,7 +342,7 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 | `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
 | `Expr.scoped`: `assignsMutable` (no assignment to a `const`), `jumpsInLoop` (`break` and `continue` only in a loop) | `check_assignment_target`; the parser |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
-| `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes (`Plus`, `HasProp`, `Merge`, `Indexable`, `IndexWrite`, `NotNew`), constraints, instances | `classes::ClassName`, the instance tables in `src/classes`, `resolve_has_prop`; `Merge` is a spread's per-field merge (`merge_spread` in `src/infer/features/rows.rs`, which decides it at once) |
+| `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes (`Plus`, `HasProp`, `Merge`, `Indexable`, `IndexWrite`, `NotNew`, `Testable`), constraints, instances | `classes::ClassName`, the instance tables in `src/classes`, `resolve_has_prop`; `Merge` is a spread's per-field merge (`merge_spread` in `src/infer/features/rows.rs`, which decides it at once) |
 | `improveAll` (deciding constraints on known types), `fixedVars` and `genVars` (what a `let` quantifies) | `simplify_has_props`, `env_fixed_vars`, `InferState::generalize` |
 | `Entails C p` (`p` is an instance up to equal types, or assumed in `C`) | a scheme's constraints in scope while checking its body |
 | `unify` (up to unfolding, by congruence closure: a variable occurring under a record or a function is bound to a recursive type), `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, `var_bind`, `create_recursive_type`, the per-feature rules) |
@@ -453,11 +453,16 @@ These choices are meant to hold up as the calculus grows.
   `Cls` with its instances in `Inst` (`Inty/Classes.lean`): `Plus`;
   `HasProp l a k b`, a property read on a value of unknown type, whose
   receiver determines the field (a functional dependency); `Merge`, a
-  spread's slot; `Indexable` and `IndexWrite`, indexing; and `NotNew`, an
-  arrow field's `this`, which `new` doesn't give. A `const` types its
+  spread's slot; `Indexable` and `IndexWrite`, indexing; `NotNew`, an
+  arrow field's `this`, which `new` doesn't give; and `Testable`, a value
+  tested for truthiness (`cond`, `while_`, `!`, and so `&&` / `||`, which
+  lower to `cond`): any type but a function's, which is always truthy, so
+  that a test always comes out the same (a forgotten call). A function
+  that tests its parameter carries it in its scheme. A `const` types its
   initialiser assuming its scheme's constraints, and each use of the
   variable must establish them. Inference records a pending constraint at
-  each `+`, each property access, spread and index, and each arrow field;
+  each `+`, each property access, spread and index, each arrow field, and
+  each test;
   before a `const` generalises, it decides the ones on known types
   (`improveAll`), but a `Plus` (decided at the end) and a `Merge` (decided
   at the top level), and it doesn't quantify a field type whose receiver

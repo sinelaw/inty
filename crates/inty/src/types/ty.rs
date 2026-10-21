@@ -324,6 +324,15 @@ pub enum ClassName {
     /// The container determines the element; it waits while it's a
     /// variable.
     Iterable,
+    /// `Testable a`: a value of `a` may be tested for truthiness (`if`,
+    /// `while`, `?:`, `!`, and the left operand of `&&` / `||`): any type
+    /// but a function's or a promise's, which are always truthy, so a test
+    /// of one always comes out the same (a forgotten call or `await`), and
+    /// but an annotation's type parameter, which may stand for a function.
+    /// It waits while `a` is a variable, and a generic function that tests
+    /// its parameter carries it (`<a> where Testable a => (a) => Number`),
+    /// as the model does (lean `Cls.testable`).
+    Testable,
 }
 
 /// Type class predicate: a constraint that a type must satisfy.
@@ -389,6 +398,15 @@ impl TypePred {
                 Some((recv, name.as_str()))
             }
             _ => None,
+        }
+    }
+
+    /// `Testable t`: a value of `t` is tested for truthiness.
+    pub fn testable(ty: Type) -> Self {
+        TypePred {
+            class: ClassName::Testable,
+            types: vec![ty],
+            origin: None,
         }
     }
 

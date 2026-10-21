@@ -65,13 +65,13 @@ theorem HasTypeS.cutC {S : Sys} {L : List String} {D : List Pred} {Γ : Ctx} {R 
     exact .letPoly a K h0 hp hf hr (fun k hk => ih₁ k hk hD) hv hw (ih₂ hD)
   | assign hi ha hp _ ih => intro C hD; exact .assign hi ha hp (ih hD)
   | assignCheck hs hi ha hp hT hc _ ih => intro C hD; exact .assignCheck hs hi ha hp hT hc (ih hD)
-  | cond _ _ _ ihc iht ihe => intro C hD; exact .cond (ihc hD) (iht hD) (ihe hD)
-  | unop hop _ ih => intro C hD; exact .unop hop (ih hD)
+  | cond _ hx _ _ ihc iht ihe => intro C hD; exact .cond (ihc hD) (hx.cutS hD) (iht hD) (ihe hD)
+  | unop hop hx _ ih => intro C hD; exact .unop hop (fun h => (hx h).cutS hD) (ih hD)
   | binop hop _ _ ih₁ ih₂ => intro C hD; exact .binop (hop.cutC hD) (ih₁ hD) (ih₂ hD)
   | ret _ ih => intro C hD; exact .ret (ih hD)
   | throw_ _ ih => intro C hD; exact .throw_ (ih hD)
   | seq _ _ ih₁ ih₂ => intro C hD; exact .seq (ih₁ hD) (ih₂ hD)
-  | while_ _ _ ihc ihb => intro C hD; exact .while_ (ihc hD) (ihb hD)
+  | while_ _ hx _ ihc ihb => intro C hD; exact .while_ (ihc hD) (hx.cutS hD) (ihb hD)
   | break_ => intro C _; exact .break_
   | continue_ => intro C _; exact .continue_
   | tryCatch _ _ ihb ihh => intro C hD; exact .tryCatch (ihb hD) (ihh hD)

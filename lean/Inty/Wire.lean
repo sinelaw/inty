@@ -561,7 +561,9 @@ def verdict (clock : Nat) (line : String) : String :=
 #guard verdict 100 "(app (func 1 (var 0)) (num 15 1))" ==
   s!"type number;value num {(1.5 : Float).toBits}"
 #guard verdict 100 "(plus (num 1 0) (str s:a))" == "reject;stuck typeMismatch"
-#guard verdict 100 "(not (func 1 (plus (var 0) (var 0))))" == "type boolean;value bool false"
+-- A function is always truthy, so testing one is rejected (`Testable`).
+#guard verdict 100 "(not (func 1 (plus (var 0) (var 0))))" == "reject;value bool false"
+#guard verdict 100 "(not (num 0 0))" == "type boolean;value bool true"
 #guard verdict 100 "(let (func 1 (var 0)) (app (var 0) (str s:)))" == "type string;value str s:"
 #guard verdict 100 "(app (func 2 (var 1)) (num 1 0) (str s:a))" == "type string;value str s:a"
 #guard verdict 100 "(app (func 0 (var 1)))" == "type undefined;value undef"

@@ -74,13 +74,13 @@ theorem HasTypeS.mono {S₁ S₂ : Sys} (hle : S₁.Le S₂) {L : List String} {
   | assign hi ha hp _ ih => exact .assign hi ha hp ih
   | assignCheck hs hi ha hp hT hc _ ih =>
     exact .assignCheck (hle.assignSub hs) hi ha hp hT (hle.closed hc) ih
-  | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
-  | unop hop _ ih => exact .unop hop ih
+  | cond _ hx _ _ ihc iht ihe => exact .cond ihc (hx.mono hle) iht ihe
+  | unop hop hx _ ih => exact .unop hop (fun h => (hx h).mono hle) ih
   | binop hop _ _ ih₁ ih₂ => exact .binop (hop.mono hle) ih₁ ih₂
   | ret _ ih => exact .ret ih
   | throw_ _ ih => exact .throw_ ih
   | seq _ _ ih₁ ih₂ => exact .seq ih₁ ih₂
-  | while_ _ _ ihc ihb => exact .while_ ihc ihb
+  | while_ _ hx _ ihc ihb => exact .while_ ihc (hx.mono hle) ihb
   | break_ => exact .break_
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb ihh

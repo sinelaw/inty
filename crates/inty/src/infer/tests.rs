@@ -5462,7 +5462,7 @@ fn a_record_field_holds_a_callback() {
                mark: null,\n\
                };\n\
                hooks.mark = () => undefined;\n\
-               if (hooks.mark) hooks.mark();\n\
+               hooks.mark();\n\
                const m = hooks.mark;\n\
                const r = 1;";
     assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);

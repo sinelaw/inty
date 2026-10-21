@@ -705,44 +705,18 @@ fn dom_reads_that_may_find_nothing() {
     err("document.activeElement.focus();");
 }
 
-/// The warnings checking `src` against the stdlib gives; it must type-check.
-#[track_caller]
-fn warnings(src: &str) -> Vec<String> {
-    let program = parse(src).unwrap_or_else(|e| panic!("parse error: {e}\n{src}"));
-    let (env, mut state) = initial_env_with_stdlib().unwrap();
-    let result = state.infer_program_with_env(&env, &program);
-    let errors = state.take_errors();
-    assert!(
-        errors.is_empty() && result.is_ok(),
-        "{errors:?} {:?}\n{src}",
-        result.err()
-    );
-    state.warnings.iter().map(|w| w.message.clone()).collect()
-}
-
-/// `src` type-checks with exactly one warning, which mentions `needle`.
-#[track_caller]
-fn warns(src: &str, needle: &str) {
-    let w = warnings(src);
-    assert!(w.len() == 1 && w[0].contains(needle), "{w:?}\n{src}");
-}
-
 // A promise is always truthy: testing one, negating it or putting it on
-// the left of `&&` / `||` is a forgotten `await`. Warned about, like a
-// non-exhaustive `switch`: the program is well-typed, only suspicious.
+// the left of `&&` / `||` is a forgotten `await` (`Testable`).
 #[test]
 fn a_promise_is_not_a_condition() {
-    let quiet = warnings(
-        "
+    ok("
         async function isAdmin() { return false; }
         async function main() {
             if (await isAdmin()) { console.log(1); }
             const p = isAdmin();
             p.then(function (b) { return b ? 1 : 0; });
         }
-    ",
-    );
-    assert!(quiet.is_empty(), "{quiet:?}");
+    ");
     let decl = "async function isAdmin() { return false; }";
     for test in [
         "if (isAdmin()) { console.log(1); }",
@@ -752,41 +726,47 @@ fn a_promise_is_not_a_condition() {
         "const b = isAdmin() && true;",
         "const b = isAdmin() || true;",
     ] {
-        warns(&format!("{decl} {test}"), "a promise is always truthy");
+        let e = err(&format!("{decl} {test}"));
+        assert!(e.contains("a promise is always truthy"), "{test}: {e}");
     }
 }
 
-// A function is always truthy: testing one, or putting it on the left of
-// `&&`, is a forgotten call, unless the code the test guards calls it (a
-// `@type` placeholder or a host feature may be missing at run time).
+// A function is always truthy: testing one (`if`, `while`, `?:`, `!`, the
+// left of `&&` / `||`) is a forgotten call (`Testable`, as the Lean model
+// has it). A function that tests its parameter says so in its type, and
+// is called with no function; a value that may be missing is tested as
+// usual.
 #[test]
 fn a_function_is_not_a_condition() {
-    let quiet = warnings(
-        "
-        const hooks = {
-            /** @type {() => Undefined} */
-            mark: null,
-        };
-        if (hooks.mark) { hooks.mark(); }
-        if (hooks.mark) { [1].forEach(function () { hooks.mark?.(); }); }
-        const done = hooks.mark && hooks.mark();
-        if (!hooks.mark) { console.log(\"no mark\"); }
+    ok("
         function isReady() { return true; }
         if (isReady()) { console.log(1); }
-        class C { m() { return 1; } }
-        if (C) { new C(); }
-    ",
-    );
-    assert!(quiet.is_empty(), "{quiet:?}");
+        function pick(x) { return x ? 1 : 2; }
+        const n = pick(5) + pick(\"\");
+        /** let cb: (() => Number) | Undefined */
+        let cb = undefined;
+        if (cb) { cb(); }
+        try { JSON.parse(\"x\"); } catch (e) { if (e) { console.log(1); } }
+    ");
     for src in [
         "function isReady() { return true; } if (isReady) { console.log(1); }",
         "function isReady() { return true; } while (isReady) { break; }",
         "function isReady() { return true; } const n = isReady ? 1 : 2;",
-        "const user = { isAdmin() { return false; } }; if (user.isAdmin) { console.log(1); }",
+        "function isReady() { return true; } const b = !isReady;",
         "function isReady() { return true; } const b = isReady && true;",
-        "function f() { return 1; } function g() { return 2; } if (f) { g(); }",
+        "function isReady() { return true; } const b = isReady || null;",
+        "function isReady() { return true; } if (isReady) { isReady(); }",
+        "const user = { isAdmin() { return false; } }; if (user.isAdmin) { console.log(1); }",
+        "class C { m() { return 1; } } if (C) { new C(); }",
+        "function pick(x) { return x ? 1 : 2; } pick(function () { return 1; });",
+        "function g(f) { if (f) {} return f(); }",
+        "/** const id: <T>(T) => T */ const id = function (x) { if (x) {} return x; };",
     ] {
-        warns(src, "a function is always truthy");
+        let e = err(src);
+        assert!(
+            e.contains("Testable") && (e.contains("always truthy") || e.contains("type parameter")),
+            "{src}: {e}"
+        );
     }
 }
 

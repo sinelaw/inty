@@ -223,6 +223,7 @@ def Pred.decide₀ : Cls → Ty → List Ty → Improve
   -- (An instance holds: a trivial equation drops it.)
   | .indexWrite, .array _, [] => .eq .number .number
   | .notNew, .app c _, [] => if c = .newTarget ∨ c.isRigid then .fail else .eq .number .number
+  | .testable, .app c _, [] => if c = .fn ∨ c.isRigid then .fail else .eq .number .number
   | .merge, .pre, [k, τ, s, r] => Pred.decidePre k τ s r
   | .merge, .abs, [_, _, s, r] => Pred.decideCopy s r
   | .inject T, τ, [] => Pred.decideInject τ T
@@ -699,15 +700,15 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
           | some σ₄ =>
             some ⟨Subst.compose σ₄ (Subst.compose o₃.σ (Subst.compose o₂.σ o₁.σ)),
               o₃.τ.subst σ₄,
-              ((o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst o₃.σ) ++ o₃.preds).map
-                (·.subst σ₄),
+              (((o₁.preds ++ [Pred.mk .testable [o₁.τ]]).map (·.subst o₂.σ) ++ o₂.preds).map
+                (·.subst o₃.σ) ++ o₃.preds).map (·.subst σ₄),
               o₃.next⟩
   | Γ, R, rm, _, .unop op e, n =>
     match infer Γ R rm none e n with
     | none => none
     | some o =>
       match op with
-      | .not => some ⟨o.σ, .boolean, o.preds, o.next⟩
+      | .not => some ⟨o.σ, .boolean, o.preds ++ [Pred.mk .testable [o.τ]], o.next⟩
       | .typeof => some ⟨o.σ, .string, o.preds, o.next⟩
       | .neg =>
         match unify o.τ .number with
@@ -784,8 +785,8 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
           (checkEx (some .unknown) body) with
       | none => none
       | some o₂ =>
-        some ⟨Subst.compose o₂.σ o₁.σ, .undefined, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
-          o₂.next⟩
+        some ⟨Subst.compose o₂.σ o₁.σ, .undefined,
+          (o₁.preds ++ [Pred.mk .testable [o₁.τ]]).map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
   -- `break` and `continue` have any type: the expected one, or a fresh
   -- variable.
   | _, _, _, ex, .break_, n | _, _, _, ex, .continue_, n => some ⟨[], ex.getD (.var n), [], n + 1⟩

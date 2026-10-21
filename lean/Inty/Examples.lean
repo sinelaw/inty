@@ -108,6 +108,7 @@ def countdown : Expr :=
 example : HasType L [] [] none .synth .synth countdown .string :=
   .app
     (.func (θ := .undefined) (τs := [.number]) (ρ := .string) rfl (.cond (.var_mono rfl)
+      (.of_inst (.testable (by simp [Con.isRigid])))
       (.app (.var_mono rfl) rfl (by simp; exact .binop (.num rfl) (.var_mono rfl) (.lit .number)))
       (.lit .string)))
     rfl (by simp; exact .lit .number)
@@ -138,10 +139,10 @@ example : ¬ HasType L [] [] none .synth .synth mixedPlus τ := by
 
 #guard match eval 10 [] [] mixedPlus with | .stuck .typeMismatch => true | _ => false
 
-/-- A test may have any type and is read by truthiness:
-`"" ? 1 : 2` is `2`. -/
+/-- A test may have any type but a function's (`Testable`), and is read by
+truthiness: `"" ? 1 : 2` is `2`. -/
 example : HasType L [] [] none .synth .synth (.cond (str "") (num 1) (num 2)) .number :=
-  .cond (.lit .string) (.lit .number) (.lit .number)
+  .cond (.lit .string) (.of_inst (.testable (by simp [Con.isRigid]))) (.lit .number) (.lit .number)
 
 #guard match eval 10 [] [] (.cond (str "") (num 1) (num 2)) with
   | .ok (.number n) => n == 2
@@ -287,7 +288,8 @@ def early : Expr :=
 
 example : HasType L [] [] none .synth .synth early .string :=
   .app (.func (θ := .undefined) (τs := [.number]) (ρ := .string) rfl
-      (.cond (.var_mono rfl) (.ret (.lit .string)) (.throw_ (.var_mono rfl))))
+      (.cond (.var_mono rfl) (.of_inst (.testable (by simp [Con.isRigid]))) (.ret (.lit .string))
+        (.throw_ (.var_mono rfl))))
     rfl (by simp; exact .lit .number)
 
 #guard isString "pos" (eval 10 [] [] early)

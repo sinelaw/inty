@@ -325,10 +325,14 @@ inductive HasTypeS (S : Sys) (L : List String) :
       HasTypeS S L C Γ R rm .synth (.assign i e) T
   /-- Both branches have one type, as in Hindley–Milner: inty doesn't guess
   that disagreeing branches form a union. An expected type is pushed into
-  each branch. -/
-  | cond : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm md t τ →
+  each branch. The test may be tested (`Testable`): not a function, which
+  is always truthy. -/
+  | cond : HasTypeS S L C Γ R rm .synth c τc → EntailsS S C ⟨.testable, [τc]⟩ →
+      HasTypeS S L C Γ R rm md t τ →
       HasTypeS S L C Γ R rm md e τ → HasTypeS S L C Γ R rm md (.cond c t e) τ
-  | unop : UnOpTy op τ₁ τ → HasTypeS S L C Γ R rm .synth e τ₁ →
+  /-- `!e` tests `e`, which may be tested (`Testable`). -/
+  | unop : UnOpTy op τ₁ τ → (op = .not → EntailsS S C ⟨.testable, [τ₁]⟩) →
+      HasTypeS S L C Γ R rm .synth e τ₁ →
       HasTypeS S L C Γ R rm .synth (.unop op e) τ
   | binop : BinOpTyS S C op τ₁ τ₂ τ → HasTypeS S L C Γ R rm .synth e₁ τ₁ →
       HasTypeS S L C Γ R rm .synth e₂ τ₂ → HasTypeS S L C Γ R rm .synth (.binop op e₁ e₂) τ
@@ -341,7 +345,8 @@ inductive HasTypeS (S : Sys) (L : List String) :
       HasTypeS S L C Γ R rm md (.seq e₁ e₂) τ
   /-- `while (c) body`: any test, read by truthiness; it completes with
   `undefined` (`infer_stmt_while`). -/
-  | while_ : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm .check body .unknown →
+  | while_ : HasTypeS S L C Γ R rm .synth c τc → EntailsS S C ⟨.testable, [τc]⟩ →
+      HasTypeS S L C Γ R rm .check body .unknown →
       HasTypeS S L C Γ R rm .synth (.while_ c body) .undefined
   /-- `break;` and `continue;` don't complete, so they stand for any type.
   (That they are in a loop is checked apart, by `Expr.jumpsInLoop`.) -/
@@ -512,9 +517,11 @@ inductive HasTypeTopS (S : Sys) (L : List String) :
   | assignCheck : S.assignSub = true → Γ[i]? = some s → s.arity = 0 → s.preds = [] →
       TyEq (s.inst []) T → S.closed T → HasTypeS S L C Γ R rm .check e T →
       HasTypeTopS S L C Γ R rm .synth (.assign i e) T
-  | cond : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm md t τ →
+  | cond : HasTypeS S L C Γ R rm .synth c τc → EntailsS S C ⟨.testable, [τc]⟩ →
+      HasTypeS S L C Γ R rm md t τ →
       HasTypeS S L C Γ R rm md e τ → HasTypeTopS S L C Γ R rm md (.cond c t e) τ
-  | unop : UnOpTy op τ₁ τ → HasTypeS S L C Γ R rm .synth e τ₁ →
+  | unop : UnOpTy op τ₁ τ → (op = .not → EntailsS S C ⟨.testable, [τ₁]⟩) →
+      HasTypeS S L C Γ R rm .synth e τ₁ →
       HasTypeTopS S L C Γ R rm .synth (.unop op e) τ
   | binop : BinOpTyS S C op τ₁ τ₂ τ → HasTypeS S L C Γ R rm .synth e₁ τ₁ →
       HasTypeS S L C Γ R rm .synth e₂ τ₂ → HasTypeTopS S L C Γ R rm .synth (.binop op e₁ e₂) τ
@@ -522,7 +529,8 @@ inductive HasTypeTopS (S : Sys) (L : List String) :
   | throw_ : HasTypeS S L C Γ R rm .synth e τe → HasTypeTopS S L C Γ R rm .synth (.throw_ e) τ
   | seq : HasTypeS S L C Γ R rm .check e₁ .unknown → HasTypeS S L C Γ R rm md e₂ τ →
       HasTypeTopS S L C Γ R rm md (.seq e₁ e₂) τ
-  | while_ : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm .check body .unknown →
+  | while_ : HasTypeS S L C Γ R rm .synth c τc → EntailsS S C ⟨.testable, [τc]⟩ →
+      HasTypeS S L C Γ R rm .check body .unknown →
       HasTypeTopS S L C Γ R rm .synth (.while_ c body) .undefined
   | break_ : HasTypeTopS S L C Γ R rm md .break_ τ
   | continue_ : HasTypeTopS S L C Γ R rm md .continue_ τ
@@ -644,13 +652,13 @@ theorem HasTypeS.top {S : Sys} (h : HasTypeS S L C Γ R rm md e τ) :
     exact ⟨_, _, .letPoly a K h0 h1 h2 h3 h₁ hv hw h₂, .refl⟩
   | assign hi ha hp he => exact ⟨_, _, .assign hi ha hp he, .refl⟩
   | assignCheck hs hi ha hp hT hc he => exact ⟨_, _, .assignCheck hs hi ha hp hT hc he, .refl⟩
-  | cond hc ht he => exact ⟨_, _, .cond hc ht he, .refl⟩
-  | unop hop he => exact ⟨_, _, .unop hop he, .refl⟩
+  | cond hc hx ht he => exact ⟨_, _, .cond hc hx ht he, .refl⟩
+  | unop hop hx he => exact ⟨_, _, .unop hop hx he, .refl⟩
   | binop hop h₁ h₂ => exact ⟨_, _, .binop hop h₁ h₂, .refl⟩
   | ret he => exact ⟨_, _, .ret he, .refl⟩
   | throw_ he => exact ⟨_, _, .throw_ he, .refl⟩
   | seq h₁ h₂ => exact ⟨_, _, .seq h₁ h₂, .refl⟩
-  | while_ hc hb => exact ⟨_, _, .while_ hc hb, .refl⟩
+  | while_ hc hx hb => exact ⟨_, _, .while_ hc hx hb, .refl⟩
   | break_ => exact ⟨_, _, .break_, .refl⟩
   | continue_ => exact ⟨_, _, .continue_, .refl⟩
   | unwrap h₁ hs h₂ h₃ => exact ⟨_, _, .unwrap h₁ hs h₂ h₃, .refl⟩

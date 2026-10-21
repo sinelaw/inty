@@ -388,6 +388,10 @@ impl InferState {
             AssignOp::Assign | AssignOp::NullishAssign | AssignOp::LogicalOrAssign
         );
         let left_type = self.infer_store_target(env, left, span, store_only)?;
+        // `x &&= v` and `x ||= v` test `x`, as `&&` and `||` do.
+        if matches!(op, AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign) {
+            self.require_testable(&left_type, span)?;
+        }
 
         match op {
             AssignOp::Assign

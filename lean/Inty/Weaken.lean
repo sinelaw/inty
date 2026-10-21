@@ -319,14 +319,14 @@ theorem HasTypeS.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
       exact .assignCheck hs hs' ha' hp' (he.trans hT) hc
         (ih (hg.sub fun j hw => by simp_all [Expr.writes]) hR hRc)
     · simp [Expr.writes] at hw
-  | cond _ _ _ ihc iht ihe =>
+  | cond _ hx _ _ ihc iht ihe =>
     intro Γ' R' hg hR hRc
-    exact .cond (ihc (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+    exact .cond (ihc (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hx
       (iht (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
       (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
-  | unop hop _ ih =>
+  | unop hop hx _ ih =>
     intro Γ' R' hg hR hRc
-    exact .unop hop (ih (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+    exact .unop hop hx (ih (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
   | binop hop _ _ ih₁ ih₂ =>
     intro Γ' R' hg hR hRc
     exact .binop hop (ih₁ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
@@ -346,9 +346,9 @@ theorem HasTypeS.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
     intro Γ' R' hg hR hRc
     exact .seq (ih₁ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
       (ih₂ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
-  | while_ _ _ ihc ihb =>
+  | while_ _ hx _ ihc ihb =>
     intro Γ' R' hg hR hRc
-    exact .while_ (ihc (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+    exact .while_ (ihc (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hx
       (ihb (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
   | break_ => intros; exact .break_
   | continue_ => intros; exact .continue_
@@ -513,10 +513,10 @@ theorem HasTypeS.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
   | assign hi ha hp _ ih => intro ρ' ρ hm hR he hρ; exact .assign hi ha hp (ih hm hR he hρ)
   | assignCheck hs hi ha hp hT hc _ ih =>
     intro ρ' ρ hm hR he hρ; exact .assignCheck hs hi ha hp hT hc (ih hm hR he hρ)
-  | cond _ _ _ ihc iht ihe =>
+  | cond _ hx _ _ ihc iht ihe =>
     intro ρ' ρ hm hR he hρ
-    exact .cond (ihc hm hR he hρ) (iht hm hR he hρ) (ihe hm hR he hρ)
-  | unop hop _ ih => intro ρ' ρ hm hR he hρ; exact .unop hop (ih hm hR he hρ)
+    exact .cond (ihc hm hR he hρ) hx (iht hm hR he hρ) (ihe hm hR he hρ)
+  | unop hop hx _ ih => intro ρ' ρ hm hR he hρ; exact .unop hop hx (ih hm hR he hρ)
   | binop hop _ _ ih₁ ih₂ =>
     intro ρ' ρ hm hR he hρ; exact .binop hop (ih₁ hm hR he hρ) (ih₂ hm hR he hρ)
   | ret _ ih =>
@@ -526,8 +526,8 @@ theorem HasTypeS.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
     exact .ret (.inj (ih rfl rfl he hρ) hρ (.inl (Pred.inject_self hρ he)))
   | throw_ _ ih => intro ρ' ρ hm hR he hρ; exact .throw_ (ih hm hR he hρ)
   | seq _ _ ih₁ ih₂ => intro ρ' ρ hm hR he hρ; exact .seq (ih₁ hm hR he hρ) (ih₂ hm hR he hρ)
-  | while_ _ _ ihc ihb =>
-    intro ρ' ρ hm hR he hρ; exact .while_ (ihc hm hR he hρ) (ihb hm hR he hρ)
+  | while_ _ hx _ ihc ihb =>
+    intro ρ' ρ hm hR he hρ; exact .while_ (ihc hm hR he hρ) hx (ihb hm hR he hρ)
   | break_ => intros; exact .break_
   | continue_ => intros; exact .continue_
   | tryCatch _ _ ihb ihh =>
