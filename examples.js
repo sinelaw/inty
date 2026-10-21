@@ -494,6 +494,208 @@ function priceLabel(price) {
 // enforceable because inty types optional values as a real union.
 `,
             },
+            {
+                id: "array-covariance",
+                language: "javascript",
+                label: "array-covariance.js",
+                blurb: "Covariant arrays let a write break the caller",
+                expect: "error",
+                code: `// TypeScript treats arrays as covariant: a \`number[]\` may be passed where
+// a \`(number | string)[]\` is expected. That's unsound as soon as the
+// callee writes to the array: with full JSDoc types and \`--strict\`, tsc
+// accepts this, and at runtime \`scores[1].toFixed\` is not a function.
+//
+// Inty: an array's element type is invariant. A \`Number[]\` is not a
+// \`(Number | String)[]\`, so the call is rejected.
+
+/** function addLabel(xs: (Number | String)[]) => Undefined */
+function addLabel(xs) { xs.push("n/a"); }
+
+/** const scores: Number[] */
+const scores = [90];
+addLabel(scores);
+// Inty: expected '(Number | String)[]', found 'Number[]'.
+console.log(scores[1].toFixed(1));
+`,
+            },
+            {
+                id: "method-bivariance",
+                language: "javascript",
+                label: "method-bivariance.js",
+                blurb: "Bivariant method parameters",
+                expect: "error",
+                code: `// TypeScript checks method parameters bivariantly: a handler declared as
+// taking \`number | string\` may be implemented by a method that only takes
+// a \`number\`. With full JSDoc types and \`--strict\`, tsc accepts this, and
+// at runtime \`v.toFixed\` is not a function.
+//
+// Inty: a function's parameters are checked one way only, whether it is
+// written as a method or not. The handler doesn't fit the type.
+
+/** type Handler = {handle: (Number | String) => String} */
+
+/** const handler: Handler */
+const handler = { handle(v) { return v.toFixed(2); } };
+// Inty: Property 'toFixed' not found in type String.
+
+handler.handle("abc");
+`,
+            },
+            {
+                id: "narrowing-after-call",
+                language: "javascript",
+                label: "narrowing-after-call.js",
+                blurb: "A narrowing a call undoes",
+                expect: "error",
+                code: `// TypeScript keeps a property narrowed after \`!== null\` even across a
+// call that sets it back to \`null\`. With full JSDoc types and \`--strict\`,
+// tsc accepts this, and at runtime \`session.user\` is null.
+//
+// Inty doesn't narrow a property through a test at all: the property may
+// change between the test and the use. Copy it into a \`const\` and test
+// that instead (see nullable.js).
+
+/** type Session = {user: String | Null} */
+
+/** const session: Session */
+const session = { user: "ann" };
+
+function logout() { session.user = null; }
+
+if (session.user !== null) {
+    logout();
+    console.log(session.user.toUpperCase());
+    // Inty: 'toUpperCase' not found in String | Null: the value may be null.
+}
+`,
+            },
+            {
+                id: "dict-missing-key",
+                language: "javascript",
+                label: "dict-missing-key.js",
+                blurb: "A map read at a missing key",
+                expect: "error",
+                code: `// TypeScript reads a \`Record<string, number>\` at any key as a \`number\`
+// (unless \`noUncheckedIndexedAccess\` is on, which \`--strict\` doesn't turn
+// on). tsc accepts this, and at runtime \`stock["pear"]\` is undefined.
+//
+// Inty: a \`Dict<V>\` read gives \`V | Undefined\`, so the missing key must
+// be handled (\`?? 0\`).
+
+/** const stock: Dict<Number> */
+const stock = { apple: 3 };
+
+console.log(stock["pear"].toFixed());
+// Inty: 'toFixed' not found in Number | Undefined: the value may be undefined.
+//
+// The fix:
+//   console.log((stock["pear"] ?? 0).toFixed());
+`,
+            },
+            {
+                id: "spread-optional",
+                language: "javascript",
+                label: "spread-optional.js",
+                blurb: "Spreading `undefined` over a default",
+                expect: "error",
+                code: `// An optional field may hold \`undefined\`, and spreading it writes the
+// \`undefined\` over the default before it. TypeScript types the result's
+// field as \`number\` all the same: with full JSDoc types and \`--strict\`,
+// tsc accepts this, and at runtime \`cfg.retries\` is undefined.
+//
+// Inty: the spread's field is \`Number | Undefined\`, the optional field's
+// type.
+
+/** type Opts = {retries: Number?} */
+
+/** const userOpts: Opts */
+const userOpts = { retries: undefined };
+
+const cfg = { retries: 3, ...userOpts };
+console.log(cfg.retries.toFixed());
+// Inty: 'toFixed' not found in Number | Undefined: the value may be undefined.
+`,
+            },
+            {
+                id: "typo-field",
+                language: "javascript",
+                label: "typo-field.js",
+                blurb: "A misspelled field, silently dropped",
+                expect: "error",
+                code: `// TypeScript checks for extra properties only on an object literal
+// written in place. Passed through a variable, a misspelled field is
+// silently dropped: tsc accepts this with full JSDoc types and
+// \`--strict\`, and at runtime the age is lost, so this prints "Ann (0)".
+//
+// Inty's records are closed: \`{name, agee}\` is not a \`{name, age?}\`.
+
+/** function show(p: {name: String, age: Number?}) => String */
+function show(p) { return p.name + " (" + String(p.age ?? 0) + ")"; }
+
+const input = { name: "Ann", agee: 30 };
+console.log(show(input));
+// Inty: expected '{age: Number | Undefined, name: String}',
+//       found '{agee: Number, name: String}'.
+`,
+            },
+            {
+                id: "non-exhaustive-switch",
+                language: "javascript",
+                label: "non-exhaustive-switch.js",
+                blurb: "A union case the switch forgets",
+                expect: "ok",
+                code: `// A switch over a union of literals that forgets a case falls through to
+// the code after it. TypeScript says nothing when that code returns a
+// value; here \`color("fail")\` quietly returns "gray".
+//
+// Inty warns about the missing case (a warning, not an error: the
+// program is well-typed). Add the case, or a \`default:\` that says the
+// fallback is meant.
+
+/** type Status = "ok" | "warn" | "fail" */
+
+/** function color(s: Status) => String */
+function color(s) {
+    switch (s) {
+        case "ok": return "green";
+        case "warn": return "yellow";
+    }
+    // Inty: warning — non-exhaustive switch: missing case(s) for "fail".
+    return "gray";
+}
+
+console.log(color("fail"));
+`,
+            },
+            {
+                id: "uncalled-function",
+                language: "javascript",
+                label: "uncalled-function.js",
+                blurb: "A function tested instead of called",
+                expect: "error",
+                code: `// A function is always truthy, so testing one instead of calling it
+// always takes the same branch. TypeScript catches \`if (isLocked)\`
+// directly, but not once the function is passed to a generic function
+// that tests its argument: with full JSDoc types and \`--strict\`, tsc
+// accepts this, and at runtime it prints "locked".
+//
+// Inty: a test needs its value to be \`Testable\`, any type but a
+// function's. A function that tests its parameter says so in its type,
+// \`label: <a> where Testable a => (a) => String\`, so passing it a function
+// is rejected at the call.
+
+function isLocked() { return false; }
+
+function label(flag) { return flag ? "locked" : "open"; }
+
+console.log(label(isLocked));
+// Inty: Type '() => Boolean' is not an instance of Testable
+//       (a function is always truthy ...: call it).
+//
+// The fix:
+//   console.log(label(isLocked()));
+`,
+            },
         ],
     },
     {
