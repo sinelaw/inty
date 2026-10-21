@@ -423,6 +423,7 @@ window.addEventListener("resize", (e) => { console.log(window.innerWidth * windo
 document.addEventListener("keyup", (e) => console.log(e.code));
 const n = window.prompt("name?", "x");
 const g = el.getContext("2d");
+if (g === null) throw new Error("no 2d context");
 g.fillStyle = "#fff";
 g.fillRect(0, 0, el.width, el.height);
 const w = g.measureText("hi").width;
@@ -579,17 +580,17 @@ fn gap_c_a_detached_method_call_says_this() {
 #[test]
 fn gap_d_a_field_of_an_empty_default() {
     let e = err("
-        /** function f<T>(raw: T) => String[] */
         function f(raw) { return ((raw.c ?? {}).off ?? []).map((x) => String(x)); }
     ");
     assert!(e.contains("'off' not found"), "{e}");
     ok("
-        /** function decode<T>(c: T) => String[] */
+        /** type Opts = {off: Number[]?} */
+        /** function decode(c: Opts?) => String[] */
         function decode(c) {
           if (!c) return [];
           return (c.off ?? []).map((x) => String(x));
         }
-        /** function f<T>(raw: T) => String[] */
+        /** function f(raw: {c: Opts?}) => String[] */
         function f(raw) { return decode(raw.c); }
     ");
 }
@@ -636,6 +637,174 @@ fn gap_g_array_at() {
     err("const xs = [1, 2]; const n = xs.at(-1) + 1;");
 }
 
+// Lookups that may find nothing say so, as `find` and `at` do: `Map` and
+// `WeakMap` `get` and an empty array's `pop`/`shift` give `undefined`;
+// `exec` without a match, a DOM lookup without an element and a query
+// string's `get` without the key give `null`.
+#[test]
+fn lookups_that_may_find_nothing() {
+    ok("
+        const m = new Map([[\"a\", 1]]);
+        /** const n: Number */
+        const n = m.get(\"a\") ?? 0;
+        const w = new WeakMap(); const k = {a: 1}; w.set(k, 1);
+        const wv = w.get(k);
+        if (wv !== undefined) { wv.toFixed(); }
+        /** const xs: Number[] */
+        const xs = [1, 2];
+        const last = xs.pop();
+        if (last !== undefined) { last.toFixed(); }
+        const first = xs.shift() ?? 0;
+        const r = /a(b)/.exec(\"ab\");
+        if (r !== null) { r[1].length; }
+        const el = document.getElementById(\"go\");
+        if (el !== null) { el.textContent = \"ok\"; }
+        const q = document.querySelector(\"p\");
+        if (q) { q.textContent = \"ok\"; }
+        const p = new URLSearchParams().get(\"a\") ?? \"\";
+    ");
+    err("const m = new Map([[\"a\", 1]]); const n = m.get(\"b\") + 1;");
+    err("const w = new WeakMap(); const k = {a: 1}; w.set(k, 1); w.get(k).toFixed();");
+    err("/** const xs: Number[] */ const xs = []; xs.pop().toFixed();");
+    err("/** const xs: Number[] */ const xs = []; xs.shift().toFixed();");
+    err("const r = /a/.exec(\"b\"); r.length;");
+    err("document.getElementById(\"x\").textContent = \"hi\";");
+    err("document.querySelector(\"p\").textContent = \"hi\";");
+    err("const el = document.createElement(\"div\"); el.closest(\"p\").textContent = \"hi\";");
+    err("new URLSearchParams().get(\"a\").length;");
+    err("new FormData(document.createElement(\"form\")).get(\"a\").length;");
+}
+
+// The DOM's links between elements and its attribute reads may find
+// nothing: a root has no parent, a last child no next sibling, a missing
+// attribute reads `null`, as does an input outside a form, an unsupported
+// canvas context, a storage key past the end and the active element of an
+// unfocused document.
+#[test]
+fn dom_reads_that_may_find_nothing() {
+    ok("
+        const el = document.createElement(\"div\");
+        const p = el.parentElement;
+        if (p !== null) { p.textContent = \"ok\"; }
+        const next = el.nextElementSibling;
+        if (next) { next.remove(); }
+        const id = el.getAttribute(\"data-id\") ?? \"\";
+        const ctx = el.getContext(\"2d\");
+        if (ctx !== null) { ctx.fillRect(0, 0, 1, 1); }
+        const k = localStorage.key(0) ?? \"\";
+    ");
+    err("document.createElement(\"div\").parentElement.remove();");
+    err("document.createElement(\"div\").firstElementChild.remove();");
+    err("document.createElement(\"div\").lastElementChild.remove();");
+    err("document.createElement(\"div\").nextElementSibling.remove();");
+    err("document.createElement(\"div\").previousElementSibling.remove();");
+    err("const n = document.createElement(\"div\").getAttribute(\"x\").length;");
+    err("document.createElement(\"input\").form.submit();");
+    err("document.createElement(\"canvas\").getContext(\"2d\").fillRect(0, 0, 1, 1);");
+    err("const n = localStorage.key(0).length;");
+    err("document.activeElement.focus();");
+}
+
+// A promise is always truthy: testing one, negating it or putting it on
+// the left of `&&` / `||` is a forgotten `await` (`Testable`).
+#[test]
+fn a_promise_is_not_a_condition() {
+    ok("
+        async function isAdmin() { return false; }
+        async function main() {
+            if (await isAdmin()) { console.log(1); }
+            const p = isAdmin();
+            p.then(function (b) { return b ? 1 : 0; });
+        }
+    ");
+    let decl = "async function isAdmin() { return false; }";
+    for test in [
+        "if (isAdmin()) { console.log(1); }",
+        "if (!isAdmin()) { console.log(1); }",
+        "while (isAdmin()) { console.log(1); }",
+        "const n = isAdmin() ? 1 : 2;",
+        "const b = isAdmin() && true;",
+        "const b = isAdmin() || true;",
+    ] {
+        let e = err(&format!("{decl} {test}"));
+        assert!(e.contains("a promise is always truthy"), "{test}: {e}");
+    }
+}
+
+// A function is always truthy: testing one (`if`, `while`, `?:`, `!`, the
+// left of `&&` / `||`) is a forgotten call (`Testable`, as the Lean model
+// has it). A function that tests its parameter says so in its type, and
+// is called with no function; a value that may be missing is tested as
+// usual.
+#[test]
+fn a_function_is_not_a_condition() {
+    ok("
+        function isReady() { return true; }
+        if (isReady()) { console.log(1); }
+        function pick(x) { return x ? 1 : 2; }
+        const n = pick(5) + pick(\"\");
+        /** let cb: (() => Number) | Undefined */
+        let cb = undefined;
+        if (cb) { cb(); }
+        try { JSON.parse(\"x\"); } catch (e) { if (e) { console.log(1); } }
+    ");
+    for src in [
+        "function isReady() { return true; } if (isReady) { console.log(1); }",
+        "function isReady() { return true; } while (isReady) { break; }",
+        "function isReady() { return true; } const n = isReady ? 1 : 2;",
+        "function isReady() { return true; } const b = !isReady;",
+        "function isReady() { return true; } const b = isReady && true;",
+        "function isReady() { return true; } const b = isReady || null;",
+        "function isReady() { return true; } if (isReady) { isReady(); }",
+        "const user = { isAdmin() { return false; } }; if (user.isAdmin) { console.log(1); }",
+        "class C { m() { return 1; } } if (C) { new C(); }",
+        "function pick(x) { return x ? 1 : 2; } pick(function () { return 1; });",
+        "function g(f) { if (f) {} return f(); }",
+        "/** const id: <T>(T) => T */ const id = function (x) { if (x) {} return x; };",
+    ] {
+        let e = err(src);
+        assert!(
+            e.contains("Testable") && (e.contains("always truthy") || e.contains("type parameter")),
+            "{src}: {e}"
+        );
+    }
+}
+
+// A `function` declaration's annotation with type parameters is its type,
+// as a `const`'s is: the body is checked with them rigid, so it must have
+// every instance, and each call instantiates the declared scheme (it used
+// to instantiate the parameters by the body: `<T>(x: T) => T` returning
+// `1` was `(1) => 1`).
+#[test]
+fn a_function_annotations_type_parameters_are_rigid() {
+    ok("
+        /** function id<T>(x: T) => T */
+        function id(x) { return x; }
+        const n = id(1) + 1;
+        const s = id(\"a\").length;
+        /** function first<T>(xs: T[]) => T? */
+        function first(xs) { return xs.length > 0 ? xs[0] : undefined; }
+        const a = (first([1]) ?? 0) + 1;
+        /** function len<T>(xs: T[]) => Number */
+        function len(xs) { return xs.length === 0 ? 0 : 1 + len(xs.slice(1)); }
+        const k = len([1]) + len([\"a\"]);
+        /** function decode<T>(text: String) => T */
+        function decode(text) { return JSON.parse(text); }
+    ");
+    for body in [
+        "return 1;",
+        "return x + x;",
+        "if (x) {} return x;",
+        "return x.length;",
+    ] {
+        err(&format!(
+            "/** function f<T>(x: T) => T */ function f(x) {{ {body} }}"
+        ));
+    }
+    let e = err("let g = 0; /** function f<T>(x: T) => T */ function f(x) { g = x; return x; }");
+    assert!(e.contains("'"), "{e}");
+}
+
 // The standard library's host methods that throw when called detached
 // ("Illegal invocation") say their `this`: called on their object, not
 // taken off it or passed as a callback.
@@ -645,7 +814,7 @@ fn stdlib_host_methods_are_called_on_their_object() {
         localStorage.setItem(\"k\", \"v\");
         const v = localStorage.getItem(\"k\");
         const m = Map(); m.set(\"a\", 1);
-        const n = m.get(\"a\") + m.size;
+        const n = (m.get(\"a\") ?? 0) + m.size;
         history.pushState(1, \"\", \"/a\");
         const r = [1.5].map(Math.round);
     ");
@@ -661,6 +830,7 @@ fn stdlib_host_methods_are_called_on_their_object() {
 fn canvas_methods_are_called_on_their_context() {
     ok("
         const g = document.createElement(\"canvas\").getContext(\"2d\");
+        if (g === null) throw new Error(\"no 2d context\");
         g.beginPath(); g.moveTo(0, 0); g.lineTo(1, 1); g.stroke();
         const grad = g.createLinearGradient(0, 0, 1, 0);
         grad.addColorStop(0, \"red\");
@@ -672,6 +842,12 @@ fn canvas_methods_are_called_on_their_context() {
         function run(p) {}
         run((c, w, h) => { c.fillStyle = \"red\"; c.fillRect(0, 0, w, h); });
     ");
-    err("const g = document.createElement(\"canvas\").getContext(\"2d\"); const f = g.fillRect; f(0, 0, 1, 1);");
-    err("const g = document.createElement(\"canvas\").getContext(\"2d\"); const a = g.createLinearGradient(0, 0, 1, 0).addColorStop; a(0, \"red\");");
+    let ctx = "const g = document.createElement(\"canvas\").getContext(\"2d\"); \
+               if (g === null) throw new Error(\"no 2d context\");";
+    let e = err(&format!("{ctx} const f = g.fillRect; f(0, 0, 1, 1);"));
+    assert!(e.contains("detached"), "{e}");
+    let e = err(&format!(
+        "{ctx} const a = g.createLinearGradient(0, 0, 1, 0).addColorStop; a(0, \"red\");"
+    ));
+    assert!(e.contains("detached"), "{e}");
 }

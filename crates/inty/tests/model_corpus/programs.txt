@@ -417,8 +417,6 @@ function f(x) { return f; }
 const k = f;
 const g = k(1)(2)(3);
 
-function f(first, ...rest) { return first; } var n = f(1, [2, 3]);
-
 function f(o) { var a = o.foo; var b = o.bar; return o; }
 const r = f({foo: 1, bar: "s"});
 

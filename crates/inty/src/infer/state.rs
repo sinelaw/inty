@@ -2382,14 +2382,18 @@ impl InferState {
                 }
             }
             self.pending_constraints = remaining;
-            // A write constraint whose type is already known is decided
-            // here, not carried in the scheme to be found out at each use
-            // (lean/ROADMAP.md, phase 1). On a variable it stays. (A
+            // A write constraint, or a `Testable`, whose type is already
+            // known is decided here, not carried in the scheme to be found
+            // out at each use (lean/ROADMAP.md, phase 1). On a variable it
+            // stays. (A
             // `Plus` on a known type was decided by `simplify_has_props`.)
             let scheme_preds: Vec<TypePred> = scheme_preds
                 .into_iter()
                 .filter(|pred| {
-                    if !matches!(pred.class, ClassName::IndexWrite | ClassName::FieldWrite) {
+                    if !matches!(
+                        pred.class,
+                        ClassName::IndexWrite | ClassName::FieldWrite | ClassName::Testable
+                    ) {
                         return true;
                     }
                     let ty = self.main_subst.flatten(&pred.types[0]);
@@ -2401,6 +2405,9 @@ impl InferState {
                         Some((_, name)) => {
                             let name = name.to_string();
                             self.resolve_field_write(&ty, &name, span)
+                        }
+                        None if pred.class == ClassName::Testable => {
+                            self.resolve_testable(&ty, span)
                         }
                         None => self.resolve_index_write(&ty, span),
                     };

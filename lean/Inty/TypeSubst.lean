@@ -233,12 +233,14 @@ theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S
       (by simpa [Scheme.subst] using ha) (by simp [Scheme.subst, hp]) ?_ (hS.closed σ hc) ih
     have := hT.subst σ
     rwa [Scheme.inst_subst] at this
-  | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
-  | unop hop _ ih =>
+  | cond _ hx _ _ ihc iht ihe =>
+    exact .cond ihc (by simpa [Pred.subst] using hx.substS hS σ) iht ihe
+  | unop hop hx _ ih =>
+    have hx' := fun h => by simpa [Pred.subst] using (hx h).substS hS σ
     cases hop with
-    | not => exact .unop .not ih
-    | typeof => exact .unop .typeof ih
-    | neg => exact .unop .neg ih
+    | not => exact .unop .not hx' ih
+    | typeof => exact .unop .typeof hx' ih
+    | neg => exact .unop .neg hx' ih
   | binop hop _ _ ih₁ ih₂ =>
     cases hop with
     | plus hc => exact .binop (.plus (hc.substS hS σ)) ih₁ ih₂
@@ -248,7 +250,7 @@ theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S
   | ret _ ih => exact .ret ih
   | throw_ _ ih => exact .throw_ ih
   | seq _ _ ih₁ ih₂ => exact .seq ih₁ ih₂
-  | while_ _ _ ihc ihb => exact .while_ ihc ihb
+  | while_ _ hx _ ihc ihb => exact .while_ ihc (by simpa [Pred.subst] using hx.substS hS σ) ihb
   | break_ => exact .break_
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)

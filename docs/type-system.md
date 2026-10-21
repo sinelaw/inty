@@ -74,7 +74,7 @@ An object spread (`{a: 1, ...o}`) takes the operand's fields over the ones befor
 
 ### Operator Overloading (Type Classes)
 
-`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row, and storing through it (`c[i] = v`) on any of them but a `String`, whose characters are read-only (`IndexWrite`). A property store (`r.p = v`) needs an object (`FieldWrite`): a string's, an array's or a function's built-in properties aren't assigned, but for an array's `length`, which takes a number and truncates the array (`xs.length = 0` clears it; a larger length would leave holes, a fault like a read past the end). Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. `+` takes two operands of one type, and `Plus a` says that type is a number or a string, so `function add(x, y) { return x + y; }` is `<a> where Plus a => (a, a) => a`: `add(1, 0.5)` is a `Number`, `add("a", "b")` a `String`, and `add(1, "b")` an error. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
+`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row, and storing through it (`c[i] = v`) on any of them but a `String`, whose characters are read-only (`IndexWrite`). A property store (`r.p = v`) needs an object (`FieldWrite`): a string's, an array's or a function's built-in properties aren't assigned, but for an array's `length`, which takes a number and truncates the array (`xs.length = 0` clears it; a larger length would leave holes, a fault like a read past the end). Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. `+` takes two operands of one type, and `Plus a` says that type is a number or a string, so `function add(x, y) { return x + y; }` is `<a> where Plus a => (a, a) => a`: `add(1, 0.5)` is a `Number`, `add("a", "b")` a `String`, and `add(1, "b")` an error. Property reads on values of unknown type (`HasProp`, above) are a third, structural class. A value tested for truthiness (`if`, `while`, `?:`, `!`, the left of `&&` / `||`) is `Testable`: any type but a function's or a promise's, which are always truthy, so that a test always comes out the same (a forgotten call or `await`), and but an annotation's type parameter, which may stand for a function. So `function pick(x) { return x ? 1 : 2; }` is `<a> where Testable a => (a) => Number`: `pick(0)` is a `Number`, and `pick(isReady)`, with `isReady` a function, an error. A function that may be missing says so (`(() => T) | Undefined`), and is then tested as usual.
 
 A scheme's constraints are part of its written form, so declarations carry them: `inty declarations` prints `/** const add: <a, b, c> where Plus a b c => (a, b) => c */`, and the annotation parser reads the `where` clause back (`Plus t`, short for `Plus t t t`, `Indexable t i e`, `t has {name: T, …}`), so a consumer of the `.d.js` is held to them. A `Plus` on a type that is already known is decided when the binding is generalised rather than carried into its scheme, so `const f = function () { return g + g; }` with `g` a function is an error even if `f` is never called.
 
@@ -660,7 +660,12 @@ Quantifiers go at the outermost level (Rank-1):
 ```javascript
 /** const id: <T>(T) => T */
 const id = function(x) { return x; };
+
+/** function first<T>(xs: T[]) => T? */
+function first(xs) { return xs.length > 0 ? xs[0] : undefined; }
 ```
+
+The type parameters are rigid in the body, which must work for every instance: `/** function f<T>(x: T) => T */` with a body that returns `1`, adds `x + x`, tests `x` or reads `x.length` is an error. Each use instantiates the declared type. (A `function` that the program reassigns, or an annotation with a `where` clause, keeps the older reading, the parameters filled in by the body.)
 
 Constraints are not written explicitly: type-class obligations like `Plus a` are inferred from operator use, not declared.
 
@@ -722,15 +727,15 @@ Quick reference for the JavaScript surface inty accepts:
 |----------------|-----------------------------------------------------------------------------------------------------------|
 | Literals       | template literals, regex literals, object property shorthand (`{a, b}`)                                   |
 | Variables      | `var` (function-scoped), `const`, `let` (block-scoped; a `for (const x of …)` binding is the loop body's)  |
-| Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), rest (`...args`), spread in calls (`f(...arr)`) |
+| Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), spread in calls (`f(...arr)`, one argument: the array's element); a function is always truthy, so testing one (`if (isReady)`, `!isReady`, `isReady && …`, `isReady ? … : …`) is an error (`Testable`) |
 | Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of` — see [Iteration](#iteration)                              |
 | Classes        | declarations + `export default class`, instance methods, fields, getters (no setters), private fields (`#x`) (see [Class Bodies](#class-bodies-fields-private-fields-accessors)), external classes declared without a body (`/** class X extends B { … } */ class X;`); no `extends` in a class with a body, no `static` members |
-| Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`                                 |
+| Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`; a promise is always truthy, so testing one (`if (p)`, `!p`, `p && …`, `p ? … : …`) is an error (`Testable`): `await` it |
 | Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`; `e` may be any thrown value, so its type is opaque: it can be passed on, tested and rethrown, but not used as a number, string or object |
 | Primitive methods | the `String.prototype` and `Array.prototype` methods (`replace`/`replaceAll` take a string or a function of the match, `(String) => String`: the capture groups and offset JavaScript also passes have pattern-dependent types and aren't modelled — read them from `match`/`exec` instead); on numbers `toFixed`, `toPrecision`, `toExponential`, `toString(radix?)`, `toLocaleString`, `valueOf`; on booleans `toString`, `valueOf` |
 | ASI            | inserted before `return` / `break` / `continue` / `throw` / postfix `++` / `--` when a line terminator separates the next token |
-| Rejected       | `delete` (soft type-time diagnostic pointing at workaround — accepted by the parser, the expression's result is `Type::Error` so the rest of the file still checks); `super.member`, `static` members |
+| Rejected       | `delete` (soft type-time diagnostic pointing at workaround — accepted by the parser, the expression's result is `Type::Error` so the rest of the file still checks); `super.member`, `static` members; rest parameters (`...args`: no variadic calls, take an array) |
 | Modules        | ES `import`/`export` with `inty.json` paths/baseUrl — see [Modules](#modules-es-import--export) above     |
 | Annotations    | inline `var x /*: T */`, doc-comment `/** var x: T */`, postfix `T?` for `T \| Undefined` — see [../declare.md](../declare.md) |
 

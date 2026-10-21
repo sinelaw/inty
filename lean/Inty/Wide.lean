@@ -399,13 +399,16 @@ theorem HasTypeS.toWideOf {S : Sys} (hS : S.NarrowLike) {L : List String} {C : L
     refine .assignCheck (s := s.toW) rfl (by simp [List.getElem?_map, hi]) (by simpa using ha)
       (by simp [Scheme.toW, hp]) ?_ trivial ih
     rw [← Scheme.toW_inst]; exact hT
-  | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
-  | unop hop _ ih => exact .unop hop ih
+  | cond _ hx _ _ ihc iht ihe =>
+    exact .cond ihc (by simpa [Pred.toW] using (hx.narrowOf hS).toW) iht ihe
+  | unop hop hx _ ih =>
+    exact .unop hop (fun h => by simpa [Pred.toW] using ((hx h).narrowOf hS).toW) ih
   | binop hop _ _ ih₁ ih₂ => exact .binop (hop.narrowOf hS).toW ih₁ ih₂
   | ret _ ih => exact .ret ih
   | throw_ _ ih => exact .throw_ ih
   | seq _ _ ih₁ ih₂ => exact .seq ih₁ ih₂
-  | while_ _ _ ihc ihb => exact .while_ ihc ihb
+  | while_ _ hx _ ihc ihb =>
+    exact .while_ ihc (by simpa [Pred.toW] using (hx.narrowOf hS).toW) ihb
   | break_ => exact .break_
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)

@@ -672,6 +672,13 @@ theorem InstW.rsub (ρ : RSubst) {p : Pred} (h : InstW p) : InstW (p.rsub ρ) :=
         · exact absurd (.inr hc') hn
       simpa [Pred.rsub, Ty.rsub_app_nr hr] using
         InstW.narrow (Inst.notNew (c := c) (args := args.map (·.rsub ρ)) hn) (by simp)
+    | @testable c args hn =>
+      have hr : c.isRigid = false := by
+        cases hc' : c.isRigid
+        · rfl
+        · exact absurd (.inr hc') hn
+      simpa [Pred.rsub, Ty.rsub_app_nr hr] using
+        InstW.narrow (Inst.testable (c := c) (args := args.map (·.rsub ρ)) hn) (by simp)
     | injectSelf _ => exact absurd rfl (hc _)
     | injectNothing _ _ => exact absurd rfl (hc _)
     | injectSome _ _ _ _ _ => exact absurd rfl (hc _)
@@ -999,12 +1006,14 @@ theorem HasTypeS.rsub {S : Sys} {ρ : RSubst} (hS : S.RSubstable ρ) (D : List N
       (by simp [Scheme.rsub, hp]) ?_ (hS.closed hc) ih
     have := TyEq.rsub ρ hT
     rwa [← Scheme.inst_rsub] at this
-  | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
-  | unop hop _ ih =>
+  | cond _ hx _ _ ihc iht ihe =>
+    exact .cond ihc (by simpa [Pred.rsub] using hx.rsubS hS) iht ihe
+  | unop hop hx _ ih =>
+    have hx' := fun h => by simpa [Pred.rsub] using (hx h).rsubS hS
     cases hop with
-    | not => exact .unop .not ih
-    | typeof => exact .unop .typeof ih
-    | neg => exact .unop .neg ih
+    | not => exact .unop .not hx' ih
+    | typeof => exact .unop .typeof hx' ih
+    | neg => exact .unop .neg hx' ih
   | binop hop _ _ ih₁ ih₂ =>
     cases hop with
     | plus hc => exact .binop (.plus (by simpa [Pred.rsub] using hc.rsubS hS)) ih₁ ih₂
@@ -1014,7 +1023,8 @@ theorem HasTypeS.rsub {S : Sys} {ρ : RSubst} (hS : S.RSubstable ρ) (D : List N
   | ret _ ih => exact .ret ih
   | throw_ _ ih => exact .throw_ ih
   | seq _ _ ih₁ ih₂ => exact .seq ih₁ ih₂
-  | while_ _ _ ihc ihb => exact .while_ ihc ihb
+  | while_ _ hx _ ihc ihb =>
+    exact .while_ ihc (by simpa [Pred.rsub] using hx.rsubS hS) ihb
   | break_ => exact .break_
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa [Scheme.mono_rsub] using ihh)

@@ -19,6 +19,7 @@
 //   - Array.prototype / String.prototype built-ins (filter, map, forEach,
 //     some, reduce, replaceAll, ...).
 //   - async / await and Promise<T> for the "Save" button demo.
+//   - `T | Null` narrowed by an early exit (`byId`).
 
 // ---------------------------------------------------------------------------
 // State. Each field carries its own inline annotation, which pins the
@@ -100,6 +101,15 @@ function setFilter(f) {
 // Rendering. The list and footer are rebuilt from scratch on every update.
 // ---------------------------------------------------------------------------
 
+// `getElementById` gives `null` when no element has the id. Every id used
+// here is in index.html or in the markup `render()` just wrote, so a
+// missing one is a bug: say which, rather than failing on `null` later.
+function byId(id) {
+    const el = document.getElementById(id);
+    if (el === null) throw new Error(`no element with id "${id}"`);
+    return el;
+}
+
 function renderTodoItem(todo) {
     const {id, text, done} = todo;
     const liClass = done ? "done" : "";
@@ -115,7 +125,7 @@ function renderTodoItem(todo) {
 }
 
 function renderList() {
-    const listEl = document.getElementById("todo-list");
+    const listEl = byId("todo-list");
     const visible = state.todos.filter(shouldShow);
     let html = "";
     if (visible.length === 0) {
@@ -129,7 +139,7 @@ function renderList() {
 }
 
 function renderFooter() {
-    const footer = document.getElementById("footer");
+    const footer = byId("footer");
     const remaining = countRemaining();
     const word = remaining === 1 ? "item" : "items";
     const clearMarkup = hasAnyDone()
@@ -140,7 +150,7 @@ function renderFooter() {
 
 function renderFilters() {
     ["all", "active", "done"].forEach(name => {
-        document.getElementById(`filter-${name}`).className =
+        byId(`filter-${name}`).className =
             state.filter === name ? "active" : "";
         return undefined;
     });
@@ -150,12 +160,12 @@ function attachListHandlers() {
     state.todos.forEach(todo => {
         if (shouldShow(todo)) {
             const {id} = todo;
-            document.getElementById(`toggle-${id}`).onclick = () => {
+            byId(`toggle-${id}`).onclick = () => {
                 toggleTodo(id);
                 render();
                 return undefined;
             };
-            document.getElementById(`delete-${id}`).onclick = () => {
+            byId(`delete-${id}`).onclick = () => {
                 deleteTodo(id);
                 render();
                 return undefined;
@@ -164,7 +174,7 @@ function attachListHandlers() {
         return undefined;
     });
     if (hasAnyDone()) {
-        document.getElementById("clear-done").onclick = () => {
+        byId("clear-done").onclick = () => {
             clearDone();
             render();
             return undefined;
@@ -195,7 +205,7 @@ async function persistTodos() {
 }
 
 async function save() {
-    const statusEl = document.getElementById("save-status");
+    const statusEl = byId("save-status");
     statusEl.textContent = "Saving…";
     const bytes = await persistTodos();
     saveCounter = saveCounter + 1;
@@ -208,24 +218,24 @@ async function save() {
 // ---------------------------------------------------------------------------
 
 function submitDraft() {
-    const input = document.getElementById("new-input");
+    const input = byId("new-input");
     addTodo(input.value);
     input.value = "";
     render();
 }
 
-document.getElementById("add-btn").onclick = () => {
+byId("add-btn").onclick = () => {
     submitDraft();
     return undefined;
 };
 
-document.getElementById("new-input").onkeydown = e => {
+byId("new-input").onkeydown = e => {
     if (e.key === "Enter") submitDraft();
     return undefined;
 };
 
 ["all", "active", "done"].forEach(name => {
-    document.getElementById(`filter-${name}`).onclick = () => {
+    byId(`filter-${name}`).onclick = () => {
         setFilter(name);
         render();
         return undefined;
@@ -233,7 +243,7 @@ document.getElementById("new-input").onkeydown = e => {
     return undefined;
 });
 
-document.getElementById("save-btn").onclick = () => {
+byId("save-btn").onclick = () => {
     // `save()` returns a Promise<Undefined>; we don't await it here since
     // top-level await isn't something inty enforces yet, and we don't
     // need the result.

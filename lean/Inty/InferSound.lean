@@ -359,6 +359,12 @@ theorem Pred.decide₀_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
       cases h
       simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
       exact (Inst.notNew hc).instEq
+  · split at h
+    · cases h
+    · rename_i hc
+      cases h
+      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+      exact (Inst.testable hc).instEq
   · -- A `Merge` whose operand's field is present.
     rename_i k τ s r
     unfold Pred.decidePre at h
@@ -1657,19 +1663,21 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
     rename_i σ₄ hu
     simp only [Option.some.injEq] at h; subst h
     simp only [Sat.map, Sat.append] at hsat
-    have hc := ihc h₁ (by ret_ok) .none _ C hsat.1.1
+    have hc := ihc h₁ (by ret_ok) .none _ C hsat.1.1.1
+    have hx := hsat.1.1.2
+    simp only [Sat.singleton, Pred.subst, List.map_cons, List.map_nil] at hx
     have ht := InferSound.check iht h₂ (by ret_ok) hex _ C hsat.1.2
     have he := InferSound.check ihe h₃ (by ret_ok) hex _ C hsat.2
-    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hc ht he ⊢
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hc hx ht he ⊢
     match ex, hex with
     | none, _ =>
       replace ht := ht.conv ((unify_sound hu).subst φ)
-      exact .cond hc ht he
+      exact .cond hc hx ht he
     | some T, hex =>
       have hT := hex T rfl
       simp only [InferSound.check_ty h₂ hex T rfl, InferSound.check_ty h₃ hex T rfl,
         Ty.closed_subst hT] at ht he ⊢
-      exact .cond hc ht he
+      exact .cond hc hx ht he
   | unwrap e₁ e₂ e₃ ih₁ ih₂ ih₃ =>
     intro Γ R rm ex n o h hRo hex φ C hsat
     rw [exMode_pushes (fun _ => rfl)]
@@ -1748,10 +1756,12 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
     cases op with
     | not =>
       simp only [Option.some.injEq] at h; subst h
-      exact .unop .not (ih h₁ (by ret_ok) .none φ C hsat)
+      simp only [Sat.append, Sat.singleton] at hsat
+      exact .unop .not (fun _ => by simpa [Pred.subst] using hsat.2)
+        (ih h₁ (by ret_ok) .none φ C hsat.1)
     | typeof =>
       simp only [Option.some.injEq] at h; subst h
-      exact .unop .typeof (ih h₁ (by ret_ok) .none φ C hsat)
+      exact .unop .typeof (fun h => by cases h) (ih h₁ (by ret_ok) .none φ C hsat)
     | neg =>
       simp only at h
       split at h
@@ -1762,7 +1772,7 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
       have he := ih h₁ (by ret_ok) .none _ C hsat
       simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he ⊢
       replace he := he.conv ((unify_sound hu).subst φ)
-      exact .unop .neg he
+      exact .unop .neg (fun h => by cases h) he
   | binop op e₁ e₂ ih₁ ih₂ =>
     intro Γ R rm ex n o h hRo hex φ C hsat
     rw [exMode_synth (fun _ => rfl)]
@@ -1890,12 +1900,14 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
     simp only [Sat.map, Sat.append] at hsat
-    have hc := ihc h₁ (by ret_ok) .none _ C hsat.1
+    have hc := ihc h₁ (by ret_ok) .none _ C hsat.1.1
+    have hx := hsat.1.2
+    simp only [Sat.singleton, Pred.subst, List.map_cons, List.map_nil] at hx
     have hu : Ex.Closed (some Ty.unknown) := Ex.Closed.some rfl
     have hb := InferSound.check ihb h₂ (by ret_ok) hu _ C hsat.2
     rw [InferSound.check_ty h₂ hu _ rfl] at hb
-    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hc hb ⊢
-    exact .while_ hc hb
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hc hx hb ⊢
+    exact .while_ hc hx hb
   | break_ =>
     intro Γ R rm ex n o h hRo hex φ C hsat
     rw [exMode_pushes (fun _ => rfl)]

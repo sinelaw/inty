@@ -41,7 +41,8 @@ impl InferState {
             }
 
             UnaryOp::Not => {
-                // ! works on any type, returns boolean
+                // `!` works on any type that may be tested, returns boolean
+                self.require_testable(&arg_type, argument.span())?;
                 Ok(Type::Boolean)
             }
 
@@ -115,6 +116,9 @@ impl InferState {
         span: Span,
     ) -> InferResult<Type> {
         let left_type = self.infer_expr(env, left)?;
+        if matches!(op, BinOp::And | BinOp::Or) {
+            self.require_testable(&left_type, left.span())?;
+        }
         // The right operand of `&&` runs only when the left is truthy,
         // that of `||` only when it is falsy: `node !== null && node.ok`.
         let right_type = match op {

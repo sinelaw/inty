@@ -344,7 +344,7 @@ example : Pred.AssumableAt top p ↔
         (top = true → (∃ a, q = .var a) ∨ p.MergeOnVar) := Iff.rfl
 
 example : Cls.arity c = match c with
-    | .plus | .indexWrite | .notNew | .inject _ => 1
+    | .plus | .indexWrite | .notNew | .testable | .inject _ => 1
     | .strip | .injectW => 2
     | .hasProp _ | .indexable | .caseTag _ _ => 3
     | .merge => 5 := by
@@ -486,7 +486,8 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
       (Ty.app c args).ftv = [] ∧ p = ⟨.inject T, [.app c args]⟩) ∨
     (∃ T x s, Inst ⟨.inject T, [x]⟩ ∧ TyEq x .string ∧ p = ⟨.inject T, [.strLit s]⟩) ∨
     (∃ l σ, stringMethod l = some σ ∧ p = ⟨.hasProp l, [.string, .proto, σ]⟩) ∨
-    ∃ τ l σ, arrayMethod τ l = some σ ∧ p = ⟨.hasProp l, [.array τ, .proto, σ]⟩ :=
+    (∃ τ l σ, arrayMethod τ l = some σ ∧ p = ⟨.hasProp l, [.array τ, .proto, σ]⟩) ∨
+    ∃ c args, ¬ (c = .fn ∨ c.isRigid) ∧ p = ⟨.testable, [.app c args]⟩ :=
   ⟨fun h => by
     cases h with
     | plusNumber => exact .inl rfl
@@ -525,7 +526,9 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     | methodString h =>
       exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, h, rfl⟩)))))))))))))))))))))
     | methodArray h =>
-      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, _, h, rfl⟩))))))))))))))))))))),
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, _, h, rfl⟩))))))))))))))))))))))
+    | testable hc =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, hc, rfl⟩)))))))))))))))))))))),
    fun h => by
     rcases h with rfl | rfl | ⟨l, ls, fs, k, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩ |
       ⟨k, τ, s, r, hc, rfl⟩ | ⟨τ, s, r, hc, rfl⟩ | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ |
@@ -533,7 +536,7 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
       ⟨T, z, c, args, he, hT, ha, hc, hn, rfl⟩ | ⟨z, σ, rfl⟩ | ⟨c, args, hm, hn, hu, rfl⟩ |
       ⟨l, ts, Rs, t, R, i, hnd, hi, hR, rfl⟩ |
       ⟨T, ts, Rs, c, t, R, args, i, hT, hw, hn, htag, hti, hR', he, ha, rfl⟩ |
-      ⟨T, x, s, h, hx, rfl⟩ | ⟨l, σ, hm, rfl⟩ | ⟨τ, l, σ, hm, rfl⟩
+      ⟨T, x, s, h, hx, rfl⟩ | ⟨l, σ, hm, rfl⟩ | ⟨τ, l, σ, hm, rfl⟩ | ⟨c, args, hc, rfl⟩
     · exact .plusNumber
     · exact .plusString
     · exact .hasProp hf
@@ -556,7 +559,8 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     · exact .injectArm hT hw hn htag hti hR' he ha
     · exact .injectLit h hx
     · exact .methodString hm
-    · exact .methodArray hm⟩
+    · exact .methodArray hm
+    · exact .testable hc⟩
 
 /-- A constraint left on a type variable, or a `Merge` waiting on one (each
 looked at unfolded), is all `HoldsOrVar` allows beside the instances. -/
@@ -765,7 +769,7 @@ example : ¬ HasType L [] [] none .synth .synth (.unop .neg (str "a")) τ := by
   intro h
   obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
-  | unop hop h₁ =>
+  | unop hop _ h₁ =>
     cases hop
     obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
     cases h₁ with | lit hl => cases hl; exact ne_con (by decide) e₁
@@ -905,7 +909,7 @@ example : ¬ HasType L [] [] none .synth .synth (.app (.func 0 (.unop .neg (.var
       have hθ := (TyEq.app_iff.mp e₁).2.2 _ (List.mem_cons_self)
       obtain ⟨_, e₂, hb⟩ := hb.top_synth
       cases hb with
-      | unop hop he =>
+      | unop hop _ he =>
         cases hop
         obtain ⟨_, e₃, he⟩ := he.top_synth
         cases he with
@@ -1042,11 +1046,14 @@ example : ∀ {S : Sys} {L : List String} {Γ : Ctx} {i : Nat} {s : Scheme} {T :
 example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {c : Inty.Expr} {τc : Ty}
       {md : Mode} {t : Inty.Expr} {τ : Ty} {e : Inty.Expr},
       HasTypeS S L C Γ R rm Mode.synth c τc →
-        HasTypeS S L C Γ R rm md t τ → HasTypeS S L C Γ R rm md e τ → HasTypeS S L C Γ R rm md (Expr.cond c t e) τ :=
+        EntailsS S C { cls := Cls.testable, args := [τc] } →
+          HasTypeS S L C Γ R rm md t τ → HasTypeS S L C Γ R rm md e τ → HasTypeS S L C Γ R rm md (Expr.cond c t e) τ :=
   @HasTypeS.cond
 example : ∀ {S : Sys} {L : List String} {op : UnOp} {τ₁ τ : Ty} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode}
       {e : Inty.Expr},
-      UnOpTy op τ₁ τ → HasTypeS S L C Γ R rm Mode.synth e τ₁ → HasTypeS S L C Γ R rm Mode.synth (Expr.unop op e) τ :=
+      UnOpTy op τ₁ τ →
+        (op = UnOp.not → EntailsS S C { cls := Cls.testable, args := [τ₁] }) →
+          HasTypeS S L C Γ R rm Mode.synth e τ₁ → HasTypeS S L C Γ R rm Mode.synth (Expr.unop op e) τ :=
   @HasTypeS.unop
 example : ∀ {S : Sys} {L : List String} {C : List Pred} {op : BinOp} {τ₁ τ₂ τ : Ty} {Γ : Ctx} {R : Option Ty} {rm : Mode}
       {e₁ e₂ : Inty.Expr},
@@ -1068,8 +1075,9 @@ example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
 example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {c : Inty.Expr} {τc : Ty}
       {body : Inty.Expr},
       HasTypeS S L C Γ R rm Mode.synth c τc →
-        HasTypeS S L C Γ R rm Mode.check body Ty.unknown →
-          HasTypeS S L C Γ R rm Mode.synth (Expr.while_ c body) Ty.undefined :=
+        EntailsS S C { cls := Cls.testable, args := [τc] } →
+          HasTypeS S L C Γ R rm Mode.check body Ty.unknown →
+            HasTypeS S L C Γ R rm Mode.synth (Expr.while_ c body) Ty.undefined :=
   @HasTypeS.while_
 example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode} {τ : Ty},
       HasTypeS S L C Γ R rm md Expr.break_ τ :=

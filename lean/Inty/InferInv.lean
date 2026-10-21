@@ -29,6 +29,16 @@ def Subst.Within (n : Nat) (σ : Subst) : Prop :=
 theorem Ty.Below.mono {n n' : Nat} {τ : Ty} (h : τ.Below n) (hn : n ≤ n') : τ.Below n' :=
   fun a ha => Nat.lt_of_lt_of_le (h a ha) hn
 
+/-- A test's `Testable` constraint mentions only its type's variables. -/
+theorem Pred.Below.testable_append {n : Nat} {P : List Pred} {τ : Ty}
+    (hP : ∀ p ∈ P, Pred.Below n p) (hτ : τ.Below n) :
+    ∀ p ∈ P ++ [Pred.mk .testable [τ]], Pred.Below n p := by
+  intro p hp
+  rcases List.mem_append.mp hp with hp | hp
+  · exact hP p hp
+  · simp only [List.mem_singleton] at hp; subst hp
+    intro a ha; exact hτ a (by simpa [Pred.ftv] using ha)
+
 theorem RTy.subst_congr' {σ σ' : Subst} {r : RTy}
     (h : ∀ a ∈ r.ftv, (Ty.var a).subst σ = (Ty.var a).subst σ') : r.subst σ = r.subst σ' := by
   induction r using RTy.ind with
@@ -470,6 +480,9 @@ theorem Pred.decide₀_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b 
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
     rcases hτ with rfl | rfl <;> exact Ty.Below.con
   · cases h; exact ⟨hnum, hnum⟩
+  · split at h
+    · cases h
+    · cases h; exact ⟨hnum, hnum⟩
   · split at h
     · cases h
     · cases h; exact ⟨hnum, hnum⟩
@@ -1229,7 +1242,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     refine hσ₄.pred_below ?_
     rcases hq with ⟨q', hq', rfl⟩ | hq
     · rcases hq' with ⟨q'', hq'', rfl⟩ | hq'
-      · exact hσ₃.pred_below ((hσ₂.pred_below ((hp₁ q'' hq'').mono hn₂)).mono hn₃)
+      · exact hσ₃.pred_below ((hσ₂.pred_below
+          ((Pred.Below.testable_append hp₁ hτ₁ q'' (by simpa using hq'')).mono hn₂)).mono hn₃)
       · exact hσ₃.pred_below ((hp₂ q' hq').mono hn₃)
     · exact hp₃ q hq
   | unwrap e₁ e₂ e₃ ih₁ ih₂ ih₃ =>
@@ -1333,7 +1347,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     cases op with
     | not =>
       simp only [Option.some.injEq] at h; subst h
-      exact ⟨hn₁, hσ₁, fun a ha => by simp [Ty.ftv] at ha, hp₁⟩
+      exact ⟨hn₁, hσ₁, fun a ha => by simp [Ty.ftv] at ha, Pred.Below.testable_append hp₁ hτ₁⟩
     | typeof =>
       simp only [Option.some.injEq] at h; subst h
       exact ⟨hn₁, hσ₁, fun a ha => by simp [Ty.ftv] at ha, hp₁⟩
@@ -1492,7 +1506,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, _, hp₁⟩ := ihc (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihc (by ret_ok) .none hΓ hR h₁
     obtain ⟨hn₂, hσ₂, _, hp₂⟩ := InferInv.check ihb (by ret_ok) (Ex.Closed.some rfl)
       (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
@@ -1501,7 +1515,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     intro p hp
     simp only [List.mem_append, List.mem_map] at hp
     rcases hp with ⟨q, hq, rfl⟩ | hp
-    · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+    · exact hσ₂.pred_below ((Pred.Below.testable_append hp₁ hτ₁ q (by simpa using hq)).mono hn₂)
     · exact hp₂ p hp
   | break_ | continue_ =>
     intro Γ R rm ex n o hRo hex _ _ h

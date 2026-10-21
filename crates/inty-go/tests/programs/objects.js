@@ -31,6 +31,7 @@ filled[0] = 1;
 filled[1] = 2;
 console.log(filled.join("-"));
 
-let last = pts.pop();
+let last = pts[pts.length - 1];
+pts.pop();
 console.log(last.x + last.y);
 console.log(pts.indexOf(pts[1]));

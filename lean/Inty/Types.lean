@@ -389,6 +389,13 @@ inductive Cls where
   any type but `newTarget`. An arrow field's `this` is one, as `new` on an
   arrow function throws. -/
   | notNew
+  /-- `Testable a`: a value of `a` may be tested for truthiness (`if`,
+  `while`, `?:`, `!`, and `&&` / `||`, which test their left operand): any
+  type but a function's, which is always truthy, so a test of one always
+  comes out the same (a forgotten call), and but a rigid type variable,
+  which may stand for one. It waits while `a` is a type variable, so a test
+  of a value whose type isn't known yet has a principal type. -/
+  | testable
   /-- `Inject T τ`: a value of `τ` is one of `T`, an annotation's type
   (which has no type variables, so a substitution doesn't reach it): `τ`
   is `T`; or `T` is a sum `Nullable σ` (`Optional σ`) and `τ` is `Null`
@@ -412,7 +419,7 @@ inductive Cls where
 
 /-- How many types a class is applied to. -/
 def Cls.arity : Cls → Nat
-  | .plus | .indexWrite | .notNew | .inject _ => 1
+  | .plus | .indexWrite | .notNew | .testable | .inject _ => 1
   | .strip | .injectW => 2
   | .indexable | .hasProp _ | .caseTag _ _ => 3
   | .merge => 5

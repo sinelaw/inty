@@ -388,6 +388,10 @@ impl InferState {
             AssignOp::Assign | AssignOp::NullishAssign | AssignOp::LogicalOrAssign
         );
         let left_type = self.infer_store_target(env, left, span, store_only)?;
+        // `x &&= v` and `x ||= v` test `x`, as `&&` and `||` do.
+        if matches!(op, AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign) {
+            self.require_testable(&left_type, span)?;
+        }
 
         match op {
             AssignOp::Assign
@@ -689,8 +693,24 @@ impl InferState {
         );
         self.check_expr(&self_env, init, &rigid_ty)?;
         self.simplify_has_props()?;
+        self.reject_escaped_skolems(&env_free_before, skolems, ann_span)?;
+        // Generalised again: a presence the initialiser decided is no
+        // longer quantified.
+        Ok(Some(self.generalize(&env_free, ann_ty)))
+    }
+
+    /// After checking against an annotation with its type variables rigid,
+    /// no skolem may have escaped: into the type of a variable free in the
+    /// context before the check (`env_free_before`), or into a constraint
+    /// left pending.
+    pub(in crate::infer) fn reject_escaped_skolems(
+        &mut self,
+        env_free_before: &HashSet<TVarName>,
+        skolems: Vec<TVarName>,
+        ann_span: Span,
+    ) -> InferResult<()> {
         let skolem_set: HashSet<TVarName> = skolems.into_iter().collect();
-        for v in &env_free_before {
+        for v in env_free_before {
             if !v.is_flex() {
                 continue;
             }
@@ -710,9 +730,7 @@ impl InferState {
                 return Err(TypeError::EscapedSkolem { span: ann_span }.into());
             }
         }
-        // Generalised again: a presence the initialiser decided is no
-        // longer quantified.
-        Ok(Some(self.generalize(&env_free, ann_ty)))
+        Ok(())
     }
 
     /// The type of an external class `Name`, declared without a body by

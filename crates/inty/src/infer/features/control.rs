@@ -272,7 +272,8 @@ impl InferState {
         env: &TypeEnv,
         test: &Expr,
     ) -> InferResult<(TypeEnv, TypeEnv)> {
-        let _test_type = self.infer_expr(env, test)?;
+        let test_type = self.infer_expr(env, test)?;
+        self.require_testable(&test_type, test.span())?;
         let facts = test_facts(test, &|e| self.fact_of(env, e));
         let span = test.span();
         let cons_env = apply_facts(

@@ -34,7 +34,15 @@
         { "id": "mixed-array",        "label": "mixed-array.js",        "blurb": "Mixed arrays look uniform in TS",    "expect": "error" },
         { "id": "missing-prop",       "label": "missing-prop.js",       "blurb": "Reading a property that isn't there", "expect": "error" },
         { "id": "this-leak",          "label": "this-leak.js",          "blurb": "Methods called without their receiver", "expect": "ok"  },
-        { "id": "truthy-narrow",      "label": "truthy-narrow.js",      "blurb": "0 and \"\" are falsy — silently",   "expect": "ok"    }
+        { "id": "truthy-narrow",      "label": "truthy-narrow.js",      "blurb": "0 and \"\" are falsy — silently",   "expect": "ok"    },
+        { "id": "array-covariance",   "label": "array-covariance.js",   "blurb": "Covariant arrays let a write break the caller", "expect": "error" },
+        { "id": "method-bivariance",  "label": "method-bivariance.js",  "blurb": "Bivariant method parameters",        "expect": "error" },
+        { "id": "narrowing-after-call", "label": "narrowing-after-call.js", "blurb": "A narrowing a call undoes",      "expect": "error" },
+        { "id": "dict-missing-key",   "label": "dict-missing-key.js",   "blurb": "A map read at a missing key",        "expect": "error" },
+        { "id": "spread-optional",    "label": "spread-optional.js",    "blurb": "Spreading `undefined` over a default", "expect": "error" },
+        { "id": "typo-field",         "label": "typo-field.js",         "blurb": "A misspelled field, silently dropped", "expect": "error" },
+        { "id": "non-exhaustive-switch", "label": "non-exhaustive-switch.js", "blurb": "A union case the switch forgets", "expect": "ok" },
+        { "id": "uncalled-function",  "label": "uncalled-function.js",  "blurb": "A function tested instead of called", "expect": "error" }
       ]
     },
     {
