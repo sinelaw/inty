@@ -218,6 +218,27 @@ impl TypeEnv {
         out
     }
 
+    /// A copy with `key`'s binding at its own scheme, not narrowed.
+    pub fn unnarrowed(&self, key: &Key) -> Self {
+        let Some(b) = self.lookup_key(key) else {
+            return self.clone();
+        };
+        let Some(declared) = b.declared.clone() else {
+            return self.clone();
+        };
+        let mutability = b.mutability;
+        let mut out = self.clone();
+        out.bindings.insert(
+            key.clone(),
+            Entry::new(Binding {
+                scheme: declared,
+                mutability,
+                declared: None,
+            }),
+        );
+        out
+    }
+
     /// `name`'s own scheme, narrowed or not.
     pub fn lookup_declared(&self, name: &str) -> Option<&TypeScheme> {
         let b = self.lookup_binding(name)?;

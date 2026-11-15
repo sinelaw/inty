@@ -212,6 +212,77 @@ The same review's other findings are fixed too:
   any expression.
 - **`eval`:** a direct `eval` counts as writing every binding in scope.
 
+## Extension: bindings written once
+
+Status: implemented (`Resolution::sole_write_at` in `ast/resolve.rs`,
+`after_sole_write` and the `if` / `while` rules in
+`infer/features/control.rs`).
+
+The stable-only rule rejects the get-or-create idiom, which every
+`Map.get` meets now that it returns `V | Undefined`:
+
+    let x = m.get(k);
+    if (!x) { x = []; m.set(k, x); }
+    x.push(1);
+
+and the `exec` loop (`while (m) { …m[1]…; m = re.exec(s); }`). Both write
+their binding exactly once after its initialiser. That is enough for a
+second, equally short soundness argument:
+
+> A binding whose only write after its initialiser is one plain `x = e`
+> holds its initial value until that write runs, and a value of `e`
+> every time after.
+
+The resolution pass counts writes per binding (every kind of write listed
+above counts) and records the one write, when there is one, it is a plain
+`x = e` to an identifier, and it isn't in a function nested inside the
+declaring one. The binding must be otherwise stable (a `let`, a
+parameter, a `var` declared once). Then, writing `W(x)` for what every
+value of `e`'s type is (truthy, not `null`, not `undefined`):
+
+1. **After the write.** After the statement `x = e;`, `x` is narrowed to
+   `W(x)`, from its own type (a test from before the write no longer
+   holds). This holds on every later path and in every closure made from
+   there: the write ran, and anything that changes `x` again is the same
+   write.
+2. **After a filling `if`.** For `if (c) S` with no `else`, where `S` does
+   not always exit and the write is one of `S`'s own statements (not
+   nested in another), after the `if` `x` is `P(x) ∨ W(x)`, `P` being what
+   `c`'s false branch says of `x`. Either `c` was false and nothing has
+   written `x` since (the only write is in `S`), or `S` ran to its end,
+   past its write. A labeled `if` that `S` can `break` out of keeps its
+   environment, as before. Every later change of `x` is the write again,
+   so this too holds in every closure made from there.
+3. **A `while` body before its write.** For `while (c) B` where the write
+   is one of `B`'s own statements, `B` is checked with `c`'s true facts
+   about `x`: between the test and the write, nothing writes `x`. A
+   closure made there could run after the write, so this is done only for
+   a binding no closure mentions. The loop's exit facts about `x` are not
+   used.
+
+A store into such a binding is checked against its own type, never a
+narrowed one (`infer_assign`).
+
+What is not covered: a second write (`x ||= []` and `x = x || []` are
+writes too, but `x = x || []` alone is one: after it `x` is truthy), a
+write inside a nested block of the filling branch, or one from a closure.
+A function declaration is hoisted and checked before the statements
+around it, so it never sees these narrowings. The rules are JavaScript
+only.
+
+The Lean model has no narrowing of a written binding (its `unwrap`
+narrows a copy); this extension is listed in `lean/GAPS.md`.
+
+## Not done: narrowing a property read twice
+
+`if (o.f) o.f()` and `o.f ? o.f(x) : d` read `o.f` twice. With nothing in
+between, a data field gives the same value both times, but a getter
+(`get f() { … }`) need not: it can give a function to the test and `null`
+to the call. A record type doesn't say whether a field is a getter (an
+object with one goes where `{f: T}` is expected), so narrowing the second
+read can't be made sound without tracking getters in types. The `const`
+copy (`const f = o.f; if (f) f();`) stays the way to write it.
+
 ## Kept separate: field writes (#9)
 
 A discriminant fact (`shape.kind === "c"`) stays true only if no write,

@@ -9,8 +9,8 @@ use crate::types::{LitValue, Type, TypeScheme};
 
 use super::super::env::{Mutability, TypeEnv};
 use super::super::narrow::{
-    apply_narrowing, is_singleton, narrowing_is_dead, path_from_expr, test_facts, typeof_fact,
-    Narrowing, Path,
+    apply_narrowing, is_singleton, narrow_from_declared, narrowing_is_dead, path_from_expr,
+    test_facts, typeof_fact, value_narrowing, Facts, Narrowing, Path,
 };
 use super::super::state::InferState;
 use super::super::InferResult;
@@ -272,6 +272,17 @@ impl InferState {
         env: &TypeEnv,
         test: &Expr,
     ) -> InferResult<(TypeEnv, TypeEnv)> {
+        let (cons_env, alt_env, _) = self.infer_branching_test_facts(env, test)?;
+        Ok((cons_env, alt_env))
+    }
+
+    /// [`Self::infer_branching_test`], and the facts the test gives (for
+    /// every binding, stable or not).
+    pub(in crate::infer) fn infer_branching_test_facts(
+        &mut self,
+        env: &TypeEnv,
+        test: &Expr,
+    ) -> InferResult<(TypeEnv, TypeEnv, Facts)> {
         let test_type = self.infer_expr(env, test)?;
         self.require_testable(&test_type, test.span())?;
         let facts = test_facts(test, &|e| self.fact_of(env, e));
@@ -294,7 +305,70 @@ impl InferState {
                 span,
             )),
         );
-        Ok((cons_env, alt_env))
+        Ok((cons_env, alt_env, facts))
+    }
+
+    /// The binding `x` and where its identifier is, when `stmt` is
+    /// `x = e;` and that is the one write of `x` after its initialiser
+    /// (`resolve::Resolution::sole_write_at`).
+    fn sole_write_stmt<'s>(&self, stmt: &'s Stmt) -> Option<(&'s str, Span)> {
+        let Stmt::Expr {
+            expression:
+                Expr::Assign {
+                    op: crate::ast::AssignOp::Assign,
+                    left,
+                    ..
+                },
+            ..
+        } = stmt
+        else {
+            return None;
+        };
+        let Expr::Ident { name, span } = left.as_ref() else {
+            return None;
+        };
+        (self.language == SourceLanguage::JavaScript
+            && self.resolution.sole_write_at(*span, name) == Some((span.start, span.end)))
+        .then_some((name.as_str(), *span))
+    }
+
+    /// What is known of a binding after its one write (`x = e;`, see
+    /// [`Self::sole_write_stmt`]): what is known of every value of `e`'s
+    /// type. It holds from here on, on every path and in every closure:
+    /// the binding is written nowhere else, so whenever it changes again
+    /// it is to another value of `e`. (A test on it from before the write
+    /// no longer holds.)
+    pub(in crate::infer) fn after_sole_write(&mut self, env: &TypeEnv, stmt: &Stmt) -> TypeEnv {
+        let Some((name, span)) = self.sole_write_stmt(stmt) else {
+            return env.clone();
+        };
+        let key = self.key_of(span, name);
+        match self.sole_write_narrowing(span) {
+            Some(n) => narrow_from_declared(self, env, name, span, &n),
+            None => env.unnarrowed(&key),
+        }
+    }
+
+    /// What every value the write at `span` assigns is known to be.
+    fn sole_write_narrowing(&mut self, span: Span) -> Option<Narrowing> {
+        let value = self.assigned_values.get(&(span.start, span.end))?.clone();
+        let value = self.apply_subst(&value);
+        value_narrowing(&value, self.language)
+    }
+
+    /// The one write (see [`Self::sole_write_stmt`]) of the binding `name`
+    /// at `span` when it is one of `body`'s own statements (not nested in
+    /// another), and its index there.
+    fn sole_write_in(&self, body: &Stmt, name: &str, span: Span) -> Option<(usize, Span)> {
+        let write = self.resolution.sole_write_at(span, name)?;
+        let stmts = match body {
+            Stmt::Block { body, .. } => body.as_slice(),
+            s => std::slice::from_ref(s),
+        };
+        stmts.iter().enumerate().find_map(|(i, s)| {
+            let (n, at) = self.sole_write_stmt(s)?;
+            (n == name && (at.start, at.end) == write).then_some((i, at))
+        })
     }
 
     /// The environment for code that runs only if `test` came out
@@ -489,7 +563,7 @@ impl InferState {
         alternate: &Option<Box<Stmt>>,
         span: Span,
     ) -> InferResult<(Type, TypeEnv)> {
-        let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
+        let (cons_env, alt_env, facts) = self.infer_branching_test_facts(env, test)?;
 
         let (cons_type, _) = self.infer_stmt(&cons_env, consequent)?;
 
@@ -516,11 +590,37 @@ impl InferState {
         //     return node.value;            // node is not null here
         let cons_exits = always_exits(consequent);
         let alt_exits = alternate.as_deref().is_some_and(always_exits);
-        let after = match (cons_exits, alt_exits) {
+        let mut after = match (cons_exits, alt_exits) {
             (true, false) => alt_env,
             (false, true) => cons_env,
             _ => env.clone(),
         };
+
+        // Filling in a binding written once: `if (!x) { x = []; … }`.
+        // After it, either the test was false (and `x` not written since)
+        // or the branch ran to its end, past its write of `x` (the one
+        // write: nothing writes `x` again but another run of it). So `x`
+        // is what the test's false facts say, or what `e` always is,
+        // from here on (see `after_sole_write`):
+        //
+        //     let x = m.get(k);           // Number[] | Undefined
+        //     if (!x) { x = []; m.set(k, x); }
+        //     x.push(1);                  // x: Number[]
+        if alternate.is_none() && !cons_exits {
+            for (path, fact) in &facts.when_false {
+                let Path::Ident(name, at) = path else {
+                    continue;
+                };
+                let Some((_, write)) = self.sole_write_in(consequent, name, *at) else {
+                    continue;
+                };
+                let Some(written) = self.sole_write_narrowing(write) else {
+                    continue;
+                };
+                let either = Narrowing::AnyOf(vec![fact.clone(), written]);
+                after = narrow_from_declared(self, &after, name, *at, &either);
+            }
+        }
 
         Ok((result, after))
     }
@@ -535,7 +635,23 @@ impl InferState {
         // The body runs while the test holds, and without a `break` the
         // loop is left only when it doesn't. (Narrowed bindings are never
         // written, so a test that held stays true for the iteration.)
-        let (body_env, exit_env) = self.infer_branching_test(env, test)?;
+        let (mut body_env, exit_env, facts) = self.infer_branching_test_facts(env, test)?;
+        // A binding written once, at the end of each iteration: `while
+        // (m) { …m[1]…; m = re.exec(s); }`. Up to its write the body sees
+        // what the test said: nothing writes it between the test and
+        // there. Not in a closure (one made there could run after the
+        // write), so only for a binding no closure mentions.
+        for (path, fact) in &facts.when_true {
+            let Path::Ident(name, at) = path else {
+                continue;
+            };
+            if self.resolution.captured_at(*at, name)
+                || self.sole_write_in(body, name, *at).is_none()
+            {
+                continue;
+            }
+            body_env = narrow_from_declared(self, &body_env, name, *at, fact);
+        }
         self.infer_stmt(&body_env, body)?;
         let after = if breaks_out(body) {
             env.clone()

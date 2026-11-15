@@ -297,6 +297,50 @@ pub fn apply_narrowing(
     narrow_binding(state, env, path, narrowing)
 }
 
+/// What every value of type `ty` (resolved) is known to be, as a
+/// narrowing: truthy, not `null`, not `undefined`. `None` when nothing is
+/// (a type not known yet may be anything). JavaScript only.
+pub fn value_narrowing(ty: &Type, lang: Language) -> Option<Narrowing> {
+    if lang != Language::JavaScript {
+        return None;
+    }
+    let arms = ty.arms();
+    if arms.is_empty() || arms.iter().any(|t| matches!(t, Type::Var(_) | Type::Error)) {
+        return None;
+    }
+    let mut ns = Vec::new();
+    if arms.iter().all(|t| !could_be_falsy(t, lang)) {
+        ns.push(Narrowing::Truthy);
+    }
+    for unit in [Type::Null, Type::Undefined] {
+        if arms.iter().all(|t| !could_be(t, &unit)) {
+            ns.push(Narrowing::IsNot(unit));
+        }
+    }
+    match ns.len() {
+        0 => None,
+        1 => ns.pop(),
+        _ => Some(Narrowing::AllOf(ns)),
+    }
+}
+
+/// Narrow the binding `name` (at `span`) from its own type, not from a
+/// narrowing in force. For a binding written once (see
+/// `resolve::Resolution::sole_write_at`), which isn't stable, so
+/// [`apply_narrowing`] leaves it alone: the callers establish that the
+/// fact holds from here on, on every path and in every closure.
+pub fn narrow_from_declared(
+    state: &mut super::state::InferState,
+    env: &TypeEnv,
+    name: &str,
+    span: Span,
+    narrowing: &Narrowing,
+) -> TypeEnv {
+    let key = state.key_of(span, name);
+    let env = env.unnarrowed(&key);
+    narrow_binding(state, &env, &Path::Ident(name.to_string(), span), narrowing)
+}
+
 /// Whether `narrowing` leaves the value at `path` no possible type: the
 /// test can't come out this way, so the branch it guards is dead.
 pub fn narrowing_is_dead(

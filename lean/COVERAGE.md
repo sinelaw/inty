@@ -46,10 +46,10 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.index` | `infer_computed_member` |
 | `HasTypeS.setIndex` | `infer_assign`, `infer_store_target` |
 | `HasTypeS.mcall` | `infer_call` |
-| `HasTypeS.unwrap` | `infer_nullish_coalesce`, `infer_branching_test`, `apply_narrowing`, `resolve_strip` (a test of a sum's truthiness, x ? e₃ : e₂, is unwrap x e₂ (x' ? e₃ : e₂)) |
+| `HasTypeS.unwrap` | `infer_nullish_coalesce`, `infer_branching_test`, `infer_branching_test_facts`, `apply_narrowing`, `resolve_strip` (a test of a sum's truthiness, x ? e₃ : e₂, is unwrap x e₂ (x' ? e₃ : e₂)) |
 | `HasTypeS.litStr` | `check_expr` |
 | `HasTypeS.litBool` | `check_expr` |
-| `HasTypeS.caseTag` | `infer_branching_test`, `apply_narrowing`, `test_facts`, `infer_stmt_switch` (a switch statement on a variant's tag is a chain of tests of one value's tag) |
+| `HasTypeS.caseTag` | `infer_branching_test`, `infer_branching_test_facts`, `apply_narrowing`, `test_facts`, `infer_stmt_switch` (a switch statement on a variant's tag is a chain of tests of one value's tag) |
 | `HasTypeS.conv` | `unify`, `unroll_named` |
 | `HasTypeS.inj` | `check_expr`, `check_by_synthesis`, `subsume` |
 | `HasTypeS.drop` | `infer_discarded` |

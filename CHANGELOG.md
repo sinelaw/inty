@@ -9,6 +9,23 @@
   null` is an error ("expected '() => Undefined', found 'Null'"), where it
   was accepted and `hooks.mark()` threw. A field that starts as `null` is
   declared `T | Null`. (The `null` / `undefined` placeholder rule is gone.)
+- An importer of a module that failed no longer reports errors in its own,
+  correct code ("Property 'bank' not found in type Boolean", "expected
+  'Boolean | Undefined', found '{pattern: …}'"). The failed module's names
+  are typed `Error`; a type variable that met one stayed free and was
+  pinned by its first use. It is now `Error` too: unifying with `Error`,
+  indexing an `Error` value, a constraint on one and a spread of one all
+  give `Error`.
+- A binding written once after its initialiser, by a plain `x = e` in its
+  own function, is narrowed after that write: the get-or-create idiom
+  (`let x = m.get(k); if (!x) { x = []; m.set(k, x); } x.push(1);`) and
+  the `exec` loop (`while (m) { …m[1]…; m = re.exec(s); }`) type-check
+  without a `const` copy. See
+  [docs/flow-narrowing-safe.md](docs/flow-narrowing-safe.md), "Extension:
+  bindings written once".
+- A tested property read again (`if (o.f) o.f()`) is still not narrowed:
+  a getter can give a different value to each read, and a type doesn't say
+  which fields are getters. Copy it into a `const` and test that.
 
 ### Multi-line annotations
 

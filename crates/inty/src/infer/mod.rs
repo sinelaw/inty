@@ -991,7 +991,7 @@ impl InferState {
             match checked {
                 Ok((ty, new_env)) => {
                     result = ty;
-                    current_env = new_env;
+                    current_env = self.after_sole_write(&new_env, stmt);
                     // If this statement bound a name we pre-hoisted,
                     // unify the hoisted variable with the actual
                     // inferred type. The hoisted variable may already
@@ -1793,7 +1793,7 @@ impl InferState {
 
             Stmt::Expr { expression, .. } => {
                 let ty = self.infer_expr(env, expression)?;
-                Ok((ty, env.clone()))
+                Ok((ty, self.after_sole_write(env, stmt)))
             }
 
             Stmt::Var {

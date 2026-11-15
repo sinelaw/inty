@@ -301,6 +301,14 @@ impl InferState {
     }
 
     /// Infer the type of an assignment.
+    /// Remember what a plain `x = e` assigned (see `assigned_values`).
+    fn record_assigned_value(&mut self, op: AssignOp, left: &Expr, value: &Type) {
+        if let (AssignOp::Assign, Expr::Ident { span, .. }) = (op, left) {
+            self.assigned_values
+                .insert((span.start, span.end), value.clone());
+        }
+    }
+
     pub(in crate::infer) fn infer_assign(
         &mut self,
         env: &TypeEnv,
@@ -309,6 +317,17 @@ impl InferState {
         right: &Expr,
         span: Span,
     ) -> InferResult<Type> {
+        // A variable is stored to at its own type, not one a test or an
+        // earlier write narrowed it to (a binding written once, see
+        // `after_sole_write`); its value is read in `env` as it is.
+        let unnarrowed;
+        let store_env = match left {
+            Expr::Ident { name, span } => {
+                unnarrowed = env.unnarrowed(&self.key_of(*span, name));
+                &unnarrowed
+            }
+            _ => env,
+        };
         // Check for assignment to immutable bindings
         self.check_assignment_target(env, left, span)?;
 
@@ -318,21 +337,24 @@ impl InferState {
         if op == AssignOp::Assign
             && matches!(right, Expr::Function { .. })
             && matches!(left, Expr::Member { .. } | Expr::Ident { .. })
-            && lhs_polytype(self, env, left).is_none()
+            && lhs_polytype(self, store_env, left).is_none()
         {
-            let left_type = self.infer_store_target(env, left, span, true)?;
+            let left_type = self.infer_store_target(store_env, left, span, true)?;
             if crate::infer::features::functions::extract_callable(&self.zonk_head(&left_type))
                 .is_some()
             {
                 self.check_expr(env, right, &left_type)?;
+                self.record_assigned_value(op, left, &left_type);
                 return Ok(self.zonk_head_into(left_type));
             }
             let right_type = self.infer_expr(env, right)?;
             self.subsume(span, &right_type, &left_type)?;
+            self.record_assigned_value(op, left, &right_type);
             return Ok(self.zonk_head_into(left_type));
         }
 
         let right_type = self.infer_expr(env, right)?;
+        self.record_assigned_value(op, left, &right_type);
 
         // Subsumption check: if the LHS resolves to a polymorphic scheme
         // (a polymorphic var, or a polymorphic property of a polymorphic
@@ -357,7 +379,7 @@ impl InferState {
                 | AssignOp::LogicalAndAssign
                 | AssignOp::LogicalOrAssign
         ) {
-            if let Some(expected) = lhs_polytype(self, env, left) {
+            if let Some(expected) = lhs_polytype(self, store_env, left) {
                 let env_free_before = env.free_vars();
                 let (skolems, expected_ty) = self.skolemize(&expected);
                 self.unify(span, &expected_ty, &right_type)?;
@@ -387,7 +409,7 @@ impl InferState {
             op,
             AssignOp::Assign | AssignOp::NullishAssign | AssignOp::LogicalOrAssign
         );
-        let left_type = self.infer_store_target(env, left, span, store_only)?;
+        let left_type = self.infer_store_target(store_env, left, span, store_only)?;
         // `x &&= v` and `x ||= v` test `x`, as `&&` and `||` do.
         if matches!(op, AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign) {
             self.require_testable(&left_type, span)?;

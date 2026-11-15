@@ -221,13 +221,30 @@ The other predicates that narrow:
 - `&&`, `||` and `?:`, including their right operands (`q !== null && q.x > 0`);
 - a disjunction of tests of one path: `if (s.kind === "row" || s.kind === "col")` narrows `s` to those two members (and `s.kind !== "row" && s.kind !== "col"` does in its `else`).
 
-**A property's own type isn't narrowed.** A tag test picks a union's members, but `if (r.palette) use(r.palette)` with `palette: String | Null` leaves `r.palette` a `String | Null`: a record is mutable, and a call between the test and the use, or another reference to the same object, could store `null` there. Copy it into a `const` first: `const p = r.palette; if (p) use(p);` (the error says so).
+**A property's own type isn't narrowed.** A tag test picks a union's members, but `if (r.palette) use(r.palette)` with `palette: String | Null` leaves `r.palette` a `String | Null`: a record is mutable, and a call between the test and the use, or another reference to the same object, could store `null` there. Copy it into a `const` first: `const p = r.palette; if (p) use(p);` (the error says so). This holds even with nothing between the test and the use (`if (o.f) o.f()`, `o.f ? o.f(x) : d`): each `o.f` is a read of its own, and a getter (`get f() { … }`) can give a function to the test and `null` to the call. An object with a getter has the same type as one with a field, so the checker can't tell the two reads give one value.
 
 A test also narrows:
 - the code after an `if` whose other branch always returns, throws, breaks or continues (`if (q === null) return 0; return q.x;`);
 - the body of a `while` or `for` loop, and the code after a loop that has no `break`.
 
 **Only bindings that never change are narrowed.** Narrowing applies to `const`s, parameters that the function never reassigns, and `let`s that are never reassigned. For any binding that is written after its initialiser, a test says nothing. This is Typed Racket's rule: a fact about a value holds as long as the value is the same, so a narrowing never has to end — not after an assignment, not in a loop, and not inside a closure that runs later. [docs/flow-narrowing-safe.md](flow-narrowing-safe.md) has the full argument. To narrow a variable you update, copy it into a `const` first.
+
+**A binding written once follows its write.** A `let` (or a parameter, or a `var` declared once) that is written exactly once after its initialiser, by a plain `x = e` in the function that declares it (not from a closure), holds its first value until that write runs and a value of `e` ever after. So:
+
+- after the statement `x = e;`, `x` is what every value of `e`'s type is (truthy, not `null`, not `undefined`), on every path and in every closure from there;
+- after `if (c) { …; x = e; … }` (no `else`, the write one of the branch's own statements), `x` is what `c`'s false branch says or what `e` always is: the get-or-create idiom types;
+- in `while (c) { …; x = e; … }`, the body up to the write sees what `c` says of `x`, when no closure mentions `x`: the `exec` loop types.
+
+```javascript
+let x = m.get(k);                      // Number[] | Undefined
+if (!x) { x = []; m.set(k, x); }       // x: Number[] after `x = []`
+x.push(1);                             // x: Number[]
+
+let r = re.exec(s);                    // String[] | Null
+while (r) { use(r[1]); r = re.exec(s); }
+```
+
+A store is checked at the binding's own type, never a narrowed one.
 
 The `Array.prototype.find` builtin returns `T | undefined`, so the caller has to narrow before using the result:
 
