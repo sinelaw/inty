@@ -433,6 +433,29 @@ fn an_error_in_a_one_line_annotation_points_inside_it() {
 }
 
 #[test]
+fn prose_that_looks_like_an_annotation_is_still_prose() {
+    // After a `*` margin, a keyword followed by something of an
+    // annotation's shape is still prose when its "type" doesn't parse.
+    let src = r#"
+/**
+ * function foo(bar) is deprecated; use baz instead.
+ */
+function foo(bar) { return bar; }
+/**
+ * type Foo = the kind of foo we accept.
+ */
+const Foo = 1;
+/**
+ * const total: the running total, in cents
+ */
+const total = 0;
+({ foo, Foo, total })
+"#;
+    let ty = check(src).unwrap();
+    assert!(ty.contains("total: Number"), "{ty}");
+}
+
+#[test]
 fn prose_doc_comments_are_not_annotations() {
     // A JSDoc block whose text happens to start with a keyword, after a
     // `*` margin, is documentation, not an annotation: it doesn't have
@@ -467,6 +490,7 @@ const k = inc(t);
 
 use inty::frontends::javascript::format::format_annotations;
 use inty::frontends::javascript::lexer::{Scanner, Token};
+use inty::infer::parse_type_syntax;
 use std::path::{Path, PathBuf};
 
 /// The repository's JavaScript sources and declaration files.
@@ -504,9 +528,10 @@ fn collect_js(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// What the scanner reads from a source's annotations, as far as their
-/// meaning goes: each annotation's name, kind and type text, each alias's
-/// name, parameters and body, with layout (whitespace, trailing commas, a
-/// union's leading `|`) taken out.
+/// meaning goes: each annotation's name and kind, each alias's name and
+/// parameters, with its type's syntax parsed (unknown names standing for
+/// type variables), so two layouts of one annotation compare equal and
+/// any change to what it says, or a rewrite that doesn't parse, doesn't.
 fn annotations_of(src: &str) -> Option<Vec<String>> {
     let mut scanner = Scanner::new(src);
     loop {
@@ -519,47 +544,27 @@ fn annotations_of(src: &str) -> Option<Vec<String>> {
     let mut out: Vec<String> = scanner
         .type_annotations()
         .iter()
-        .map(|a| format!("{} {:?} {}", a.name, a.kind, layout_free(&a.content)))
+        .map(|a| {
+            // A class declaration isn't a type expression; the formatter
+            // leaves those alone, so their text is compared as is.
+            let ty = if format!("{:?}", a.kind) == "Class" {
+                a.content.clone()
+            } else {
+                format!("{:?}", parse_type_syntax(&a.content))
+            };
+            format!("{} {:?} {ty}", a.name, a.kind)
+        })
         .collect();
     out.extend(scanner.type_aliases().iter().map(|a| {
         format!(
-            "type {}<{}> {}",
+            "type {}<{}> {} {:?}",
             a.name,
             a.params.join(","),
-            layout_free(&a.body)
+            a.nominal,
+            parse_type_syntax(&a.body)
         )
     }));
     Some(out)
-}
-
-fn layout_free(text: &str) -> String {
-    let mut out = String::new();
-    let mut in_string = false;
-    let mut escaped = false;
-    for c in text.chars() {
-        if in_string {
-            out.push(c);
-            match c {
-                _ if escaped => escaped = false,
-                '\\' => escaped = true,
-                '"' => in_string = false,
-                _ => {}
-            }
-            continue;
-        }
-        if c.is_whitespace() {
-            continue;
-        }
-        if matches!(c, '}' | ')' | ']' | '>') && out.ends_with(',') {
-            out.pop();
-        }
-        if c == '|' && (out.is_empty() || out.ends_with('=') || out.ends_with(':')) {
-            continue;
-        }
-        in_string = c == '"';
-        out.push(c);
-    }
-    out
 }
 
 /// The check result without its position (formatting moves code down).

@@ -72,6 +72,10 @@ pub struct TypeParser<'a> {
     content_start: Option<usize>,
     /// The input range of the identifier read last, for errors about it.
     last_ident: (usize, usize),
+    /// Read the syntax only: a name that isn't a known type, and
+    /// `typeof X`, stand for a type variable (one per name) instead of
+    /// being errors. See [`parse_type_syntax`].
+    syntax_only: bool,
 }
 
 impl<'a> TypeParser<'a> {
@@ -90,6 +94,7 @@ impl<'a> TypeParser<'a> {
             preds: Vec::new(),
             content_start: None,
             last_ident: (0, 0),
+            syntax_only: false,
         }
     }
 
@@ -114,6 +119,7 @@ impl<'a> TypeParser<'a> {
             preds: Vec::new(),
             content_start: None,
             last_ident: (0, 0),
+            syntax_only: false,
         }
     }
 
@@ -132,6 +138,20 @@ impl<'a> TypeParser<'a> {
     pub fn at_source_offset(mut self, content_start: Option<usize>) -> Self {
         self.content_start = content_start;
         self
+    }
+
+    /// The type variable a name stands for when reading syntax only.
+    fn name_var(&mut self, name: &str) -> Type {
+        let id = match self.type_vars.get(name) {
+            Some(&id) => id,
+            None => {
+                let id = self.next_var_id;
+                self.next_var_id += 1;
+                self.type_vars.insert(name.to_string(), id);
+                id
+            }
+        };
+        Type::flex(id)
     }
 
     /// Allocate a fresh flexible presence variable. Used when an
@@ -194,9 +214,7 @@ impl<'a> TypeParser<'a> {
             // Rank-1 restriction: quantifiers only allowed at top level
             if !self.allow_quantifiers {
                 // At the quantifier, `<T, U>`.
-                let close = self.input[self.pos..]
-                    .find('>')
-                    .map_or(self.pos + 1, |i| self.pos + i + 1);
+                let close = self.quantifier_end().unwrap_or(self.pos + 1);
                 return Err(Box::new(TypeError::Rank1Restriction {
                     span: self.span_of((self.pos, close)),
                 }));
@@ -820,6 +838,9 @@ impl<'a> TypeParser<'a> {
     /// installed (alias-body or top-level annotation parsing) or
     /// `NAME` wasn't pre-resolved at the call site.
     fn resolve_typeof(&mut self, name: &str) -> ParseResult<Type> {
+        if self.syntax_only {
+            return Ok(self.name_var(&format!("typeof {name}")));
+        }
         let Some(table) = self.typeof_table else {
             return Err(self.error(
                 "`typeof X` requires an enclosing inference scope — this position only supports \
@@ -1237,7 +1258,37 @@ impl<'a> TypeParser<'a> {
                 // Check if it's a known type variable (bound by an
                 // enclosing `<T>` quantifier or by an alias's parameter
                 // list — see `preset_var` and `parse_generic_type`).
-                if let Some(&var_id) = self.type_vars.get(ident) {
+                if self.syntax_only {
+                    // An alias or class declared elsewhere may take type
+                    // arguments (`Pair<Number>`, `Map<K, V,>`): kept, with
+                    // the name, so that different arguments read
+                    // differently.
+                    let name = self.name_var(ident);
+                    let saved = self.pos;
+                    self.skip_whitespace();
+                    if self.peek_char() != Some('<') {
+                        self.pos = saved;
+                        return Ok(name);
+                    }
+                    self.pos += 1;
+                    let mut args = Vec::new();
+                    loop {
+                        self.skip_whitespace();
+                        if self.peek_char() == Some('>') && !args.is_empty() {
+                            break;
+                        }
+                        args.push(self.parse_type()?);
+                        self.skip_whitespace();
+                        if self.peek_char() == Some(',') {
+                            self.pos += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    self.skip_whitespace();
+                    self.expect_char('>')?;
+                    Ok(Type::Tuple(vec![name, Type::Tuple(args)]))
+                } else if let Some(&var_id) = self.type_vars.get(ident) {
                     Ok(Type::flex(var_id))
                 } else {
                     // Unknown identifier: not a primitive, not an alias,
@@ -1331,6 +1382,27 @@ impl<'a> TypeParser<'a> {
         }
     }
 
+    /// The end of the `<…>` quantifier at the current position: just past
+    /// its matching `>` (not an arrow's).
+    fn quantifier_end(&self) -> Option<usize> {
+        let mut depth = 0usize;
+        let mut prev = '\0';
+        for (i, c) in self.input[self.pos..].char_indices() {
+            match c {
+                '<' => depth += 1,
+                '>' if prev != '=' => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        return Some(self.pos + i + 1);
+                    }
+                }
+                _ => {}
+            }
+            prev = c;
+        }
+        None
+    }
+
     /// Skip whitespace and one `,` before `close`: a trailing comma.
     fn skip_trailing_comma(&mut self, close: char) {
         self.skip_whitespace();
@@ -1384,6 +1456,19 @@ impl<'a> TypeParser<'a> {
             None => self.span,
         }
     }
+}
+
+/// Read a type annotation's syntax, without knowing what its names
+/// mean: an unknown name (an alias declared elsewhere, a type parameter,
+/// a typo) stands for a type variable, the same one each time it is
+/// named. Two texts that give equal types say the same thing; a text
+/// that fails isn't a type annotation at all. Used to tell an
+/// annotation from prose, and by the annotation formatter to check a
+/// rewrite.
+pub fn parse_type_syntax(content: &str) -> Result<Type, String> {
+    let mut parser = TypeParser::new(content, Span::default(), 0);
+    parser.syntax_only = true;
+    parser.parse().map_err(|e| e.to_string())
 }
 
 /// Parse a type annotation string.

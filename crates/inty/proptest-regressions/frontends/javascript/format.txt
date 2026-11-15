@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 27c0fb7b8c91d72dd7c9e520b0c7d98172113e5e020d5694fdd050eb852a2b94 # shrinks to ann = "const c: \"a, b\"[]", width = 10, indent = "", crlf = false
+cc af64b825e00c0ff03a612189f16909b219336b309dca2b6dc51a6c64522b8dcc # shrinks to ann = "function f(a: Pair<Pair<Number>>, a: Number) => Number", width = 10, indent = "", crlf = false
+cc 224dd7afcbab8b1156c4b7308af3e63bd88b6e4baf0d3719b50dc19c204f78af # shrinks to ann = "const c: Pair<() => Number, Number>", width = 10, indent = "", crlf = false

@@ -23,7 +23,10 @@ exactly what they mean on one line (see
 
 - A JSDoc `*` margin at the start of each line after the first is ignored, in
   `type`, `function`, `const`/`let`/`var` and `class` annotations, with the
-  keyword on the first line or on the line after `/**`.
+  keyword on the first line or on the line after `/**`. With the keyword
+  after a margin, the comment is an annotation only if its type parses;
+  otherwise it is prose (`/**\n * function foo(bar) is deprecated …`), as
+  before.
 - `//` comments to the end of a line are allowed inside an annotation and
   ignored by the checker.
 - Trailing commas are accepted after the last parameter of a function type,
@@ -38,7 +41,8 @@ exactly what they mean on one line (see
   annotation longer than the width (default 100) one field, parameter or
   union member per line, with a `*` margin and a trailing comma. Short and
   already multi-line annotations, and all code, are left as they are, so it
-  is idempotent.
+  is idempotent. A rewrite is kept only if it parses to the same types as
+  the original.
 
 One-line annotations check exactly as before. Two edge cases of malformed
 annotations change: a doc comment that starts like an annotation but stops
@@ -48,6 +52,9 @@ unterminated-comment error.
 
 ### Fixes
 
+- `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
+  string literal type (`"a, b"`) or after an arrow inside type arguments
+  (`Pair<() => A, B>`).
 - An empty comment `/**/` ends at its own `*/`. It used to be read as the
   start of a doc comment running to the next `*/`, swallowing the code in
   between.

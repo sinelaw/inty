@@ -1494,6 +1494,26 @@ mod tests {
     }
 
     #[test]
+    fn declarators_split_outside_strings_and_arrows() {
+        // A comma in a string literal type, or after an arrow inside type
+        // arguments, doesn't end the declarator.
+        let src = "/** const c: \"a, b\"[], d: Pair<() => Number, String>, e: Number */";
+        let (_, annotations, _) = Scanner::new(src).tokenize().unwrap();
+        let read: Vec<(&str, &str)> = annotations
+            .iter()
+            .map(|a| (a.name.as_str(), a.content.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("c", "\"a, b\"[]"),
+                ("d", "Pair<() => Number, String>"),
+                ("e", "Number")
+            ]
+        );
+    }
+
+    #[test]
     fn an_empty_comment_ends_where_it_ends() {
         let (tokens, annotations, _) = Scanner::new("a /**/ b /** const c: Number */")
             .tokenize()

@@ -23,7 +23,7 @@ use crate::ast::{AnnotationKind, TypeAlias, TypeAnnotation};
 
 /// What a doc comment declares, when it is a statement annotation.
 #[derive(Debug, Default)]
-pub(super) struct DocAnnotation {
+pub(crate) struct DocAnnotation {
     pub annotations: Vec<TypeAnnotation>,
     pub aliases: Vec<TypeAlias>,
 }
@@ -119,8 +119,10 @@ fn blank(out: &mut String, c: char) {
 ///
 /// Returns `None` when the comment isn't a statement annotation, so the
 /// caller reads it as an ordinary doc comment (which may carry a JSDoc
-/// `@type` tag).
-pub(super) fn read_doc_annotation(
+/// `@type` tag). With the keyword after a `*` margin rather than on the
+/// `/**` line, the comment must be an annotation in shape and in syntax:
+/// one whose type doesn't parse is taken for prose.
+pub(crate) fn read_doc_annotation(
     raw: &str,
     cleaned: &str,
     body_start: usize,
@@ -218,6 +220,23 @@ pub(super) fn read_doc_annotation(
             }
         }
         _ => return None,
+    }
+    // The margin-led form is also how prose looks (`/**\n * function
+    // foo(bar) is deprecated`), so it is an annotation only when its
+    // types read as types. (A class declaration is checked by its shape
+    // above.)
+    if after_margin {
+        let types = out
+            .annotations
+            .iter()
+            .filter(|a| a.kind != AnnotationKind::Class)
+            .map(|a| &a.content)
+            .chain(out.aliases.iter().map(|a| &a.body));
+        for ty in types {
+            if crate::infer::type_parser::parse_type_syntax(ty).is_err() {
+                return None;
+            }
+        }
     }
     Some(out)
 }
@@ -343,7 +362,18 @@ impl<'b> Cursor<'b> {
         let mut angle: i32 = 0;
         let mut bracket: i32 = 0;
         let mut in_where = false;
+        let mut in_string = false;
         while let Some(ch) = self.peek() {
+            // A string literal type's commas and brackets are its own.
+            if in_string || ch == '"' {
+                if ch == '\\' && in_string {
+                    self.bump();
+                } else if ch == '"' {
+                    in_string = !in_string;
+                }
+                self.bump();
+                continue;
+            }
             let top = paren == 0 && brace == 0 && angle == 0 && bracket == 0;
             let so_far = &self.text[start..self.pos];
             if top && !in_where && ch.is_whitespace() && so_far.ends_with("where") {
@@ -368,8 +398,8 @@ impl<'b> Cursor<'b> {
                 '[' => bracket += 1,
                 ']' => bracket = (bracket - 1).max(0),
                 '<' => angle += 1,
-                // A `>` closes only an opened `<`; otherwise it is `=>`'s.
-                '>' if angle > 0 => angle -= 1,
+                // A `>` closes only an opened `<`, and never an arrow's.
+                '>' if angle > 0 && !so_far.ends_with('=') => angle -= 1,
                 _ => {}
             }
             self.bump();

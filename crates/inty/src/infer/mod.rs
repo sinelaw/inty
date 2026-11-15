@@ -16,6 +16,7 @@ mod lower;
 mod narrow;
 mod state;
 pub(crate) mod type_parser;
+pub use type_parser::parse_type_syntax;
 mod unify;
 mod var_table;
 mod zonk;
