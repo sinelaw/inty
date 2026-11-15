@@ -1,0 +1,7 @@
+Error: Failed to parse type annotation: unknown type 'Numbr' — declare it with `/** type Numbr = ... */`, or make it a type parameter: `/** function f<Numbr>(x: Numbr) => ... */` or `/** const f: <Numbr>(x: Numbr) => ... */`
+   ╭─[ main.js:6:16 ]
+   │
+ 6 │  *   fitWidth: Numbr,  // the width the page is laid out for
+   │                ──┬──  
+   │                  ╰──── Failed to parse type annotation: unknown type 'Numbr' — declare it with `/** type Numbr = ... */`, or make it a type parameter: `/** function f<Numbr>(x: Numbr) => ... */` or `/** const f: <Numbr>(x: Numbr) => ... */`
+───╯

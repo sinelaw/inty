@@ -487,6 +487,12 @@ pub struct TypeAnnotation {
     pub content: String,
     pub span: Source,
     pub kind: AnnotationKind,
+    /// Source offset of `content`'s first byte, when `content` is the
+    /// source's own text byte for byte (a doc comment's margins and
+    /// `//` comments blanked to spaces): a parse error inside it is then
+    /// reported where it is. `None` for annotation text that was built
+    /// or rewritten.
+    pub content_start: Option<usize>,
 }
 
 /// User-defined generic type alias parsed from a doc comment of the
@@ -512,6 +518,9 @@ pub struct TypeAlias {
     /// constructor `Name: (Repr) => Name` is injected. A plain `type`
     /// alias (`nominal == false`) is structural and inlined at use.
     pub nominal: bool,
+    /// Source offset of `body`'s first byte, as
+    /// [`TypeAnnotation::content_start`].
+    pub content_start: Option<usize>,
 }
 
 /// Expression AST node

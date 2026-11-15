@@ -65,6 +65,13 @@ pub struct TypeParser<'a> {
     typeof_table: Option<&'a TypeOfTable>,
     /// Type-class constraints from a `<a> where C, … => T` prefix.
     preds: Vec<TypePred>,
+    /// Source offset of `input[0]`, when `input` is the source's text
+    /// byte for byte (see [`crate::ast::TypeAnnotation::content_start`]).
+    /// Errors then point at the part of the annotation they are about;
+    /// without it they cover the whole annotation (`span`).
+    content_start: Option<usize>,
+    /// The input range of the identifier read last, for errors about it.
+    last_ident: (usize, usize),
 }
 
 impl<'a> TypeParser<'a> {
@@ -81,6 +88,8 @@ impl<'a> TypeParser<'a> {
             aliases: None,
             typeof_table: None,
             preds: Vec::new(),
+            content_start: None,
+            last_ident: (0, 0),
         }
     }
 
@@ -103,6 +112,8 @@ impl<'a> TypeParser<'a> {
             aliases: Some(aliases),
             typeof_table: None,
             preds: Vec::new(),
+            content_start: None,
+            last_ident: (0, 0),
         }
     }
 
@@ -113,6 +124,13 @@ impl<'a> TypeParser<'a> {
     /// duration of one annotation parse.
     pub fn with_typeof(mut self, table: &'a TypeOfTable) -> Self {
         self.typeof_table = Some(table);
+        self
+    }
+
+    /// Say where `input` starts in the source, so errors point inside
+    /// the annotation (see the `content_start` field).
+    pub fn at_source_offset(mut self, content_start: Option<usize>) -> Self {
+        self.content_start = content_start;
         self
     }
 
@@ -175,9 +193,22 @@ impl<'a> TypeParser<'a> {
         if self.peek_char() == Some('<') {
             // Rank-1 restriction: quantifiers only allowed at top level
             if !self.allow_quantifiers {
-                return Err(Box::new(TypeError::Rank1Restriction { span: self.span }));
+                // At the quantifier, `<T, U>`.
+                let close = self.input[self.pos..]
+                    .find('>')
+                    .map_or(self.pos + 1, |i| self.pos + i + 1);
+                return Err(Box::new(TypeError::Rank1Restriction {
+                    span: self.span_of((self.pos, close)),
+                }));
             }
             return self.parse_generic_type();
+        }
+
+        // A union may start with `|`, so that one written a member per
+        // line lines its members up: `| A\n| B`.
+        if self.peek_char() == Some('|') && self.peek_char_at(1) != Some('|') {
+            self.pos += 1;
+            self.skip_whitespace();
         }
 
         // Parse the leading simple-or-function type, then collect any
@@ -237,6 +268,11 @@ impl<'a> TypeParser<'a> {
                 break;
             }
             self.expect_char(',')?;
+            // A trailing comma: `<T, U,>`.
+            self.skip_whitespace();
+            if self.peek_char() == Some('>') {
+                break;
+            }
         }
         self.expect_char('>')?;
 
@@ -491,6 +527,8 @@ impl<'a> TypeParser<'a> {
         self.skip_whitespace();
 
         let mut params: Vec<crate::types::FuncParam> = Vec::new();
+        // Where each parameter is written, for an error about one.
+        let mut param_at: Vec<(usize, usize)> = Vec::new();
         let mut this_type: Option<Type> = None;
         if self.input[self.pos..].starts_with("this") {
             let start = self.pos;
@@ -521,6 +559,7 @@ impl<'a> TypeParser<'a> {
         if self.peek_char() != Some(')') {
             loop {
                 self.skip_whitespace();
+                let param_start = self.pos;
 
                 // Parse parameter. Three forms are accepted:
                 //   `Type`           — anonymous, required
@@ -571,12 +610,18 @@ impl<'a> TypeParser<'a> {
                     crate::types::FuncParam::required(param_type)
                 };
                 params.push(param);
+                param_at.push((param_start, self.pos));
 
                 self.skip_whitespace();
                 if self.peek_char() == Some(')') {
                     break;
                 }
                 self.expect_char(',')?;
+                // A trailing comma: `(a: A, b: B,) => R`.
+                self.skip_whitespace();
+                if self.peek_char() == Some(')') {
+                    break;
+                }
             }
         }
 
@@ -625,7 +670,7 @@ impl<'a> TypeParser<'a> {
                         return Err(Box::new(TypeError::OptionalParameterFollowedByRequired {
                             optional_idx: opt_idx,
                             required_idx: idx,
-                            span: self.span,
+                            span: self.span_of(param_at[idx]),
                         }));
                     }
                 }
@@ -1063,14 +1108,17 @@ impl<'a> TypeParser<'a> {
 
     /// Convert an identifier to a type.
     fn ident_to_type(&mut self, ident: &str) -> ParseResult<Type> {
+        // Where `ident` is written: errors about it point there, not
+        // at what follows (an alias's argument list).
+        let at = self.last_ident;
         // Unsupported TS constructs: rejected with a span-anchored
         // diagnostic that names the construct and the inty idiom
         // that replaces it.
         if let Some(suggestion) = unsupported_ts_alternative(ident) {
-            return Err(self.error(format!(
-                "type '{}' is not supported in inty. {}",
-                ident, suggestion
-            )));
+            return Err(self.error_at(
+                at,
+                format!("type '{}' is not supported in inty. {}", ident, suggestion),
+            ));
         }
 
         match ident {
@@ -1095,7 +1143,7 @@ impl<'a> TypeParser<'a> {
                 self.expect_char('<')?;
                 self.skip_whitespace();
                 let value = self.parse_type()?;
-                self.skip_whitespace();
+                self.skip_trailing_comma('>');
                 self.expect_char('>')?;
                 Ok(Type::Map(Box::new(value)))
             }
@@ -1108,7 +1156,7 @@ impl<'a> TypeParser<'a> {
                 self.expect_char('<')?;
                 self.skip_whitespace();
                 let inner = self.parse_type()?;
-                self.skip_whitespace();
+                self.skip_trailing_comma('>');
                 self.expect_char('>')?;
                 Ok(Type::promise(inner))
             }
@@ -1137,6 +1185,11 @@ impl<'a> TypeParser<'a> {
                                     self.skip_whitespace();
                                     if self.peek_char() == Some(',') {
                                         self.expect_char(',')?;
+                                        // A trailing comma: `Foo<A, B,>`.
+                                        self.skip_whitespace();
+                                        if self.peek_char() == Some('>') {
+                                            break;
+                                        }
                                     } else {
                                         break;
                                     }
@@ -1152,7 +1205,7 @@ impl<'a> TypeParser<'a> {
                         }
 
                         if args.len() != def.params.len() && !def.open_arity {
-                            return Err(self.error(arity_message(ident, &def, args.len())));
+                            return Err(self.error_at(at, arity_message(ident, &def, args.len())));
                         }
 
                         // Nominal alias: produce a branded reference
@@ -1192,12 +1245,15 @@ impl<'a> TypeParser<'a> {
                     // than silently inventing a fresh existential, so
                     // typos like `Stirng` and forgotten quantifiers
                     // surface as errors at the annotation site.
-                    Err(self.error(format!(
-                        "unknown type '{0}' — declare it with `/** type {0} = ... */`, \
+                    Err(self.error_at(
+                        at,
+                        format!(
+                            "unknown type '{0}' — declare it with `/** type {0} = ... */`, \
                          or make it a type parameter: `/** function f<{0}>(x: {0}) => ... */` \
                          or `/** const f: <{0}>(x: {0}) => ... */`",
-                        ident
-                    )))
+                            ident
+                        ),
+                    ))
                 }
             }
         }
@@ -1214,6 +1270,7 @@ impl<'a> TypeParser<'a> {
         while self.is_ident_cont(self.peek_char()) {
             self.pos += 1;
         }
+        self.last_ident = (start, self.pos);
 
         Ok(self.input[start..self.pos].to_string())
     }
@@ -1274,12 +1331,58 @@ impl<'a> TypeParser<'a> {
         }
     }
 
-    /// Create an error with the current span.
+    /// Skip whitespace and one `,` before `close`: a trailing comma.
+    fn skip_trailing_comma(&mut self, close: char) {
+        self.skip_whitespace();
+        if self.peek_char() == Some(',') {
+            let after = self.input[self.pos + 1..].trim_start();
+            if after.starts_with(close) {
+                self.pos += 1;
+                self.skip_whitespace();
+            }
+        }
+    }
+
+    /// Create an error at the current position.
     fn error(&self, message: String) -> Box<TypeError> {
         Box::new(TypeError::TypeAnnotationParse {
             message,
-            span: self.span,
+            span: self.error_span(),
         })
+    }
+
+    /// Create an error about the input range `at`.
+    fn error_at(&self, at: (usize, usize), message: String) -> Box<TypeError> {
+        Box::new(TypeError::TypeAnnotationParse {
+            message,
+            span: self.span_of(at),
+        })
+    }
+
+    /// The source span of the input range `at`; the whole annotation's
+    /// when the input's place in the source isn't known.
+    fn span_of(&self, (start, end): (usize, usize)) -> Span {
+        let end = start + self.input[start..end].trim_end().len();
+        match self.content_start {
+            Some(base) if start < end => Span::new(base + start, base + end),
+            _ => self.span,
+        }
+    }
+
+    /// Where an error found at the current position is: the identifier
+    /// just read, when the parser stopped right after it (`unknown type
+    /// 'Numbr'`), else the next character (`expected ','`).
+    fn error_span(&self) -> Span {
+        let (start, end) = self.last_ident;
+        if end == self.pos && start < end {
+            return self.span_of((start, end));
+        }
+        let rest = &self.input[self.pos..];
+        let at = self.pos + (rest.len() - rest.trim_start().len());
+        match self.input[at..].chars().next() {
+            Some(c) => self.span_of((at, at + c.len_utf8())),
+            None => self.span,
+        }
     }
 }
 
@@ -1321,11 +1424,13 @@ pub type ParsedAnnotation = (Type, HashMap<String, u32>, u32, Vec<TypePred>);
 pub fn parse_type_annotation_with_preds(
     content: &str,
     span: Span,
+    content_start: Option<usize>,
     start_var_id: u32,
     start_pvar_id: u32,
     aliases: &HashMap<String, AliasDef>,
 ) -> ParseResult<ParsedAnnotation> {
-    let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases);
+    let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases)
+        .at_source_offset(content_start);
     parser.seed_pvar_id(start_pvar_id);
     let ty = parser.parse()?;
     Ok((
@@ -1342,11 +1447,13 @@ pub fn parse_type_annotation_with_preds(
 pub fn parse_type_annotation_with_pvars(
     content: &str,
     span: Span,
+    content_start: Option<usize>,
     start_var_id: u32,
     start_pvar_id: u32,
     aliases: &HashMap<String, AliasDef>,
 ) -> ParseResult<(Type, HashMap<String, u32>, u32)> {
-    let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases);
+    let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases)
+        .at_source_offset(content_start);
     parser.seed_pvar_id(start_pvar_id);
     let ty = parser.parse()?;
     Ok((ty, parser.type_vars.clone(), parser.next_pvar_id_value()))
@@ -1363,13 +1470,15 @@ pub fn parse_type_annotation_with_pvars(
 pub fn parse_type_annotation_with_typeof(
     content: &str,
     span: Span,
+    content_start: Option<usize>,
     start_var_id: u32,
     start_pvar_id: u32,
     aliases: &HashMap<String, AliasDef>,
     typeof_table: &TypeOfTable,
 ) -> ParseResult<(Type, HashMap<String, u32>, u32)> {
-    let mut parser =
-        TypeParser::with_aliases(content, span, start_var_id, aliases).with_typeof(typeof_table);
+    let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases)
+        .with_typeof(typeof_table)
+        .at_source_offset(content_start);
     parser.seed_pvar_id(start_pvar_id);
     let ty = parser.parse()?;
     Ok((ty, parser.type_vars.clone(), parser.next_pvar_id_value()))

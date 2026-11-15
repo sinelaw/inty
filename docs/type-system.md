@@ -566,6 +566,54 @@ api.run(5);                // typed via `@type {typeof helper}`
 
 See [jsdoc-at-type.md](jsdoc-at-type.md) for the full rule.
 
+### Long annotations across lines
+
+An annotation can be written across lines, one field, parameter or union member per line, and means exactly what it means on one line. The recommended style is JSDoc's: the type starts on the keyword's line, every following line has a `*` margin, the last item has a trailing comma, and the closer shares its line with `*/`:
+
+```javascript
+/** type ScoreView = {
+ *   id: String,
+ *   size: Number,
+ *   fitWidth: Number,  // the width the page is laid out for (follows `width` less often while resizing)
+ *   engraveMs: Number, // how long the last engraving took
+ * } */
+
+/** function sideView(
+ *   b: Builder,
+ *   v: ScoreView,
+ *   c: Cached,
+ * ) => Undefined */
+function sideView(b, v, c) { /* … */ }
+
+/** const layout: {
+ *   width: Number,
+ *   pages: { n: Number, top: Number }[],
+ * } */
+const layout = { width: 0, pages: [] };
+
+/** type Shape =
+ *   | { kind: "circle", r: Number }
+ *   | { kind: "rect", w: Number, h: Number }
+ */
+```
+
+- **Margins.** On every line after the first, a leading `*` (after any spaces or tabs, and followed by one optional space) is a margin and is ignored, as JSDoc does. Lines with only a `*`, blank lines, and lines without a margin are fine too. A `*` that isn't at the start of a line is left alone. The keyword may also go on the line after `/**` (`/**` ⏎ ` * type ScoreView = {` …); written that way, the text must have an annotation's shape (`type X =`, `const c:`, `function f(` or `function f<`, `class C {`/`(`/`<`/`extends`), so an ordinary JSDoc block whose prose starts with "function …" or "type …" stays documentation.
+- **Trailing commas** are accepted after the last field of an object type, parameter of a function type, element of a tuple, type argument (`Map<K, V,>`) and type parameter (`<T, U,>`, `type Pair<A, B,> = …`). A union may start with `|`, so its members line up one per line.
+- **Comments.** `//` to the end of the line is a comment, anywhere in a `/** … */` annotation (outside a string literal type such as `"http://"`). It is the only comment syntax inside an annotation: `/* */` can't nest inside a doc comment. Comments are ignored by the checker.
+- **Errors** in a multi-line annotation are reported where they are: a typo in a field on the seventh line is reported at that line and that field's column, not at the comment's first line. (One-line annotations get this too: the error points at the offending name.)
+
+`inty fmt` lays out long annotations in this style for you (see [Formatting annotations](#formatting-annotations-inty-fmt)).
+
+#### Formatting annotations (`inty fmt`)
+
+```sh
+inty fmt web/                  # rewrite every .js file under web/ in place
+inty fmt --check web/          # list what would change; exit 1 if anything would
+inty fmt --width=120 app.js    # wrap at 120 columns instead of 100
+```
+
+`inty fmt` rewrites each one-line `type`, `function` and `const`/`let`/`var` annotation whose line is longer than the width (default 100) one field, parameter or union member per line, as above. When an annotation has more than one group (a function's parameters and a record it returns) the largest is broken, and an item that is itself too long is broken the same way, one level deeper. It leaves alone: annotations that fit, annotations already written across lines (so running it twice changes nothing more), annotations containing a `//` comment, `class` declarations, annotations of several declarators (`/** var a: A, b: B */`), and all code. Before replacing an annotation it checks that the new text reads to the same type as the old (ignoring whitespace, trailing commas and a leading `|`), and keeps the old one otherwise.
+
 ### Primitive and compound types
 
 ```javascript

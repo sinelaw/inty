@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -121,6 +122,9 @@ fn main() -> ExitCode {
     }
     if raw.get(1).map(String::as_str) == Some("go") {
         return run_go(&raw[2..]);
+    }
+    if raw.get(1).map(String::as_str) == Some("fmt") {
+        return run_fmt(&raw[2..]);
     }
 
     let args = match parse_args(raw) {
@@ -430,6 +434,136 @@ fn load_extra_libs(
         }
     }
     Ok((env, state))
+}
+
+const FMT_HELP: &str = "\
+inty fmt [--check] [--width=N] <file.js | dir>...
+
+Lay out each statement annotation (`/** type … */`, `/** function … */`,
+`/** const … */`) whose line is longer than the width (default 100) one
+field, parameter or union member per line, with a `*` margin and a
+trailing comma:
+
+    /** type ScoreView = {
+     *   id: String,
+     *   size: Number,
+     * } */
+
+Short annotations and annotations already written across lines are left
+as they are, as is all code; formatting twice changes nothing more. A
+directory is searched for .js files (skipping node_modules and hidden
+directories). Files are rewritten in place.
+
+OPTIONS:
+    --check       Rewrite nothing; list the files that would change and
+                  exit with 1 if there are any
+    --width=N     The line width to wrap at (default 100)";
+
+fn run_fmt(args: &[String]) -> ExitCode {
+    let mut check = false;
+    let mut width = inty::frontends::javascript::format::DEFAULT_WIDTH;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let width_arg = match arg.as_str() {
+            "--help" | "-h" => {
+                println!("{FMT_HELP}");
+                return ExitCode::SUCCESS;
+            }
+            "--check" => {
+                check = true;
+                continue;
+            }
+            "--width" => it.next().map(String::as_str),
+            _ if arg.starts_with("--width=") => Some(&arg["--width=".len()..]),
+            _ if arg.starts_with('-') => {
+                eprintln!("error: unknown option to 'fmt': {arg}");
+                return ExitCode::from(2);
+            }
+            _ => {
+                paths.push(PathBuf::from(arg));
+                continue;
+            }
+        };
+        match width_arg.and_then(|w| w.parse::<usize>().ok()) {
+            Some(w) if w > 0 => width = w,
+            _ => {
+                eprintln!("error: --width takes a positive number of columns");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    if paths.is_empty() {
+        eprintln!("error: no files to format\n\n{FMT_HELP}");
+        return ExitCode::from(2);
+    }
+    let mut files = Vec::new();
+    for p in &paths {
+        if p.is_dir() {
+            collect_js_files(p, &mut files);
+        } else {
+            files.push(p.clone());
+        }
+    }
+    let mut failed = false;
+    let mut would_change = false;
+    for file in files {
+        let source = match std::fs::read_to_string(&file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: {}: {e}", file.display());
+                failed = true;
+                continue;
+            }
+        };
+        let formatted =
+            match inty::frontends::javascript::format::format_annotations(&source, width) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("error: {}: {e}", file.display());
+                    failed = true;
+                    continue;
+                }
+            };
+        if formatted == source {
+            continue;
+        }
+        if check {
+            println!("{}", file.display());
+            would_change = true;
+        } else if let Err(e) = std::fs::write(&file, formatted) {
+            eprintln!("error: {}: {e}", file.display());
+            failed = true;
+        }
+    }
+    if failed || would_change {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// The `.js` files under `dir`, skipping `node_modules` and hidden
+/// directories, in a stable order.
+fn collect_js_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for p in entries {
+        let name = p
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if p.is_dir() {
+            if name != "node_modules" && !name.starts_with('.') {
+                collect_js_files(&p, out);
+            }
+        } else if name.ends_with(".js") {
+            out.push(p);
+        }
+    }
 }
 
 fn run_declarations(args: &[String]) -> ExitCode {
@@ -773,6 +907,8 @@ SUBCOMMANDS:
                          self-contained JS blob plus a v3 source map
     go                   (Proof of concept) translate a single-file
                          program to a standalone Go program
+    fmt                  Lay out long type annotations one field or
+                         parameter per line (`inty fmt --help`)
 
 DESCRIPTION:
     Inty performs static type inference on mquickjs JavaScript code.

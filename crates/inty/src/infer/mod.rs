@@ -406,7 +406,8 @@ impl InferState {
                     alias.span,
                     self.next_var_id(),
                     &self.type_aliases,
-                );
+                )
+                .at_source_offset(alias.content_start);
                 for (name, id) in alias.params.iter().zip(ids.iter()) {
                     parser.preset_var(name.clone(), *id);
                 }
@@ -576,6 +577,7 @@ impl InferState {
             crate::infer::type_parser::parse_type_annotation_with_preds(
                 &annotation.content,
                 span,
+                annotation.content_start,
                 self.next_var_id(),
                 self.next_pvar_id(),
                 &self.type_aliases,

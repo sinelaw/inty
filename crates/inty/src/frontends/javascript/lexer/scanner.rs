@@ -1,5 +1,6 @@
 //! Character-level scanner for tokenizing JavaScript source.
 
+use super::doc_annotation::{clean_doc_body, read_doc_annotation};
 use super::token::{Span, Spanned, Token};
 use crate::ast::{AnnotationKind, TypeAlias, TypeAnnotation};
 use crate::error::{LexError, Result};
@@ -26,6 +27,9 @@ pub struct Scanner<'a> {
     /// Most recently emitted identifier and its end position, used to
     /// attach inline `/*: T */` annotations to the name that precedes them.
     last_ident: Option<(String, usize)>,
+    /// The `/** … */` comments read as statement annotations (`/** type
+    /// … */`, `/** const … */`, …), whole, for the annotation formatter.
+    annotation_comments: Vec<Span>,
 }
 
 /// With `INTY_CORPUS_OUT` set, the unit tests append each program they
@@ -64,6 +68,7 @@ impl<'a> Scanner<'a> {
             last_token_allows_regex: true, // At start of file, / is regex
             template_depth: 0,
             last_ident: None,
+            annotation_comments: Vec::new(),
         }
     }
 
@@ -372,6 +377,7 @@ impl<'a> Scanner<'a> {
                             if self.peek().map(|(_, c)| c == ':').unwrap_or(false) {
                                 self.advance(); // consume ':'
                                 self.skip_whitespace();
+                                let content_start = self.current_pos;
                                 let content = self.read_until_comment_end();
                                 self.consume_comment_end();
                                 if let Some((name, _)) = self.last_ident.clone() {
@@ -380,76 +386,43 @@ impl<'a> Scanner<'a> {
                                         content: content.trim().to_string(),
                                         span: Span::new(start, self.current_pos),
                                         kind: AnnotationKind::Inline,
+                                        content_start: Some(content_start),
                                     });
                                 }
                                 continue;
                             }
 
-                            // Check if this is a doc comment /**
-                            if self.peek().map(|(_, c)| c == '*').unwrap_or(false) {
+                            // A doc comment `/** … */`: a statement
+                            // annotation (`/** const c: T */`, `/** type
+                            // A = … */`, …), read from the comment's
+                            // body with its JSDoc margins and `//`
+                            // comments blanked out (`doc_annotation`), or
+                            // else an ordinary doc comment.
+                            // (`/**/` is an empty comment, not a doc comment.)
+                            if self.peek().map(|(_, c)| c == '*').unwrap_or(false)
+                                && self.peek_next() != Some('/')
+                            {
                                 self.advance(); // consume third *
-                                self.skip_whitespace();
-
-                                // Try to read keyword
-                                let keyword = self.peek_keyword();
-
-                                match keyword.as_deref() {
-                                    Some("var") | Some("const") | Some("let") => {
-                                        let kw = keyword.unwrap();
-                                        self.advance_keyword(&kw);
-                                        self.parse_var_annotations(start);
-                                        continue;
-                                    }
-                                    Some("function") => {
-                                        self.advance_keyword("function");
-                                        self.parse_function_annotation(start);
-                                        continue;
-                                    }
-                                    Some("class") => {
-                                        self.advance_keyword("class");
-                                        self.parse_class_annotation(start);
-                                        continue;
-                                    }
-                                    Some("type") => {
-                                        self.advance_keyword("type");
-                                        self.parse_type_alias(start, false);
-                                        continue;
-                                    }
-                                    Some("nominal") => {
-                                        self.advance_keyword("nominal");
-                                        self.skip_whitespace();
-                                        // `nominal type Name = …`. The
-                                        // `type` keyword is required;
-                                        // anything else is a malformed
-                                        // annotation we quietly drop.
-                                        if self.peek_keyword().as_deref() == Some("type") {
-                                            self.advance_keyword("type");
-                                            self.parse_type_alias(start, true);
+                                let body_start = self.current_pos;
+                                if let Some(len) = self.source[body_start..].find("*/") {
+                                    let raw = &self.source[body_start..body_start + len];
+                                    let cleaned = clean_doc_body(raw);
+                                    if let Some(doc) =
+                                        read_doc_annotation(raw, &cleaned, body_start, start)
+                                    {
+                                        self.type_annotations.extend(doc.annotations);
+                                        self.type_aliases.extend(doc.aliases);
+                                        let comment_end = body_start + len + 2;
+                                        self.annotation_comments
+                                            .push(Span::new(start, comment_end));
+                                        while self.current_pos < comment_end
+                                            && self.advance().is_some()
+                                        {
                                         }
                                         continue;
                                     }
-                                    Some("export") => {
-                                        self.advance_keyword("export");
-                                        self.skip_whitespace();
-                                        // Check for "export var" or "export function"
-                                        let next_kw = self.peek_keyword();
-                                        match next_kw.as_deref() {
-                                            Some("var") | Some("const") | Some("let") => {
-                                                let kw = next_kw.unwrap();
-                                                self.advance_keyword(&kw);
-                                                self.parse_var_annotations(start);
-                                                continue;
-                                            }
-                                            Some("function") => {
-                                                self.advance_keyword("function");
-                                                self.parse_function_annotation(start);
-                                                continue;
-                                            }
-                                            _ => {} // fall through to regular comment
-                                        }
-                                    }
-                                    _ => {} // fall through to regular comment
                                 }
+                                self.skip_whitespace();
                             }
 
                             // Regular doc comment — capture the body so
@@ -494,6 +467,7 @@ impl<'a> Scanner<'a> {
                                     content,
                                     span: Span::new(start, self.current_pos),
                                     kind: AnnotationKind::JsDoc,
+                                    content_start: None,
                                 });
                             }
                         }
@@ -1233,109 +1207,6 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Peek ahead to read identifier without consuming
-    fn peek_keyword(&self) -> Option<String> {
-        let iter = self.chars.clone();
-        let mut result = String::new();
-
-        for (_, ch) in iter {
-            if ch.is_alphabetic() || ch == '_' || (!result.is_empty() && ch.is_alphanumeric()) {
-                result.push(ch);
-            } else {
-                break;
-            }
-        }
-
-        if result.is_empty() {
-            None
-        } else {
-            Some(result)
-        }
-    }
-
-    /// Advance past the keyword characters
-    fn advance_keyword(&mut self, kw: &str) {
-        for _ in kw.chars() {
-            self.advance();
-        }
-    }
-
-    /// Read an identifier from current position
-    fn read_identifier(&mut self) -> String {
-        let mut name = String::new();
-        while let Some((_, ch)) = self.peek() {
-            if Self::is_ident_char(ch) {
-                name.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        name
-    }
-
-    /// Read content until we hit a comma or end of comment (*/)
-    fn read_until_comma_or_end(&mut self) -> String {
-        let mut content = String::new();
-        let mut paren_depth: i32 = 0;
-        let mut brace_depth: i32 = 0;
-        let mut angle_depth: i32 = 0;
-        // `[A, B]` tuple types.
-        let mut bracket_depth: i32 = 0;
-        // Inside a scheme's `where C, … =>` clause, whose commas separate
-        // constraints, not declarators.
-        let mut in_where = false;
-
-        while let Some((_, ch)) = self.peek() {
-            // Check for end of comment
-            if ch == '*' && self.peek_next() == Some('/') {
-                break;
-            }
-            let top =
-                paren_depth == 0 && brace_depth == 0 && angle_depth == 0 && bracket_depth == 0;
-            if top && !in_where && ch.is_whitespace() && content.ends_with("where") {
-                let before = content[..content.len() - 5].chars().last();
-                if before.is_some_and(|c| c.is_whitespace() || c == '>') {
-                    in_where = true;
-                }
-            }
-            if top && in_where && ch == '>' && content.ends_with('=') {
-                in_where = false;
-                content.push(ch);
-                self.advance();
-                continue;
-            }
-            // Comma at top level ends this type annotation. Commas inside
-            // parens `(A, B) => C`, braces `{a: T, b: U}` and angle
-            // brackets `<T, U>` are part of the current type.
-            if ch == ',' && top && !in_where {
-                break;
-            }
-            if ch == '(' {
-                paren_depth += 1;
-            } else if ch == ')' {
-                paren_depth = paren_depth.saturating_sub(1);
-            } else if ch == '{' {
-                brace_depth += 1;
-            } else if ch == '}' {
-                brace_depth = brace_depth.saturating_sub(1);
-            } else if ch == '[' {
-                bracket_depth += 1;
-            } else if ch == ']' {
-                bracket_depth = bracket_depth.saturating_sub(1);
-            } else if ch == '<' {
-                angle_depth += 1;
-            } else if ch == '>' && angle_depth > 0 {
-                // Only treat `>` as closing if we opened one. Otherwise it's
-                // part of `=>`, which shouldn't affect nesting.
-                angle_depth -= 1;
-            }
-            content.push(ch);
-            self.advance();
-        }
-        content
-    }
-
     /// Read content until end of comment
     fn read_until_comment_end(&mut self) -> String {
         let mut content = String::new();
@@ -1357,167 +1228,6 @@ impl<'a> Scanner<'a> {
         if self.peek().map(|(_, c)| c == '/').unwrap_or(false) {
             self.advance(); // /
         }
-    }
-
-    /// Parse variable annotations: name: Type [, name: Type]*
-    fn parse_var_annotations(&mut self, start: usize) {
-        self.skip_whitespace();
-
-        loop {
-            // Read name
-            let name = self.read_identifier();
-            if name.is_empty() {
-                break;
-            }
-
-            self.skip_whitespace();
-
-            // Expect ':'
-            if !self.peek().map(|(_, c)| c == ':').unwrap_or(false) {
-                break;
-            }
-            self.advance(); // consume ':'
-            self.skip_whitespace();
-
-            // Read type until ',' or '*/'
-            let content = self.read_until_comma_or_end();
-
-            self.type_annotations.push(TypeAnnotation {
-                name: name.trim().to_string(),
-                content: content.trim().to_string(),
-                span: Span::new(start, self.current_pos + 2),
-                kind: AnnotationKind::Inline,
-            });
-
-            self.skip_whitespace();
-
-            // Check for comma to continue
-            if self.peek().map(|(_, c)| c == ',').unwrap_or(false) {
-                self.advance(); // consume ','
-                self.skip_whitespace();
-                continue;
-            }
-            break;
-        }
-
-        // Consume closing */
-        self.consume_comment_end();
-    }
-
-    /// Parse function annotation: name(params): ReturnType
-    fn parse_function_annotation(&mut self, start: usize) {
-        self.skip_whitespace();
-
-        let name = self.read_identifier();
-        if name.is_empty() {
-            // Fall back to consuming as regular comment
-            self.consume_comment_end();
-            return;
-        }
-
-        self.skip_whitespace();
-
-        // Read everything from current position to */ as content
-        let content = self.read_until_comment_end();
-
-        self.type_annotations.push(TypeAnnotation {
-            name: name.trim().to_string(),
-            content: content.trim().to_string(),
-            span: Span::new(start, self.current_pos + 2),
-            kind: AnnotationKind::Inline,
-        });
-
-        self.consume_comment_end();
-    }
-
-    /// Parse `/** class Name … */`, an external class's declaration: the
-    /// name, then everything up to the comment's end.
-    fn parse_class_annotation(&mut self, start: usize) {
-        self.skip_whitespace();
-        let name = self.read_identifier();
-        if name.is_empty() {
-            self.consume_comment_end();
-            return;
-        }
-        let content = self.read_until_comment_end();
-        self.type_annotations.push(TypeAnnotation {
-            name: name.trim().to_string(),
-            content: strip_doc_decoration(content.trim()).trim().to_string(),
-            span: Span::new(start, self.current_pos + 2),
-            kind: AnnotationKind::Class,
-        });
-        self.consume_comment_end();
-    }
-
-    /// Parse `/** type Name<P1, P2> = body */`. Captures the alias
-    /// name, parameter list (possibly empty for `type Foo = ...`),
-    /// and body string. The body is re-parsed at inference time so
-    /// the parameter names can map to fresh type-variable IDs.
-    fn parse_type_alias(&mut self, start: usize, nominal: bool) {
-        self.skip_whitespace();
-
-        let name = self.read_identifier();
-        if name.is_empty() {
-            self.consume_comment_end();
-            return;
-        }
-        self.skip_whitespace();
-
-        // Optional `<P1, P2, ...>` list.
-        let mut params: Vec<String> = Vec::new();
-        if self.peek().map(|(_, c)| c == '<').unwrap_or(false) {
-            self.advance(); // <
-            loop {
-                self.skip_whitespace();
-                let p = self.read_identifier();
-                if p.is_empty() {
-                    self.consume_comment_end();
-                    return;
-                }
-                params.push(p);
-                self.skip_whitespace();
-                match self.peek().map(|(_, c)| c) {
-                    Some(',') => {
-                        self.advance();
-                    }
-                    Some('>') => {
-                        self.advance();
-                        break;
-                    }
-                    _ => {
-                        self.consume_comment_end();
-                        return;
-                    }
-                }
-            }
-            self.skip_whitespace();
-        }
-
-        // Expect `=`.
-        if !self.peek().map(|(_, c)| c == '=').unwrap_or(false) {
-            self.consume_comment_end();
-            return;
-        }
-        self.advance(); // =
-        self.skip_whitespace();
-
-        // Body runs until `*/`.
-        let body = self.read_until_comment_end();
-        let span = Span::new(start, self.current_pos + 2);
-        self.type_aliases.push(TypeAlias {
-            name: name.trim().to_string(),
-            params,
-            body: body.trim().to_string(),
-            body_ast: None,
-            span,
-            nominal,
-        });
-
-        self.consume_comment_end();
-    }
-
-    fn is_ident_char(ch: char) -> bool {
-        Self::is_id_continue(ch)
     }
 
     /// ECMAScript `IdentifierStart`: Unicode `ID_Start`, `$` or `_`.
@@ -1552,6 +1262,12 @@ impl<'a> Scanner<'a> {
     /// Get collected type annotations
     pub fn type_annotations(&self) -> &[TypeAnnotation] {
         &self.type_annotations
+    }
+
+    /// The doc comments read as statement annotations so far, each
+    /// from its `/**` to its `*/`.
+    pub fn annotation_comments(&self) -> &[Span] {
+        &self.annotation_comments
     }
 }
 
@@ -1775,6 +1491,23 @@ mod tests {
             tokenize("/* comment */ 42"),
             vec![Token::Number(42.0), Token::Eof]
         );
+    }
+
+    #[test]
+    fn an_empty_comment_ends_where_it_ends() {
+        let (tokens, annotations, _) = Scanner::new("a /**/ b /** const c: Number */")
+            .tokenize()
+            .unwrap();
+        let idents: Vec<_> = tokens
+            .iter()
+            .filter_map(|t| match &t.value {
+                Token::Ident(n) => Some(n.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(idents, ["a", "b"]);
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].content, "Number");
     }
 
     #[test]

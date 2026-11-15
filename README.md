@@ -60,6 +60,14 @@ inty path/to/file.py
 The frontend is picked from the file extension. Run `inty --help` for the full
 set of options.
 
+Lay out long type annotations one field or parameter per line (see
+[Long annotations across lines](docs/type-system.md#long-annotations-across-lines)):
+
+```sh
+inty fmt src/            # rewrite in place
+inty fmt --check src/    # exit 1 if anything would change
+```
+
 The LSP server is included as a CLI command (`inty lsp`). A minimal VS Code
 adapter lives in [`editors/vscode/`](editors/vscode/) — run
 [`editors/vscode/install.sh`](editors/vscode/install.sh) to build, package, and

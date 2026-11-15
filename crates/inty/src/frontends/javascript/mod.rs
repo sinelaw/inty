@@ -4,6 +4,7 @@
 //! it to the shared [`crate::ast`]. JavaScript is one frontend among
 //! several; Lua and Python are its peers under [`crate::frontends`].
 
+pub mod format;
 pub mod lexer;
 pub mod parser;
 

@@ -502,6 +502,7 @@ impl Parser {
             body_ast: Some(body_ast),
             span,
             nominal: false,
+            content_start: None,
         });
         Some(Stmt::Empty { span })
     }

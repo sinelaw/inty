@@ -1399,6 +1399,7 @@ impl Parser {
                         content,
                         span: Span::new(type_start, type_end),
                         kind: AnnotationKind::Inline,
+                        content_start: None,
                     });
                 }
 

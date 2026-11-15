@@ -568,6 +568,7 @@ impl InferState {
             let (annotated_type, var_map, next_pvar) = parse_type_annotation_with_pvars(
                 &annotation.content,
                 annotation_span,
+                annotation.content_start,
                 self.next_var_id(),
                 self.next_pvar_id(),
                 &self.type_aliases,
@@ -1624,6 +1625,7 @@ impl InferState {
         let (ann_ty, var_map, next_pvar, preds) = parse_type_annotation_with_preds(
             &annotation.content,
             annotation_span,
+            annotation.content_start,
             self.next_var_id(),
             self.next_pvar_id(),
             &self.type_aliases,
