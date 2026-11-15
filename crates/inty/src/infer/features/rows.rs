@@ -128,6 +128,7 @@ impl InferState {
         // counts; the result is closed but `row_tail` may have been
         // set and then overridden back to Closed.
         let mut had_spread = false;
+        let mut spread_of_error = false;
         // The result of a spread waiting on its operand (`Spread`): the
         // fields written after it are merged over it, not added beside it,
         // since the operand may have them too.
@@ -357,6 +358,13 @@ impl InferState {
                     had_spread = true;
                     let arg_ty = self.infer_expr(env, argument)?;
                     let resolved = self.zonk(&arg_ty);
+                    // A spread of a value whose type failed (an import
+                    // from a module with errors): the object's fields
+                    // aren't known, so the object's type is `Error` too.
+                    if matches!(resolved, Type::Error) {
+                        spread_of_error = true;
+                        continue;
+                    }
                     if let Some(base) = waiting_spread.take() {
                         (props, row_tail) = self.merge_written_fields(*spread_span, base, props)?;
                     }
@@ -397,6 +405,10 @@ impl InferState {
             }
         }
 
+        if spread_of_error {
+            self.unify(span, &shared_this, &Type::Error)?;
+            return Ok(Type::Error);
+        }
         if let Some(base) = waiting_spread.take() {
             (props, row_tail) = self.merge_written_fields(span, base, props)?;
         }

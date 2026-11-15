@@ -1333,6 +1333,59 @@ mod tests {
         assert!(format!("{}", err).contains("circular"));
     }
 
+    // Rosaclef (moving to 276dd1f): an importer of a module that failed
+    // reported errors in its own, correct code ("Property 'bank' not found
+    // in type Boolean"). The failed module's names are typed `Error`, and a
+    // type variable that met one stayed free (`c ? bad : undefined` is
+    // `Undefined | α`, `bad[i]` and `bad.find(…)` a fresh `α`), so the
+    // first use pinned it (`x && x.f === 1` made it a `Boolean`) and every
+    // later use was checked against that.
+    #[test]
+    fn an_importer_of_a_failed_module_reports_nothing_of_its_own() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "store.js",
+            "export const state = { xs: [{ bank: 1, name: \"a\" }] };\nconst oops = 1 - \"s\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            r#"import { state } from "./store.js";
+/** function f(i: Number, name: String) => Number */
+export function f(i, name) {
+  const coll = state.xs;
+  const pr = coll ? coll.find((x) => x.name === name) : undefined;
+  if (pr && pr.bank === 128) return 38;
+  const c = state.xs[i];
+  if (c && c.name !== "") return 1;
+  const d = state.xs.find((x) => x.bank === 1);
+  if (d && d.name !== "") return 2;
+  const copy = { ...state, more: [] };
+  return copy.more.length;
+}
+"#,
+        );
+        let mut state = InferState::new();
+        let mut errors = Vec::new();
+        for entry in ["store.js", "main.js"] {
+            let checked = check_entry(
+                &mut state,
+                crate::builtins::initial_env(),
+                &dir.path().join(entry),
+            );
+            errors.extend(state.take_errors());
+            if let Err(e) = checked {
+                if !errors.iter().any(|r| format!("{r:?}") == format!("{e:?}")) {
+                    errors.push(e);
+                }
+            }
+        }
+        let shown: Vec<String> = errors.iter().map(|e| format!("{e}")).collect();
+        assert_eq!(shown.len(), 1, "only store.js's own error: {shown:#?}");
+        assert!(shown[0].contains("String"), "{shown:#?}");
+    }
+
     // Rosaclef: a module that failed was checked again by each importer,
     // which failed with it (its own code unchecked), and its error was
     // reported once per importer.

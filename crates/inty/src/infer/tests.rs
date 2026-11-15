@@ -3151,24 +3151,27 @@ fn error_unifies_with_compound_types() {
 }
 
 #[test]
-fn error_unifies_with_flex_var_without_binding_it() {
-    // Specifically: unifying Error with a fresh var should not bind
-    // the var to Error (which would propagate Error to every site
-    // that shares the var). The current rule is to short-circuit
-    // before var_bind, leaving the var unconstrained.
+fn error_unifies_with_flex_var_and_binds_it_to_error() {
+    // Unifying Error with a variable makes the variable Error too, as
+    // every operation on Error gives Error. Left free, the variable was
+    // pinned by its first later use, and every use after that was
+    // checked against a type nobody wrote (Rosaclef: an importer of a
+    // failed module reported "Property 'bank' not found in type
+    // Boolean"). Inside a structure, its variables become Error.
     let mut state = InferState::new();
     let span = crate::span::Span::new(0, 0);
     let v = state.fresh_type_var();
     state
         .unify(span, &Type::Error, &v)
         .expect("Error ~ Var must succeed");
-    // The var should still be a free type variable, not bound to Error.
     let resolved = state.apply_subst(&v);
-    assert!(
-        matches!(resolved, Type::Var(_)),
-        "expected var to remain free, got {:?}",
-        resolved
-    );
+    assert!(matches!(resolved, Type::Error), "got {:?}", resolved);
+    let w = state.fresh_type_var();
+    let arr = Type::Array(Box::new(w.clone()));
+    state
+        .unify(span, &arr, &Type::Error)
+        .expect("Array ~ Error must succeed");
+    assert!(matches!(state.apply_subst(&w), Type::Error));
 }
 
 #[test]
@@ -5459,7 +5462,7 @@ fn a_record_field_holds_a_callback() {
     // A property's own annotation says the same.
     let src = "const hooks = {\n\
                /** @type {() => Undefined} */\n\
-               mark: null,\n\
+               mark: () => undefined,\n\
                };\n\
                hooks.mark = () => undefined;\n\
                hooks.mark();\n\

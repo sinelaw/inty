@@ -153,7 +153,15 @@ impl InferState {
             // substitution emitted, no constraint added.
             // The original error has already been reported by the
             // recovery point; cascading is the noise we're avoiding.
-            (Type::Error, _) | (_, Type::Error) => Ok(()),
+            // A type variable met by `Error` becomes `Error` too: left
+            // free, the first later use would pin it, and every use
+            // after that would be checked against a type nobody wrote
+            // (`c ? errorValue : undefined` is `Undefined | α`, then
+            // `x && x.f === 1` made `α` a `Boolean`).
+            (Type::Error, t) | (t, Type::Error) => {
+                self.absorb_error(span, t);
+                Ok(())
+            }
 
             // Same variable
             (Type::Var(v1), Type::Var(v2)) if v1 == v2 => Ok(()),
@@ -478,6 +486,50 @@ impl InferState {
 
         // Bind the variable
         self.extend_subst(span, TVarName::Flex(var), ty.clone())
+    }
+
+    /// Bind each free type variable of `t` to `Error` (see the `Error`
+    /// arm of `unify_impl`). A row's tail stays as it is: it stands for
+    /// fields, not for a type.
+    pub(crate) fn absorb_error(&mut self, span: Span, t: &Type) {
+        let t = self.zonk(t);
+        self.absorb_error_in(span, &t);
+    }
+
+    fn absorb_error_in(&mut self, span: Span, t: &Type) {
+        match t {
+            Type::Var(TVarName::Flex(n)) => {
+                let _ = self.extend_subst(span, TVarName::Flex(*n), Type::Error);
+            }
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                if let Some(this) = this_type {
+                    self.absorb_error_in(span, this);
+                }
+                for p in params {
+                    self.absorb_error_in(span, &p.ty);
+                }
+                self.absorb_error_in(span, ret);
+            }
+            Type::Row(row) => {
+                for entry in row.props.values() {
+                    self.absorb_error_in(span, &entry.ty);
+                }
+            }
+            Type::Array(inner)
+            | Type::Maybe(_, inner)
+            | Type::Promise(inner)
+            | Type::Map(inner) => self.absorb_error_in(span, inner),
+            Type::Tuple(ts) | Type::Union(ts) | Type::Named(_, ts) => {
+                for t in ts {
+                    self.absorb_error_in(span, t);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Unify an array type with a row type.

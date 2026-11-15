@@ -1093,6 +1093,18 @@ impl InferState {
         // type that flowed in already failed inference; making its
         // dependent uses fail their type-class checks too would
         // produce one noise diagnostic per use site.
+        // What the constraint would have found out about a value of an
+        // `Error` type (an element, a field) is `Error` too: left a free
+        // variable, its first use would pin it (`const c = bad[i];
+        // c && c.f !== ""` made `c` a `Boolean`).
+        if let Some(first) = pred.types.first() {
+            if matches!(self.apply_subst(first), Type::Error) {
+                for t in &pred.types[1..] {
+                    self.absorb_error(span, t);
+                }
+                return Ok(());
+            }
+        }
         if pred
             .types
             .iter()
