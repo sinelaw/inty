@@ -353,7 +353,7 @@ impl InferState {
     fn sole_write_narrowing(&mut self, span: Span) -> Option<Narrowing> {
         let value = self.assigned_values.get(&(span.start, span.end))?.clone();
         let value = self.apply_subst(&value);
-        value_narrowing(&value, self.language)
+        value_narrowing(self, &value, self.language)
     }
 
     /// The one write (see [`Self::sole_write_stmt`]) of the binding `name`

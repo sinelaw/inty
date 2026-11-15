@@ -199,6 +199,11 @@ impl Resolution {
         self.sole_write[id as usize]
     }
 
+    /// Whether the binding `id` is never written after its initialiser.
+    pub fn is_stable(&self, id: BindingId) -> bool {
+        self.stable.get(id as usize).copied().unwrap_or(false)
+    }
+
     /// Whether the binding `name` at `span` refers to occurs in a function
     /// nested inside the one that declares it.
     pub fn captured_at(&self, span: Span, name: &str) -> bool {

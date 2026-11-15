@@ -266,9 +266,11 @@ narrowed one (`infer_assign`).
 What is not covered: a second write (`x ||= []` and `x = x || []` are
 writes too, but `x = x || []` alone is one: after it `x` is truthy), a
 write inside a nested block of the filling branch, or one from a closure.
-A function declaration is hoisted and checked before the statements
-around it, so it never sees these narrowings. The rules are JavaScript
-only.
+A function declaration is hoisted (it can run before the write), so it
+is checked with what is known of written bindings dropped, whatever
+statement inference reaches it after (`hoisted_env`). `W(x)` looks
+through a recursive alias (`type L = Null | {…}` may be `null`) and is
+empty for a type not known yet. The rules are JavaScript only.
 
 The Lean model has no narrowing of a written binding (its `unwrap`
 narrows a copy); this extension is listed in `lean/GAPS.md`.

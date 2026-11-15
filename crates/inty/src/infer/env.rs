@@ -275,6 +275,24 @@ impl TypeEnv {
         out
     }
 
+    /// A copy with the bindings `drop` picks at their own schemes.
+    pub fn without_narrowings_of(&self, drop: impl Fn(&Key) -> bool) -> Self {
+        let mut out = self.clone();
+        for (key, e) in &self.bindings {
+            if let (Some(declared), true) = (&e.binding.declared, drop(key)) {
+                out.bindings.insert(
+                    key.clone(),
+                    Entry::new(Binding {
+                        scheme: declared.clone(),
+                        mutability: e.binding.mutability,
+                        declared: None,
+                    }),
+                );
+            }
+        }
+        out
+    }
+
     /// A copy with every binding's own scheme.
     pub fn without_narrowings(&self) -> Self {
         let mut out = self.clone();

@@ -903,6 +903,32 @@ fn a_binding_written_once_is_not_narrowed_where_it_may_not_hold() {
     ] {
         err(&format!("export function run() {{ {decl} {body} }}"));
     }
+    // A write the `try` block may not reach before the `catch` runs.
+    err(&format!(
+        "export function run(c) {{ {decl} try {{ if (c) throw new Error(\"e\"); x = []; }} catch (e) {{}} return x.length; }}"
+    ));
+    // A `switch` case entered directly, not through the one that writes.
+    err(&format!(
+        "export function run(c) {{ {decl} switch (c) {{ case 1: x = []; case 2: return x.length; }} return 0; }}"
+    ));
+    // A hoisted function checked after the write (it reads a `const`
+    // declared after it) can still run before it.
+    err(&format!(
+        "export function run() {{ {decl} x = []; const j = 2; function g() {{ return x.length + j; }} return 0; }}"
+    ));
+    // What the write's value is, through a recursive alias with `null` in
+    // it: nothing (the value may be `null`).
+    err("
+        /** type L = Null | {v: Number, next: L} */
+        /** function nxt() => L */
+        function nxt() { return null; }
+        export function run() {
+          /** let x: L */
+          let x = {v: 1, next: null};
+          x = nxt();
+          return x.v;
+        }
+    ");
     // Written from a closure: not written once in the declaring function.
     err(&format!(
         "{decl} export function run() {{ if (!x) {{ x = []; }} return x.length; }}"
