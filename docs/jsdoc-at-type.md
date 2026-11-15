@@ -24,9 +24,10 @@ htmx.process = processNode;
 
 Each field is initialised with `null`, then JSDoc-typed to the
 forward-declared helper's type, then filled in by a later assignment.
-TypeScript's JSDoc reader accepts this pattern. Without `@type`
-support, inty infers each field as `Null` and every assignment fails
-with `expected 'Null', found '(…) => …'`.
+Without `@type` support, inty infers each field as `Null` and every
+assignment fails with `expected 'Null', found '(…) => …'`. In inty the
+`null` start is part of the field's type: `(typeof onLoadHelper) | Null`
+(see "The initialiser is checked" below).
 
 The same scheme also covers the `htmx.config` sub-object, where
 fields use the bare `@type T` form (no braces):
@@ -73,35 +74,34 @@ declarations before processing non-function statements, so `typeof
 helperName` succeeds even when `helperName` is declared after the
 annotated object literal.
 
-### The placeholder rule
+### The initialiser is checked
 
-When the annotation kind is `@type` (JSDoc) **and** the property's
-initialiser is a literal `null` or `undefined`, inty skips the usual
-"value must subsume annotation" check and binds the field at exactly
-the annotated type. This is the rule that makes the htmx pattern
-work — `null` is a stand-in for the eventual helper, not a real
-value the field is supposed to hold.
-
-Inline `/*: T */` annotations and non-placeholder values still
-check normally:
+The initialiser is checked against the annotation, whatever its form
+(`@type {T}` or inline `/*: T */`) and whatever its value, exactly as a
+`const`'s initialiser is checked against `/** const c: T */`:
 
 ```js
-// Inline annotation: subsume check runs — error.
-let x = { count /*: Number */: "oops" };
-
-// JSDoc annotation with non-placeholder value: still error.
-let y = {
-  /** @type {Number} */
-  count: "oops"
+// Error: expected '() => Undefined', found 'Null'.
+export const hooks = {
+  /** @type {() => Undefined} */
+  mark: null,
 };
+hooks.mark();          // would throw: mark is still null
 
-// JSDoc annotation with placeholder: accepted, field typed as Number.
-let z = {
-  /** @type {Number} */
-  count: null
+// Accepted: the field may be nothing, and a call tests it first.
+export const hooks2 = {
+  /** @type {(() => Undefined) | Null} */
+  mark: null,
 };
-z.count = 42;  // type-checks
+const m = hooks2.mark;
+if (m) m();
 ```
+
+An earlier version treated a literal `null` / `undefined` under `@type`
+as a placeholder that stood for `T`, following TypeScript's JSDoc
+reading without `strictNullChecks`. That let a field declared a function
+be called while still `null`, a TypeError at run time, so it was
+removed: the field says it may be `Null`.
 
 ## Where it lives in the code
 
@@ -111,7 +111,7 @@ z.count = 42;  // type-checks
 | `crates/inty/src/lexer/scanner.rs` | `extract_jsdoc_type_tag` scans a `/** ... */` body for `@type` tags. Strips per-line `*` decoration for multi-line braced forms. Records the annotation with an empty `name` (= "attaches to the next named binding") and `JsDoc` kind. |
 | `crates/inty/src/parser/mod.rs` | `try_get_jsdoc_type_annotation` consumes unnamed JSDoc annotations whose span ends before the current position. `parse_property_definition` calls it before reading the property key. Inline `/*: T */` still wins when both are present. |
 | `crates/inty/src/infer/type_parser.rs` | `TypeOfTable` is a `HashMap<String, Type>` of pre-instantiated `typeof X` references. `TypeParser` consults it from `parse_primary_type` when it sees the `typeof` keyword. |
-| `crates/inty/src/infer/features/rows.rs` | `build_typeof_table` pre-scans the annotation content for `typeof IDENT` substrings and instantiates each against the surrounding env. `infer_object` and `check_object` thread it through, skip the subsume check for `JsDoc` annotations with placeholder values, and downgrade parse failures to non-fatal warnings. |
+| `crates/inty/src/infer/features/rows.rs` | `build_typeof_table` pre-scans the annotation content for `typeof IDENT` substrings and instantiates each against the surrounding env. `infer_object` and `check_object` thread it through, check the initialiser against the annotation, and downgrade a `JsDoc` annotation's parse failure to a non-fatal warning. |
 
 The pre-instantiation approach (rather than a closure stored in the
 parser) is deliberate: it sidesteps the `&mut InferState` borrow that
@@ -123,8 +123,7 @@ in-parser instantiation would require.
   htmx doesn't use this shape (its `@type`s are all on object-literal
   fields). Adding it is a straight extension — `try_get_jsdoc_type_annotation`
   is already called at the right place; we'd just need an analogous
-  consume in `parse_var_declaration` and the subsume relaxation in
-  `infer_var`.
+  consume in `parse_var_declaration`.
 
 - **`@param` and `@returns` on function declarations.** These are
   the next-most-common JSDoc shapes htmx uses. Worth doing, but a

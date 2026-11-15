@@ -458,15 +458,11 @@ pub enum ChainSegment {
     },
 }
 
-/// Where the annotation came from. Affects how inference treats the
-/// initialiser. `Inline` annotations (TS-style `field: T` and the
-/// inty-native `/*: T */`) check that the initialiser subsumes the
-/// annotated type. `JsDoc` annotations (`/** @type {T} */`) follow
-/// TypeScript's JSDoc semantics: a literal `null` / `undefined`
-/// initialiser is treated as a placeholder and skipped — the
-/// declaration is what types the field, not the seed value. This
-/// matches the htmx-style `/** @type {typeof helper} */ field: null`
-/// pattern that fills the field via later assignment.
+/// Where the annotation came from. Either way the initialiser is
+/// checked against the annotated type (a `null` start is declared
+/// `T | Null`); a `JsDoc` annotation (`/** @type {T} */`) that doesn't
+/// parse is ignored with a warning, as TypeScript ignores JSDoc it
+/// doesn't understand, where an `Inline` one is an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AnnotationKind {
     /// `/*: T */`, TS-style `field: T`, or `/** name: T */` doc form.

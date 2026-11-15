@@ -552,16 +552,17 @@ Two forms of type annotations:
 - **Doc-comment statement** preceding a declaration: `/** var x: T */`, `/** function f(...) => T */`, `/** const c: T */`, `/** type Name = ... */`.
 - **Inline trailing comment** on a binder or parameter: `var x /*: T */ = 1`, `function f(x /*: Number */) { ... }`.
 
-JSDoc `/** @type {T} */` is also accepted, attached to the next object-literal field. With a `null` or `undefined` initialiser, the field is declared at `T` and the initialiser is treated as a placeholder (matching TypeScript's JSDoc rule). `typeof Helper` inside `T` resolves to the value type of a binding in scope:
+JSDoc `/** @type {T} */` is also accepted, attached to the next object-literal field. The field is declared at `T`, and its initialiser is checked against `T` as a `const`'s is, `null` and `undefined` included: a field that starts as `null` and is filled in later is declared `T | Null`. `typeof Helper` inside `T` resolves to the value type of a binding in scope:
 
 ```javascript
 const api = {
-  /** @type {typeof helper} */
+  /** @type {(typeof helper) | Null} */
   run: null
 };
 function helper(n) { return n + 1; }
 api.run = helper;
-api.run(5);                // typed via `@type {typeof helper}`
+const run = api.run;
+run ? run(5) : 0;          // typed via `@type {(typeof helper) | Null}`
 ```
 
 See [jsdoc-at-type.md](jsdoc-at-type.md) for the full rule.

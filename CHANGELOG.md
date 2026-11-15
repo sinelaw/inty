@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixes from moving Rosaclef to 276dd1f
+
+- An object-literal field's `/** @type {T} */` annotation checks its
+  initialiser, as a `const`'s does: `/** @type {() => Undefined} */ mark:
+  null` is an error ("expected '() => Undefined', found 'Null'"), where it
+  was accepted and `hooks.mark()` threw. A field that starts as `null` is
+  declared `T | Null`. (The `null` / `undefined` placeholder rule is gone.)
+
 ### Multi-line annotations
 
 Long type annotations can be written across lines, nicely laid out, and mean
