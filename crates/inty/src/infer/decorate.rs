@@ -698,6 +698,7 @@ impl<'a> Decorator<'a> {
             content: ctx.format_scheme(&displayed),
             span,
             kind: crate::ast::AnnotationKind::Inline,
+            content_start: None,
         }
     }
 
@@ -712,6 +713,7 @@ impl<'a> Decorator<'a> {
             content: ctx.format_type(&displayed),
             span,
             kind: crate::ast::AnnotationKind::Inline,
+            content_start: None,
         }
     }
 }
@@ -735,5 +737,6 @@ fn too_large(span: Span) -> TypeAnnotation {
         content: "… (a type too large to show)".to_string(),
         span,
         kind: crate::ast::AnnotationKind::Inline,
+        content_start: None,
     }
 }

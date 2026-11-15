@@ -198,6 +198,7 @@ impl InferState {
                         let parse_result = parse_type_annotation_with_typeof(
                             &ann.content,
                             ann_span,
+                            ann.content_start,
                             self.next_var_id(),
                             self.next_pvar_id(),
                             &self.type_aliases,
@@ -831,6 +832,7 @@ impl InferState {
                         let parse_result = parse_type_annotation_with_typeof(
                             &ann.content,
                             ann_span,
+                            ann.content_start,
                             self.next_var_id(),
                             self.next_pvar_id(),
                             &self.type_aliases,

@@ -1,7 +1,7 @@
 Error: Failed to parse type annotation: class 'Counter' takes 1 type argument (a type in method 'next'), got 0: write it as a type parameter, `/** function f<A>(x: Counter<A>) => … */`
-   ╭─[ main.js:5:1 ]
+   ╭─[ main.js:5:25 ]
    │
  5 │ /** function current(c: Counter) => Number */
-   │ ──────────────────────┬──────────────────────  
-   │                       ╰──────────────────────── Failed to parse type annotation: class 'Counter' takes 1 type argument (a type in method 'next'), got 0: write it as a type parameter, `/** function f<A>(x: Counter<A>) => … */`
+   │                         ───┬───  
+   │                            ╰───── Failed to parse type annotation: class 'Counter' takes 1 type argument (a type in method 'next'), got 0: write it as a type parameter, `/** function f<A>(x: Counter<A>) => … */`
 ───╯
