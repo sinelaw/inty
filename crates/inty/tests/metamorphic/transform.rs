@@ -470,6 +470,12 @@ pub fn t_move_data_decl_after_first_user(p: &Program) -> Option<(Program, Compar
             if !is_fn_decl {
                 continue;
             }
+            // Moving the decl after the program's last statement would
+            // change which statement is last, and so the program's type
+            // (its completion value), which the oracle compares.
+            if fn_idx + 1 == n {
+                continue;
+            }
             let refs = referenced_names_in_stmt(fn_stmt);
             if !refs.contains(&name) {
                 continue;
