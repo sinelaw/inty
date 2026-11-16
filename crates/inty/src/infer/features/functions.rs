@@ -1249,11 +1249,24 @@ impl InferState {
     /// binding group. Every name in the group is visible in every
     /// body from the start, which is what enables forward references
     /// and mutual recursion.
+    /// The environment a function declaration is checked in: what is
+    /// known of a binding that is written (a binding written once, see
+    /// `after_sole_write`) is dropped, as the declaration is hoisted and
+    /// can be called before that write runs, whatever statement it is
+    /// checked after.
+    fn hoisted_env(&self, env: &TypeEnv) -> TypeEnv {
+        env.without_narrowings_of(|key| match key {
+            crate::infer::env::Key::Local(id) => !self.resolution.is_stable(*id),
+            crate::infer::env::Key::Name(_) => false,
+        })
+    }
+
     pub(in crate::infer) fn infer_function_group(
         &mut self,
         env: &TypeEnv,
         group: &[Stmt],
     ) -> InferResult<TypeEnv> {
+        let env = &self.hoisted_env(env);
         let mut hoisted = self.hoist_function_names(env, group)?;
 
         // Pass 1: infer every body with the full hoisted env in scope, then
@@ -1721,6 +1734,7 @@ impl InferState {
         name_span: Option<Span>,
         span: Span,
     ) -> InferResult<(Type, TypeEnv)> {
+        let env = &self.hoisted_env(env);
         // Reuse the type variable hoisted by the enclosing scope if
         // this function was pre-bound there, otherwise start fresh.
         // Re-using the hoisted var is what lets mutually recursive

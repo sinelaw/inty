@@ -128,6 +128,7 @@ impl InferState {
         // counts; the result is closed but `row_tail` may have been
         // set and then overridden back to Closed.
         let mut had_spread = false;
+        let mut spread_of_error = false;
         // The result of a spread waiting on its operand (`Spread`): the
         // fields written after it are merged over it, not added beside it,
         // since the operand may have them too.
@@ -238,30 +239,13 @@ impl InferState {
                         // `this`: called on the object or taken off it.
                         let annotated_type =
                             crate::infer::lower::annotation_this(&annotated_type, &Type::ArrowThis);
-                        // TypeScript's JSDoc convention is to allow a
-                        // `null` / `undefined` placeholder initialiser
-                        // for a `@type`-annotated field — the field is
-                        // declared *as if* it were the annotated type
-                        // and filled in by later assignment, exactly
-                        // the htmx public-API pattern. We mirror that:
-                        // when the source-side syntax is `@type` and
-                        // the value is a literal placeholder, skip the
-                        // subsume check. Inline `/*: T */` annotations
-                        // and non-placeholder values still check
-                        // normally so honest mismatches surface.
-                        let is_placeholder = matches!(
-                            value,
-                            Expr::Lit {
-                                value: Literal::Null | Literal::Undefined,
-                                ..
-                            }
-                        );
-                        if !(is_jsdoc && is_placeholder) {
-                            // Annotation first: it's what the user wrote,
-                            // so the error message reads as "expected
-                            // <annotated>, found <value>".
-                            self.subsume(ann_span, &value_type, &annotated_type)?;
-                        }
+                        // The initialiser is checked against the annotation whatever
+                        // its form (`@type` or `/*: T */`), as a `const`'s is: a field
+                        // declared `() => R` that starts as `null` throws when called
+                        // before it is filled, so it is declared `(() => R) | Null`.
+                        // Annotation first: it's what the user wrote, so the error
+                        // reads "expected <annotated>, found <value>".
+                        self.subsume(ann_span, &value_type, &annotated_type)?;
                         self.zonk(&annotated_type)
                     } else {
                         // Synthesis-mode object literal: widen primitive
@@ -374,6 +358,13 @@ impl InferState {
                     had_spread = true;
                     let arg_ty = self.infer_expr(env, argument)?;
                     let resolved = self.zonk(&arg_ty);
+                    // A spread of a value whose type failed (an import
+                    // from a module with errors): the object's fields
+                    // aren't known, so the object's type is `Error` too.
+                    if matches!(resolved, Type::Error) {
+                        spread_of_error = true;
+                        continue;
+                    }
                     if let Some(base) = waiting_spread.take() {
                         (props, row_tail) = self.merge_written_fields(*spread_span, base, props)?;
                     }
@@ -414,6 +405,10 @@ impl InferState {
             }
         }
 
+        if spread_of_error {
+            self.unify(span, &shared_this, &Type::Error)?;
+            return Ok(Type::Error);
+        }
         if let Some(base) = waiting_spread.take() {
             (props, row_tail) = self.merge_written_fields(span, base, props)?;
         }
@@ -823,9 +818,7 @@ impl InferState {
                     if let Some(ann) = type_annotation {
                         // An inline annotation overrides the
                         // contextual expected — we still check the
-                        // value against the user-stated type, with
-                        // the same JSDoc-placeholder relaxation as
-                        // the synthesis arm (see `infer_object`).
+                        // value against the user-stated type.
                         let ann_span = Span::new(ann.span.start, ann.span.end);
                         let typeof_table = self.build_typeof_table(env, &ann.content);
                         let is_jsdoc = ann.kind == AnnotationKind::JsDoc;
@@ -863,20 +856,8 @@ impl InferState {
                         // `this`: called on the object or taken off it.
                         let annotated_type =
                             crate::infer::lower::annotation_this(&annotated_type, &Type::ArrowThis);
-                        let is_placeholder = matches!(
-                            value,
-                            Expr::Lit {
-                                value: Literal::Null | Literal::Undefined,
-                                ..
-                            }
-                        );
-                        if is_jsdoc && is_placeholder {
-                            // Skip the inner check — placeholder accepts.
-                            self.subsume(ann_span, &annotated_type, &expected_prop_ty)?;
-                        } else {
-                            let value_type = self.check_expr(env, value, &annotated_type)?;
-                            self.subsume(ann_span, &value_type, &expected_prop_ty)?;
-                        }
+                        let value_type = self.check_expr(env, value, &annotated_type)?;
+                        self.subsume(ann_span, &value_type, &expected_prop_ty)?;
                         props.insert(prop_name, self.zonk(&annotated_type));
                     } else {
                         // A fresh object's field slot has the expected

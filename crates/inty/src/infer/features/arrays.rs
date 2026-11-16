@@ -146,6 +146,9 @@ impl InferState {
 
         // Try to resolve immediately for known types
         match &obj_type_resolved {
+            // An element of a value whose type failed (an import from a
+            // module with errors) is one too, as a member read's is.
+            Type::Error => Ok(Type::Error),
             Type::Array(elem_type) => {
                 // Array indexing: immediately unify index with Number and return element type
                 self.subsume(span, &index_type, &Type::Number)?;

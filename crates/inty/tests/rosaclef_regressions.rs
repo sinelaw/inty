@@ -851,3 +851,122 @@ fn canvas_methods_are_called_on_their_context() {
     ));
     assert!(e.contains("detached"), "{e}");
 }
+
+// Moving to 276dd1f, 3a: a `let` written once after its initialiser
+// (`resolve::Resolution::sole_write_at`) follows that write. The
+// get-or-create idiom every `Map.get` meets since #110, and the `exec`
+// loop since `exec` returns `String[] | Null`.
+#[test]
+fn a_binding_written_once_is_narrowed_after_its_write() {
+    let map = "/** const m: Map<String, Number[]> */ const m = new Map();";
+    for body in [
+        "let x = m.get(k); if (!x) { x = []; m.set(k, x); } x.push(1);",
+        "let x = m.get(k); if (!x) { const y = []; m.set(k, y); x = y; } x.push(1);",
+        "let x = m.get(k); if (x === undefined) { x = []; } x.push(1);",
+        "let x = m.get(k); if (x === undefined) x = []; x.push(1);",
+        // A closure made after it sees it too: nothing but that write
+        // changes `x` again, and it writes an array.
+        "let x = m.get(k); if (!x) { x = []; m.set(k, x); } [1].forEach((v) => x.push(v));",
+    ] {
+        ok(&format!(
+            "{map} /** function f(k: String) => Undefined */ function f(k) {{ {body} }}"
+        ));
+    }
+    ok("
+        /** function count(s: String) => Number */
+        function count(s) {
+          const re = /a(b)/g;
+          let n = 0;
+          let m = re.exec(s);
+          while (m) { n += m[1].length; m = re.exec(s); }
+          return n;
+        }
+    ");
+}
+
+// What would let a read see the binding before its write, or after a
+// write the narrowing doesn't know of, stays rejected.
+#[test]
+fn a_binding_written_once_is_not_narrowed_where_it_may_not_hold() {
+    let decl = "/** let x: Number[] | Undefined */ let x = undefined;";
+    for body in [
+        // A hoisted function can run before the write.
+        "g(); x = []; function g() { return x.length; } return 0;",
+        "x = []; function g() { return x.length; } return g();",
+        // `break l` leaves the branch before its write.
+        "l: if (!x) { break l; x = []; } return x.length;",
+        // A second write: not written once.
+        "if (!x) { x = []; } x = undefined; return x.length;",
+        "if (!x) { x = []; } if (x.length > 1) x = undefined; return x.length;",
+        // A write in a nested branch, not the filling branch's own.
+        "if (!x) { if (x === undefined) { x = []; } } return x.length;",
+    ] {
+        err(&format!("export function run() {{ {decl} {body} }}"));
+    }
+    // A write the `try` block may not reach before the `catch` runs.
+    err(&format!(
+        "export function run(c) {{ {decl} try {{ if (c) throw new Error(\"e\"); x = []; }} catch (e) {{}} return x.length; }}"
+    ));
+    // A `switch` case entered directly, not through the one that writes.
+    err(&format!(
+        "export function run(c) {{ {decl} switch (c) {{ case 1: x = []; case 2: return x.length; }} return 0; }}"
+    ));
+    // A hoisted function checked after the write (it reads a `const`
+    // declared after it) can still run before it.
+    err(&format!(
+        "export function run() {{ {decl} x = []; const j = 2; function g() {{ return x.length + j; }} return 0; }}"
+    ));
+    // What the write's value is, through a recursive alias with `null` in
+    // it: nothing (the value may be `null`).
+    err("
+        /** type L = Null | {v: Number, next: L} */
+        /** function nxt() => L */
+        function nxt() { return null; }
+        export function run() {
+          /** let x: L */
+          let x = {v: 1, next: null};
+          x = nxt();
+          return x.v;
+        }
+    ");
+    // Written from a closure: not written once in the declaring function.
+    err(&format!(
+        "{decl} export function run() {{ if (!x) {{ x = []; }} return x.length; }}"
+    ));
+    // A closure made in an `exec` loop's body can run after the write.
+    err("
+        /** function run(s: String) => (() => String)[] */
+        function run(s) {
+          const re = /a/g;
+          let m = re.exec(s);
+          const fs = [];
+          while (m) { fs.push(() => m[0]); m = re.exec(s); }
+          return fs;
+        }
+    ");
+    // The store is checked at the binding's own type.
+    err("let x = [1]; if (!x) { x = []; } const y /*: Number */ = 0; x = \"s\";");
+}
+
+// Moving to 276dd1f, 1: an object literal's `@type` field checks its
+// initialiser, as a `const`'s annotation does.
+#[test]
+fn a_type_field_checks_its_null_initialiser() {
+    let e = err("
+        export const hooks = {
+          /** @type {() => Undefined} */
+          mark: null,
+        };
+        /** function a() => Undefined */
+        export function a() { hooks.mark(); }
+    ");
+    assert!(e.contains("() => Undefined") && e.contains("Null"), "{e}");
+    ok("
+        export const hooks = {
+          /** @type {(() => Undefined) | Null} */
+          mark: null,
+        };
+        /** function a() => Undefined */
+        export function a() { const m = hooks.mark; if (m) m(); }
+    ");
+}

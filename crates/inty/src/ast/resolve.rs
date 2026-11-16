@@ -76,9 +76,33 @@ struct Binding {
     read_before_init: bool,
     /// How many functions enclose the declaration.
     level: usize,
+    /// Writes after the initialiser.
+    writes: u32,
+    /// A write from a function nested inside the declaring one.
+    nested_write: bool,
+    /// Where the identifier of a plain `x = e` writing it is.
+    plain_write: Option<(usize, usize)>,
+    /// An occurrence in a function nested inside the declaring one.
+    captured: bool,
 }
 
 impl Binding {
+    /// The one write after the initialiser, when it is a plain `x = e`
+    /// in the declaring function, and the binding is otherwise stable.
+    fn sole_write(&self) -> Option<(usize, usize)> {
+        let declared_once = match self.kind {
+            Kind::Let | Kind::Param => true,
+            Kind::Var => {
+                self.declarators + self.fn_decls <= 1
+                    && (!self.has_init || (!self.init_in_loop && !self.read_before_init))
+            }
+            Kind::Const | Kind::Global => false,
+        };
+        (declared_once && self.writes == 1 && !self.nested_write)
+            .then_some(self.plain_write)
+            .flatten()
+    }
+
     fn stable(&self) -> bool {
         match self.kind {
             Kind::Const => true,
@@ -97,6 +121,8 @@ impl Binding {
 #[derive(Clone, Debug, Default)]
 pub struct Resolution {
     stable: Vec<bool>,
+    sole_write: Vec<Option<(usize, usize)>>,
+    captured: Vec<bool>,
     constant: Vec<bool>,
     global: Vec<bool>,
     names: Vec<String>,
@@ -120,11 +146,15 @@ impl Resolution {
             w.stmt(s);
         }
         let stable = w.bindings.iter().map(Binding::stable).collect();
+        let sole_write = w.bindings.iter().map(Binding::sole_write).collect();
+        let captured = w.bindings.iter().map(|b| b.captured).collect();
         let constant = w.bindings.iter().map(|b| b.kind == Kind::Const).collect();
         let global = w.bindings.iter().map(|b| b.kind == Kind::Global).collect();
         let names = w.bindings.into_iter().map(|b| b.name).collect();
         Resolution {
             stable,
+            sole_write,
+            captured,
             constant,
             global,
             names,
@@ -155,6 +185,30 @@ impl Resolution {
     pub fn stable_at(&self, span: Span, name: &str) -> bool {
         self.binding_at(span, name)
             .is_some_and(|id| self.stable[id as usize])
+    }
+
+    /// Where the identifier of the one write of the binding `name` at
+    /// `span` refers to is, when that binding is written once after its
+    /// initialiser, by a plain `x = e` in the function that declares it
+    /// (not from a nested function), and is otherwise stable. Such a
+    /// binding holds its initial value until that write runs and a value
+    /// the write assigned ever after, which is what lets narrowing follow
+    /// it (`infer::narrow`, "filled bindings").
+    pub fn sole_write_at(&self, span: Span, name: &str) -> Option<(usize, usize)> {
+        let id = self.local_at(span, name)?;
+        self.sole_write[id as usize]
+    }
+
+    /// Whether the binding `id` is never written after its initialiser.
+    pub fn is_stable(&self, id: BindingId) -> bool {
+        self.stable.get(id as usize).copied().unwrap_or(false)
+    }
+
+    /// Whether the binding `name` at `span` refers to occurs in a function
+    /// nested inside the one that declares it.
+    pub fn captured_at(&self, span: Span, name: &str) -> bool {
+        self.local_at(span, name)
+            .is_some_and(|id| self.captured[id as usize])
     }
 
     /// Whether the identifier `name` at `span` refers to a binding that can't
@@ -240,6 +294,10 @@ impl Walker {
             init_in_loop: false,
             read_before_init: false,
             level: self.hoisted.len(),
+            writes: 0,
+            nested_write: false,
+            plain_write: None,
+            captured: false,
         });
         (self.bindings.len() - 1) as BindingId
     }
@@ -331,13 +389,31 @@ impl Walker {
         if b.kind == Kind::Var && early {
             self.bindings[id as usize].read_before_init = true;
         }
+        if self.hoisted.len() > self.bindings[id as usize].level {
+            self.bindings[id as usize].captured = true;
+        }
         self.register(span, id);
         id
     }
 
+    /// The binding the occurrence of `name` at `span` was registered as.
+    fn binding_of(&self, name: &str, span: Span) -> Option<BindingId> {
+        self.occurrences
+            .get(&(span.start, span.end))?
+            .iter()
+            .copied()
+            .find(|&id| self.bindings[id as usize].name == name)
+    }
+
     fn write(&mut self, name: &str, span: Span) {
         let id = self.occurrence(name, span);
-        self.bindings[id as usize].assigned = true;
+        let level = self.hoisted.len();
+        let b = &mut self.bindings[id as usize];
+        b.assigned = true;
+        b.writes += 1;
+        if level > b.level {
+            b.nested_write = true;
+        }
     }
 
     /// Record the names an assignment target writes.
@@ -856,9 +932,18 @@ impl Walker {
                 self.expr(left);
                 self.expr(right);
             }
-            Expr::Assign { left, right, .. } => {
+            Expr::Assign {
+                op, left, right, ..
+            } => {
                 self.expr(right);
                 self.write_target(left);
+                if let (crate::ast::AssignOp::Assign, Expr::Ident { name, span }) =
+                    (op, left.as_ref())
+                {
+                    if let Some(id) = self.binding_of(name, *span) {
+                        self.bindings[id as usize].plain_write = Some((span.start, span.end));
+                    }
+                }
             }
             Expr::Conditional {
                 test,

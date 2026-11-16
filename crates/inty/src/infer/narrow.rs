@@ -297,6 +297,88 @@ pub fn apply_narrowing(
     narrow_binding(state, env, path, narrowing)
 }
 
+/// What every value of type `ty` (resolved) is known to be, as a
+/// narrowing: truthy, not `null`, not `undefined`. `None` when nothing is
+/// (a type not known yet may be anything). A named type is looked through
+/// (a recursive alias may be a union with `Null` in it), and one that
+/// doesn't unfold says nothing. JavaScript only.
+pub fn value_narrowing(
+    state: &super::state::InferState,
+    ty: &Type,
+    lang: Language,
+) -> Option<Narrowing> {
+    if lang != Language::JavaScript {
+        return None;
+    }
+    let mut arms = Vec::new();
+    value_arms(state, ty, 0, &mut arms)?;
+    if arms.is_empty() {
+        return None;
+    }
+    let mut ns = Vec::new();
+    if arms.iter().all(|t| !could_be_falsy(t, lang)) {
+        ns.push(Narrowing::Truthy);
+    }
+    for unit in [Type::Null, Type::Undefined] {
+        if arms.iter().all(|t| !could_be(t, &unit)) {
+            ns.push(Narrowing::IsNot(unit));
+        }
+    }
+    match ns.len() {
+        0 => None,
+        1 => ns.pop(),
+        _ => Some(Narrowing::AllOf(ns)),
+    }
+}
+
+/// The arms of `ty`, through sums, unions and non-nominal named types
+/// (unrolled). `None` when an arm isn't known (a variable, `Error`) or a
+/// named type doesn't unfold within a few steps.
+fn value_arms(
+    state: &super::state::InferState,
+    ty: &Type,
+    depth: usize,
+    out: &mut Vec<Type>,
+) -> Option<()> {
+    if depth > 8 {
+        return None;
+    }
+    match ty {
+        Type::Var(_) | Type::Error => None,
+        Type::Union(_) | Type::Maybe(..) => {
+            for arm in ty.arms() {
+                value_arms(state, &arm, depth + 1, out)?;
+            }
+            Some(())
+        }
+        Type::Named(id, args) if !state.is_nominal_type(*id) => {
+            let body = state.unroll_named(*id, args)?;
+            value_arms(state, &body, depth + 1, out)
+        }
+        t => {
+            out.push(t.clone());
+            Some(())
+        }
+    }
+}
+
+/// Narrow the binding `name` (at `span`) from its own type, not from a
+/// narrowing in force. For a binding written once (see
+/// `resolve::Resolution::sole_write_at`), which isn't stable, so
+/// [`apply_narrowing`] leaves it alone: the callers establish that the
+/// fact holds from here on, on every path and in every closure.
+pub fn narrow_from_declared(
+    state: &mut super::state::InferState,
+    env: &TypeEnv,
+    name: &str,
+    span: Span,
+    narrowing: &Narrowing,
+) -> TypeEnv {
+    let key = state.key_of(span, name);
+    let env = env.unnarrowed(&key);
+    narrow_binding(state, &env, &Path::Ident(name.to_string(), span), narrowing)
+}
+
 /// Whether `narrowing` leaves the value at `path` no possible type: the
 /// test can't come out this way, so the branch it guards is dead.
 pub fn narrowing_is_dead(

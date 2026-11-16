@@ -1,5 +1,5 @@
 // Synthetic htmx-shape IIFE exercising JSDoc `@type {typeof helper}`
-// declarations on null-initialised public-API fields.
+// declarations on public-API fields filled in after the object is built.
 //
 // The pattern (from bigskysoftware/htmx@master/src/htmx.js:5-69):
 //
@@ -14,28 +14,30 @@
 //     htmx.onLoad = onLoadHelper;
 //     htmx.process = processNode;
 //
-// Without `@type` parsing the public-API fields infer as `Null`, and
-// the later assignments fail with "expected Null, found Function".
-// With `@type {typeof X}` resolution + the JSDoc-placeholder rule for
-// null initialisers, the public-API row is correctly typed at the
-// helpers' function types, and downstream call sites type-check.
+// A `null` initialiser is checked against the `@type` like any other
+// (a field declared a function that is still `null` throws when
+// called), so here the fields start as the hoisted helpers themselves
+// and the late assignments re-fill them. `@type {typeof X}` types the
+// public-API row at the helpers' function types, and downstream call
+// sites type-check. (htmx's `null` fields would be declared
+// `(typeof X) | Null`, and each call would test the field first.)
 
 var lib = (function() {
   'use strict';
 
   const api = {
     /** @type {typeof onLoadHelper} */
-    onLoad: null,
+    onLoad: onLoadHelper,
     /** @type {typeof processNode} */
-    process: null,
+    process: processNode,
     /** @type {typeof addClass} */
-    addClass: null,
+    addClass: addClass,
     /** @type {typeof removeClass} */
-    removeClass: null,
+    removeClass: removeClass,
     /** @type {typeof triggerEvent} */
-    trigger: null,
+    trigger: triggerEvent,
     /** @type {typeof getConfig} */
-    config: null,
+    config: getConfig,
 
     // Bare-form `@type T` style (htmx's `config` properties use this).
     /**
@@ -91,7 +93,7 @@ var lib = (function() {
 })();
 
 // Public-API call sites: each typed by the @type annotation on the
-// corresponding field, not by the null initialiser.
+// corresponding field.
 var x = lib.process(42);
 var s = lib.addClass(0, "active");
 var detail = lib.trigger(0, "click", { x: 1, y: 2 });

@@ -433,6 +433,10 @@ pub struct InferState {
     /// each of its handlers' events mentions the element) is compared
     /// again at each, which is exponential in how deeply such types nest.
     pub(in crate::infer) unify_bound_pairs: std::collections::HashSet<(TVarId, TVarId)>,
+    /// The type of the value each plain `x = e` assigned, by where its
+    /// `x` is: what narrowing knows about a binding written once
+    /// (`resolve::Resolution::sole_write_at`) after that write.
+    pub(in crate::infer) assigned_values: HashMap<(usize, usize), Type>,
 }
 
 /// One in-progress unfold the unifier is mid-recursion on. Two
@@ -584,6 +588,7 @@ impl InferState {
             unfold_assumptions: Vec::new(),
             unify_depth: 0,
             unify_bound_pairs: std::collections::HashSet::new(),
+            assigned_values: HashMap::new(),
         }
     }
 
