@@ -301,13 +301,15 @@ var loud = g("yo");                 // "yoyo!"
 // A widespread JS pattern (popularised by htmx, jQuery, lodash):
 // declare a public-API object with \`null\`-initialised fields, then
 // fill them in with forward-declared helpers. \`@type {typeof helper}\`
-// tells the type checker what type the field will end up holding —
-// the \`null\` is just a placeholder, not the real value.
+// tells the type checker what type the field holds. The initialiser
+// is checked against it, as a \`const\`'s is: a field that starts as
+// \`null\` says so, \`(typeof helper) | Null\`, and is tested before a
+// call, since calling it before it is filled in would throw.
 
 const api = {
-    /** @type {typeof greet} */
+    /** @type {(typeof greet) | Null} */
     greet: null,
-    /** @type {typeof add} */
+    /** @type {(typeof add) | Null} */
     add: null,
 
     // The bare form \`@type T\` (no braces) is also accepted —
@@ -328,17 +330,19 @@ function add(x, y)   { return x + y; }
 api.greet = greet;
 api.add   = add;
 
-// \`api.greet\` is typed as \`(String) => String\`, not \`Null\`, because
-// of the \`@type\` annotation.
-var msg = api.greet("world");
-var n   = api.add(1, 2);
+// \`api.greet\` is \`((String) => String) | Null\`, from the \`@type\`
+// annotation: copy it into a const and test that before calling.
+const g = api.greet;
+var msg = g ? g("world") : "";
+const a = api.add;
+var n   = a ? a(1, 2) : 0;
 
 // The \`enabled\` field is \`Boolean\` (not the literal \`true\`).
 var on  = api.enabled && true;
 
-// A non-placeholder value still type-checks against the annotation:
-// uncomment the next line to see the error.
-// var bad = { /** @type {Number} */ count: "oops" }; // error!
+// The initialiser is checked against the annotation: uncomment the
+// next line to see the error.
+// var bad = { /** @type {() => String} */ f: null }; // error!
 `,
             },
         ],
