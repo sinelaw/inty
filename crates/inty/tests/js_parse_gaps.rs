@@ -128,3 +128,25 @@ fn regex_last_index_is_writable() {
     fails("const re = /b/g;\nre.lastIndex = \"x\";\n", "Number");
     fails("const re = /b/g;\nre.source = \"y\";\n", "FieldWrite");
 }
+
+#[test]
+fn async_methods_keep_this() {
+    ok("class A {\n\
+          constructor(n) { this.n = n; }\n\
+          async load(x) { const y = await Promise.resolve(x); return y + this.n; }\n\
+        }\n\
+        const q = new A(1).load(2).then((v) => v * 2);\n\
+        const o = { k: 1, async f(x) { return x + this.k; } };\n\
+        const r = o.f(1).then((v) => v + 1);\n");
+    fails(
+        "class A { async constructor() {} }",
+        "a getter, setter or constructor can't be async",
+    );
+}
+
+#[test]
+fn keyword_and_async_named_members() {
+    ok("class A { delete(k) { return k + 1; } default() { return \"d\"; } async() { return 1; } }\n\
+        const a = new A();\nconst n = a.delete(1) + a.async() + a.default().length;\n\
+        const o = { delete(k) { return k; }, async: 1 };\nconst m = o.delete(1) + o.async;\n");
+}

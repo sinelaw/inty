@@ -1254,6 +1254,21 @@ impl Parser {
                 }
             }
 
+            // `async name() { … }`: a method whose body is lifted into
+            // `Promise.resolve(…)`, as an `async function`'s is. `async`
+            // followed by `(`, `=` or the end of the member is a member
+            // named `async`.
+            let is_async = matches!(self.current(), Token::Async)
+                && !matches!(
+                    self.tokens.get(self.pos + 1).map(|s| &s.value),
+                    Some(
+                        Token::LParen | Token::Eq | Token::Semicolon | Token::Colon | Token::RBrace
+                    )
+                );
+            if is_async {
+                self.advance();
+            }
+
             // Accessor declarations: `get foo() { ... }` or
             // `set foo(v) { ... }`. Recognised before the regular
             // member parser consumes `get` / `set` as a name. The
@@ -1299,9 +1314,20 @@ impl Parser {
                 self.advance();
                 Self::private_name(&name)
             } else {
-                self.expect_ident()?
+                // A member may be named by a keyword (`delete(…)`,
+                // `default`), as an object literal's property may.
+                self.expect_ident_or_keyword()?
             };
             let key_span = self.prev_span();
+            if is_async && (accessor_kind.is_some() || key_name == "constructor") {
+                return Err(ParseError::UnexpectedToken {
+                    found: "async".to_string(),
+                    expected: "a method name (a getter, setter or constructor can't be async)"
+                        .to_string(),
+                    span: key_span,
+                }
+                .into());
+            }
 
             if let Some(kind) = accessor_kind {
                 // Accessor body: parse `(params) { body }` and lower.
@@ -1562,9 +1588,17 @@ impl Parser {
             // takes them: unpacked at the top of the body.
             let (params, prefix) = self.parse_parameters_with_prefix()?;
             self.expect(&Token::RParen)?;
+            if is_async {
+                self.next_fn_is_async = true;
+            }
             let body_stmt =
                 Self::prepend_param_destructuring(self.parse_function_body_block()?, prefix);
             let member_span = Span::new(member_start, self.prev_span().end);
+            let body_stmt = if is_async {
+                *Self::wrap_body_in_promise_resolve(Box::new(body_stmt), member_span)
+            } else {
+                body_stmt
+            };
 
             if key_name == "constructor" {
                 ctor_params = params;
@@ -1874,7 +1908,7 @@ impl Parser {
     /// Wrap an `async function` declaration so its return type becomes
     /// `Promise<T>`. The body is lifted into an IIFE and handed to
     /// `Promise.resolve`, turning `async function foo(x) { return x + 1; }`
-    /// into `function foo(x) { return Promise.resolve((function() { return x + 1; })()); }`.
+    /// into `function foo(x) { return Promise.resolve((() => { return x + 1; })()); }`.
     ///
     /// Inference then types `foo` as `(T) => Promise<T>` with no extra
     /// cases. `await e` inside the original body continues to be
@@ -1907,13 +1941,14 @@ impl Parser {
     }
 
     fn wrap_body_in_promise_resolve(body: Box<Stmt>, span: Span) -> Box<Stmt> {
-        // (function () { ...body... })()
+        // (() => { ...body... })(): an arrow, so the body keeps the
+        // function's own `this` (an async method reads its instance).
         let iife = Expr::Function {
             name: None,
             params: vec![],
             body,
             type_annotation: None,
-            arrow: false,
+            arrow: true,
             span,
         };
         let iife_call = Expr::Call {
@@ -3507,17 +3542,37 @@ impl Parser {
             }
         }
 
+        // `async name() { … }`: an async method (see the class-body
+        // case). `async` followed by `(`, `:`, `,` or `}` is a property
+        // named `async`.
+        let is_async = matches!(self.current(), Token::Async)
+            && !matches!(
+                self.tokens.get(self.pos + 1).map(|s| &s.value),
+                Some(Token::LParen | Token::Colon | Token::Comma | Token::RBrace)
+            );
+        if is_async {
+            self.advance();
+        }
+
         let key = self.parse_property_key()?;
 
         // Check for method shorthand
-        if self.check(&Token::LParen) {
-            self.advance();
+        if is_async || self.check(&Token::LParen) {
+            self.expect(&Token::LParen)?;
             let (params, prefix) = self.parse_parameters_with_prefix()?;
             self.expect(&Token::RParen)?;
+            if is_async {
+                self.next_fn_is_async = true;
+            }
             let body = Box::new(Self::prepend_param_destructuring(
                 self.parse_function_body_block()?,
                 prefix,
             ));
+            let body = if is_async {
+                Self::wrap_body_in_promise_resolve(body, Span::new(start, self.prev_span().end))
+            } else {
+                body
+            };
 
             return Ok(PropDef::Method {
                 key,

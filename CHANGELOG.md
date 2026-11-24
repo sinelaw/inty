@@ -9,6 +9,10 @@
 - `from`, `of` and `as` are contextual keywords, names everywhere else:
   `const from = 1` is a binding.
 - Array patterns take holes: `const [a, , c] = t`, `[, b] = t`.
+- `async` methods, in classes and object literals; an async function's
+  body keeps its `this` (the `Promise.resolve` lifting now uses an arrow).
+- A class member may be named by a keyword (`delete(k)`, `default()`),
+  as an object literal's may.
 - Class methods and constructors take default and destructuring
   parameters, as plain functions do; a whole destructured parameter takes
   a default (`function f({a} = {a: 1})`).
