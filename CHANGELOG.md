@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### JavaScript the parser and stdlib take
+
+- `export class Name { … }` (and `export class Name;` for an external
+  class).
+- `from`, `of` and `as` are contextual keywords, names everywhere else:
+  `const from = 1` is a binding.
+- Array patterns take holes: `const [a, , c] = t`, `[, b] = t`.
+- `async` methods, in classes and object literals; an async function's
+  body keeps its `this` (the `Promise.resolve` lifting now uses an arrow).
+- A class member may be named by a keyword (`delete(k)`, `default()`),
+  as an object literal's may.
+- Class methods and constructors take default and destructuring
+  parameters, as plain functions do; a whole destructured parameter takes
+  a default (`function f({a} = {a: 1})`).
+- A constructor may run statements besides `this.f = …`: each runs where
+  it stands, between the fields set before and after it, and may read
+  those set before as `this.f`. A field is still set only by a
+  `this.f = …` line of the constructor's own; a `return`, and a name the
+  constructor declares that a method also reads, are rejected.
+- Stdlib: `new Promise((resolve, reject) => …)`; `EventSource`;
+  `XMLHttpRequest.open(method, url, async?, user?, password?)`; a regex's
+  `lastIndex` takes a store (`re.lastIndex = 0`).
+
 ### Fixes from moving Rosaclef to 276dd1f
 
 - An object-literal field's `/** @type {T} */` annotation checks its

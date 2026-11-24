@@ -393,6 +393,22 @@ const navigator;
     } */
 const WebSocket;
 
+// EventSource: a server-sent events stream. Each event's `data` is the
+// text of its `data:` lines; a named event (`event: name`) is delivered
+// to `addEventListener(name, …)`, an unnamed one to `onmessage`.
+/** type MessageEvent = {data: String, type: String, lastEventId: String, origin: String} */
+/** const EventSource: (url: String, init?: {withCredentials: Boolean}) => {
+        url: String, readyState: Number, withCredentials: Boolean,
+        close: () => Undefined,
+        onopen: ({type: String}) => Undefined,
+        onerror: ({type: String}) => Undefined,
+        onmessage: (MessageEvent) => Undefined,
+        addEventListener: (String, (MessageEvent) => Undefined) => Undefined,
+        removeEventListener: (String, (MessageEvent) => Undefined) => Undefined,
+        CONNECTING: Number, OPEN: Number, CLOSED: Number
+    } */
+const EventSource;
+
 // ResizeObserver: the callback gets one entry per observed element that
 // changed size.
 /** const ResizeObserver: <T>((entries: {target: T, contentRect: {x: Number, y: Number, width: Number, height: Number, top: Number, left: Number, right: Number, bottom: Number}}[]) => Undefined) => {
@@ -604,7 +620,7 @@ const URL;
 // the listener name. `response` and `responseXML` are also opaque (T)
 // because they vary with `responseType`.
 /** const XMLHttpRequest: <T>() => {
-        open: (String, String) => Undefined,
+        open: (method: String, url: String, async?: Boolean, user?: String, password?: String) => Undefined,
         send: (T) => Undefined,
         setRequestHeader: (String, String) => Undefined,
         getResponseHeader: (String) => String,

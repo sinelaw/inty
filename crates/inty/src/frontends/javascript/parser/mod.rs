@@ -25,6 +25,8 @@ enum Pattern {
     /// `<pattern> = default`: the default replaces an `undefined` value.
     /// The span covers the whole `<pattern> = default` text.
     Default(Box<Pattern>, Box<Expr>, Span),
+    /// An array pattern's hole (`[a, , c]`): that element binds nothing.
+    Hole,
 }
 
 /// `source === undefined ? default : source`: what a destructuring
@@ -382,6 +384,10 @@ impl Parser {
                 // Per spec, rest must be the trailing element.
                 break;
             }
+            if self.consume_if(&Token::Comma) {
+                elems.push(Pattern::Hole);
+                continue;
+            }
             elems.push(self.parse_pattern_with_default()?);
             if !self.consume_if(&Token::Comma) {
                 break;
@@ -403,6 +409,7 @@ impl Parser {
         decls: &mut Vec<VarDeclarator>,
     ) {
         match pattern {
+            Pattern::Hole => {}
             Pattern::Default(inner, default, span) => {
                 self.desugar_pattern(inner, with_default(source, default, *span), kind, decls)
             }
@@ -517,7 +524,7 @@ impl Parser {
 
     /// Reinterpret an array/object *literal* on the LHS of `=` as a
     /// destructuring [`Pattern`]. Returns `None` for shapes that can't be
-    /// a destructuring target (elision holes, computed/numeric keys,
+    /// a destructuring target (computed/numeric keys,
     /// non-identifier rest/leaf targets) — those keep the original
     /// "invalid assignment target" error.
     fn expr_to_pattern(expr: &Expr) -> Option<Pattern> {
@@ -546,7 +553,7 @@ impl Parser {
                             rest = Some((name.clone(), *sp));
                         }
                         Some(e) => elems.push(Self::expr_to_pattern(e)?),
-                        None => return None, // elision hole `[, x]`
+                        None => elems.push(Pattern::Hole), // a hole `[, x]`
                     }
                 }
                 Some(Pattern::Array(elems, rest, *span))
@@ -590,6 +597,7 @@ impl Parser {
     /// assignments instead of declarations for the bound names.
     fn desugar_pattern_assign(&mut self, pattern: &Pattern, source: Expr, stmts: &mut Vec<Stmt>) {
         match pattern {
+            Pattern::Hole => {}
             Pattern::Default(inner, default, span) => {
                 self.desugar_pattern_assign(inner, with_default(source, default, *span), stmts)
             }
@@ -738,7 +746,7 @@ impl Parser {
 
         // Check for namespace import: import * as name from "module"
         if self.consume_if(&Token::Star) {
-            self.expect(&Token::As)?;
+            self.expect_word("as")?;
             let local = self.expect_ident()?;
             let spec_span = Span::new(start, self.prev_span().end);
             specifiers.push(ImportSpecifier::Namespace {
@@ -762,7 +770,7 @@ impl Parser {
                 // If followed by comma, continue to parse named imports
                 // or a namespace import. Otherwise, go directly to 'from'.
                 if !self.consume_if(&Token::Comma) {
-                    self.expect(&Token::From)?;
+                    self.expect_word("from")?;
                     let source = self.expect_string()?;
                     self.consume_semicolon();
                     return Ok(Stmt::Import {
@@ -775,7 +783,7 @@ impl Parser {
                 // `* as ns` (namespace). Accept the namespace form here;
                 // a `{` falls through to the named-imports branch below.
                 if self.consume_if(&Token::Star) {
-                    self.expect(&Token::As)?;
+                    self.expect_word("as")?;
                     let ns_local = self.expect_ident()?;
                     specifiers.push(ImportSpecifier::Namespace {
                         local: ns_local,
@@ -791,7 +799,7 @@ impl Parser {
                 let spec_start = self.current_span().start;
                 let imported = self.expect_ident()?;
 
-                let local = if self.consume_if(&Token::As) {
+                let local = if self.consume_word("as") {
                     self.expect_ident()?
                 } else {
                     imported.clone()
@@ -810,7 +818,7 @@ impl Parser {
             self.expect(&Token::RBrace)?;
         }
 
-        self.expect(&Token::From)?;
+        self.expect_word("from")?;
         let source = self.expect_string()?;
         self.consume_semicolon();
 
@@ -874,6 +882,46 @@ impl Parser {
                 })
             }
             Token::Function => self.parse_export_function_declaration(start, false),
+            // `export class Name { … }`: the class's factory, exported as
+            // `export function` is (its span is still the class's, so it
+            // stays typed in place as a class); `export class Name;`, an
+            // external class's declaration, as `export const` is.
+            Token::Class => {
+                let decl = self.parse_class_declaration()?;
+                let declaration = match decl {
+                    Stmt::FunctionDecl {
+                        name,
+                        params,
+                        body,
+                        type_annotation,
+                        span,
+                        ..
+                    } => ExportDecl::Function {
+                        name,
+                        params,
+                        body,
+                        type_annotation,
+                        span,
+                    },
+                    Stmt::Var {
+                        kind,
+                        declarations,
+                        span,
+                    } => ExportDecl::Var {
+                        kind,
+                        declarations,
+                        span,
+                    },
+                    other => panic!(
+                        "class declaration did not desugar to a function or a declaration: {:?}",
+                        other
+                    ),
+                };
+                Ok(Stmt::Export {
+                    declaration,
+                    span: Span::new(start, self.prev_span().end),
+                })
+            }
             // `export async function foo() { ... }` — the `async` token is
             // followed by `function`. Hand off to the same export-function
             // path with the async flag set so the body gets wrapped in
@@ -968,7 +1016,7 @@ impl Parser {
                     // binding. Same lexical shape — `expect_module_name`
                     // covers both.
                     let local = self.expect_module_name()?;
-                    let exported = if self.consume_if(&Token::As) {
+                    let exported = if self.consume_word("as") {
                         self.expect_module_name()?
                     } else {
                         local.clone()
@@ -984,7 +1032,7 @@ impl Parser {
                 }
                 self.expect(&Token::RBrace)?;
 
-                if self.consume_if(&Token::From) {
+                if self.consume_word("from") {
                     let source = self.expect_string()?;
                     self.consume_semicolon();
                     let decl_span = Span::new(start, self.prev_span().end);
@@ -1012,13 +1060,13 @@ impl Parser {
                 // export * from "./mod.js";
                 // export * as ns from "./mod.js";
                 self.advance();
-                let kind = if self.consume_if(&Token::As) {
+                let kind = if self.consume_word("as") {
                     let ns = self.expect_ident()?;
                     ExportFromKind::AllAs(ns)
                 } else {
                     ExportFromKind::All
                 };
-                self.expect(&Token::From)?;
+                self.expect_word("from")?;
                 let source = self.expect_string()?;
                 self.consume_semicolon();
                 let decl_span = Span::new(start, self.prev_span().end);
@@ -1033,7 +1081,7 @@ impl Parser {
             }
             _ => Err(ParseError::UnexpectedToken {
                 found: format!("{}", self.current()),
-                expected: "var, const, function, default, {, or *".to_string(),
+                expected: "var, const, function, class, default, {, or *".to_string(),
                 span: self.current_span(),
             }
             .into()),
@@ -1149,6 +1197,9 @@ impl Parser {
         // class-body fields' initialisers, then the constructor's
         // `this.NAME = …` lines. (name, value, span)
         let mut field_sets: Vec<(String, Expr, Span)> = Vec::new();
+        // The constructor's other statements, each with the number of
+        // field settings that run before it.
+        let mut ctor_stmts: Vec<(usize, Stmt)> = Vec::new();
         let mut method_props: Vec<PropDef> = Vec::new();
 
         // The annotations of class-body fields (`x: T`, `/** x: T */ x`),
@@ -1203,6 +1254,21 @@ impl Parser {
                 }
             }
 
+            // `async name() { … }`: a method whose body is lifted into
+            // `Promise.resolve(…)`, as an `async function`'s is. `async`
+            // followed by `(`, `=` or the end of the member is a member
+            // named `async`.
+            let is_async = matches!(self.current(), Token::Async)
+                && !matches!(
+                    self.tokens.get(self.pos + 1).map(|s| &s.value),
+                    Some(
+                        Token::LParen | Token::Eq | Token::Semicolon | Token::Colon | Token::RBrace
+                    )
+                );
+            if is_async {
+                self.advance();
+            }
+
             // Accessor declarations: `get foo() { ... }` or
             // `set foo(v) { ... }`. Recognised before the regular
             // member parser consumes `get` / `set` as a name. The
@@ -1248,9 +1314,20 @@ impl Parser {
                 self.advance();
                 Self::private_name(&name)
             } else {
-                self.expect_ident()?
+                // A member may be named by a keyword (`delete(…)`,
+                // `default`), as an object literal's property may.
+                self.expect_ident_or_keyword()?
             };
             let key_span = self.prev_span();
+            if is_async && (accessor_kind.is_some() || key_name == "constructor") {
+                return Err(ParseError::UnexpectedToken {
+                    found: "async".to_string(),
+                    expected: "a method name (a getter, setter or constructor can't be async)"
+                        .to_string(),
+                    span: key_span,
+                }
+                .into());
+            }
 
             if let Some(kind) = accessor_kind {
                 // Accessor body: parse `(params) { body }` and lower.
@@ -1507,10 +1584,21 @@ impl Parser {
             }
 
             self.expect(&Token::LParen)?;
-            let params = self.parse_parameters()?;
+            // Default and destructuring parameters, as a plain function
+            // takes them: unpacked at the top of the body.
+            let (params, prefix) = self.parse_parameters_with_prefix()?;
             self.expect(&Token::RParen)?;
-            let body_stmt = self.parse_function_body_block()?;
+            if is_async {
+                self.next_fn_is_async = true;
+            }
+            let body_stmt =
+                Self::prepend_param_destructuring(self.parse_function_body_block()?, prefix);
             let member_span = Span::new(member_start, self.prev_span().end);
+            let body_stmt = if is_async {
+                *Self::wrap_body_in_promise_resolve(Box::new(body_stmt), member_span)
+            } else {
+                body_stmt
+            };
 
             if key_name == "constructor" {
                 ctor_params = params;
@@ -1519,30 +1607,19 @@ impl Parser {
                     Stmt::Block { body, .. } => body.clone(),
                     _ => vec![body_stmt.clone()],
                 };
+                // A `this.NAME = …` line sets a field; any other
+                // statement runs where it stands, between the fields set
+                // before and after it (see `ctor_stmts`).
                 for s in stmts {
-                    match s {
+                    let field = match &s {
                         Stmt::Expr { expression, .. } => {
-                            if let Some((field, value, span)) =
-                                Parser::extract_this_assignment(&expression)
-                            {
-                                field_sets.push((field, value, span));
-                            } else {
-                                return Err(ParseError::UnexpectedToken {
-                                    found: "complex expression".to_string(),
-                                    expected: "this.FIELD = EXPR; (constructor is limited to simple field initialisers)".to_string(),
-                                    span: expression.span(),
-                                }
-                                .into());
-                            }
+                            Parser::extract_this_assignment(expression)
                         }
-                        other => {
-                            return Err(ParseError::UnexpectedToken {
-                                found: "statement".to_string(),
-                                expected: "this.FIELD = EXPR; (constructor is limited to simple field initialisers)".to_string(),
-                                span: other.span(),
-                            }
-                            .into());
-                        }
+                        _ => None,
+                    };
+                    match field {
+                        Some(set) => field_sets.push(set),
+                        None => ctor_stmts.push((field_sets.len(), s)),
                     }
                 }
             } else {
@@ -1589,6 +1666,24 @@ impl Parser {
             }
             .into());
         }
+        // Likewise a name the constructor's statements declare: in the
+        // factory it would be in scope for the methods.
+        if let Some(n) = ctor_stmts
+            .iter()
+            .flat_map(|(_, st)| class_fields::declared_names(st))
+            .find(|n| outer_names.contains(n))
+        {
+            return Err(ParseError::Unsupported {
+                feature: format!(
+                    "a method or field initialiser of class `{}` reading `{}`, which the \
+                     constructor also declares (in JavaScript it reads the `{}` outside the \
+                     class): rename one of them",
+                    name, n, n
+                ),
+                span,
+            }
+            .into());
+        }
 
         // A field and a method or getter of the same name: the instance's
         // own field would hide the prototype's member.
@@ -1626,7 +1721,12 @@ impl Parser {
         let mut order: Vec<String> = Vec::new();
         let mut last: std::collections::HashMap<String, PropDef> = std::collections::HashMap::new();
         let mut body_stmts: Vec<Stmt> = Vec::new();
-        for (field, mut value, at) in field_sets {
+        let mut ctor_stmts = ctor_stmts.into_iter().peekable();
+        for (i, (field, mut value, at)) in field_sets.into_iter().enumerate() {
+            while let Some((_, mut st)) = ctor_stmts.next_if(|(before, _)| *before == i) {
+                class_fields::rewrite_stmt(&mut st, &set, &name)?;
+                body_stmts.push(st);
+            }
             if !order.contains(&field) {
                 order.push(field.clone());
             }
@@ -1692,6 +1792,11 @@ impl Parser {
                 },
             );
             set.insert(field, class_fields::SetField::Value(local));
+        }
+
+        for (_, mut st) in ctor_stmts {
+            class_fields::rewrite_stmt(&mut st, &set, &name)?;
+            body_stmts.push(st);
         }
 
         // The object literal: fields first, then methods.
@@ -1803,7 +1908,7 @@ impl Parser {
     /// Wrap an `async function` declaration so its return type becomes
     /// `Promise<T>`. The body is lifted into an IIFE and handed to
     /// `Promise.resolve`, turning `async function foo(x) { return x + 1; }`
-    /// into `function foo(x) { return Promise.resolve((function() { return x + 1; })()); }`.
+    /// into `function foo(x) { return Promise.resolve((() => { return x + 1; })()); }`.
     ///
     /// Inference then types `foo` as `(T) => Promise<T>` with no extra
     /// cases. `await e` inside the original body continues to be
@@ -1836,13 +1941,14 @@ impl Parser {
     }
 
     fn wrap_body_in_promise_resolve(body: Box<Stmt>, span: Span) -> Box<Stmt> {
-        // (function () { ...body... })()
+        // (() => { ...body... })(): an arrow, so the body keeps the
+        // function's own `this` (an async method reads its instance).
         let iife = Expr::Function {
             name: None,
             params: vec![],
             body,
             type_annotation: None,
-            arrow: false,
+            arrow: true,
             span,
         };
         let iife_call = Expr::Call {
@@ -1924,6 +2030,12 @@ impl Parser {
                     let pattern_end = self.prev_span().end;
                     let pattern_span = Span::new(pattern_start, pattern_end);
                     let temp = self.fresh_temp_name();
+                    // `{a = 1} = {}`: a default for the whole argument,
+                    // typed as a plain parameter's default is (below).
+                    if self.consume_if(&Token::Eq) {
+                        let default_expr = self.parse_assignment_expression()?;
+                        prefix.push(Self::param_default(&temp, pattern_span, default_expr));
+                    }
                     let mut decls = Vec::new();
                     self.desugar_pattern(
                         &pattern,
@@ -1983,31 +2095,7 @@ impl Parser {
                     // default's type via the assignment.
                     if self.consume_if(&Token::Eq) {
                         let default_expr = self.parse_assignment_expression()?;
-                        let default_span = default_expr.span();
-                        let assign = Stmt::Expr {
-                            expression: Expr::Assign {
-                                op: AssignOp::Assign,
-                                left: Box::new(Expr::Ident {
-                                    name: name.clone(),
-                                    span: actual_span,
-                                }),
-                                right: Box::new(default_expr),
-                                span: default_span,
-                            },
-                            span: default_span,
-                        };
-                        prefix.push(Stmt::If {
-                            test: Expr::Lit {
-                                value: Literal::Boolean(false),
-                                span: actual_span,
-                            },
-                            consequent: Box::new(Stmt::Block {
-                                body: vec![assign],
-                                span: default_span,
-                            }),
-                            alternate: None,
-                            span: default_span,
-                        });
+                        prefix.push(Self::param_default(&name, actual_span, default_expr));
                     }
                     params.push(Param::new(name, actual_span));
                 }
@@ -2019,6 +2107,36 @@ impl Parser {
         }
 
         Ok((params, prefix))
+    }
+
+    /// The dead `if (false) { param = default; }` a parameter's default
+    /// lowers to (see `parse_parameters_with_prefix`).
+    fn param_default(name: &str, span: Span, default_expr: Expr) -> Stmt {
+        let default_span = default_expr.span();
+        let assign = Stmt::Expr {
+            expression: Expr::Assign {
+                op: AssignOp::Assign,
+                left: Box::new(Expr::Ident {
+                    name: name.to_string(),
+                    span,
+                }),
+                right: Box::new(default_expr),
+                span: default_span,
+            },
+            span: default_span,
+        };
+        Stmt::If {
+            test: Expr::Lit {
+                value: Literal::Boolean(false),
+                span,
+            },
+            consequent: Box::new(Stmt::Block {
+                body: vec![assign],
+                span: default_span,
+            }),
+            alternate: None,
+            span: default_span,
+        }
     }
 
     /// Parse a function body block, establishing a fresh async context.
@@ -2174,8 +2292,8 @@ impl Parser {
             // loop body so the pattern's bindings are in scope.
             if self.check(&Token::LBrace) || self.check(&Token::LBracket) {
                 let pattern = self.parse_pattern()?;
-                if self.check(&Token::In) || self.check(&Token::Of) {
-                    let is_of = self.check(&Token::Of);
+                if self.check(&Token::In) || self.check_word("of") {
+                    let is_of = self.check_word("of");
                     self.advance();
                     let right = self.parse_expression()?;
                     self.expect(&Token::RParen)?;
@@ -2265,8 +2383,8 @@ impl Parser {
             let var_span = Span::new(name_start, var_end);
 
             // Check for for-in/of
-            if self.check(&Token::In) || self.check(&Token::Of) {
-                let is_of = self.check(&Token::Of);
+            if self.check(&Token::In) || self.check_word("of") {
+                let is_of = self.check_word("of");
                 self.advance();
 
                 let right = self.parse_expression()?;
@@ -2323,8 +2441,8 @@ impl Parser {
             let expr = self.parse_expression_no_in()?;
 
             // Check for for-in/of
-            if self.check(&Token::In) || self.check(&Token::Of) {
-                let is_of = self.check(&Token::Of);
+            if self.check(&Token::In) || self.check_word("of") {
+                let is_of = self.check_word("of");
                 self.advance();
 
                 let right = self.parse_expression()?;
@@ -3424,17 +3542,37 @@ impl Parser {
             }
         }
 
+        // `async name() { … }`: an async method (see the class-body
+        // case). `async` followed by `(`, `:`, `,` or `}` is a property
+        // named `async`.
+        let is_async = matches!(self.current(), Token::Async)
+            && !matches!(
+                self.tokens.get(self.pos + 1).map(|s| &s.value),
+                Some(Token::LParen | Token::Colon | Token::Comma | Token::RBrace)
+            );
+        if is_async {
+            self.advance();
+        }
+
         let key = self.parse_property_key()?;
 
         // Check for method shorthand
-        if self.check(&Token::LParen) {
-            self.advance();
+        if is_async || self.check(&Token::LParen) {
+            self.expect(&Token::LParen)?;
             let (params, prefix) = self.parse_parameters_with_prefix()?;
             self.expect(&Token::RParen)?;
+            if is_async {
+                self.next_fn_is_async = true;
+            }
             let body = Box::new(Self::prepend_param_destructuring(
                 self.parse_function_body_block()?,
                 prefix,
             ));
+            let body = if is_async {
+                Self::wrap_body_in_promise_resolve(body, Span::new(start, self.prev_span().end))
+            } else {
+                body
+            };
 
             return Ok(PropDef::Method {
                 key,
@@ -3539,7 +3677,6 @@ impl Parser {
                 | Token::Do
                 | Token::For
                 | Token::In
-                | Token::Of
                 | Token::Return
                 | Token::Throw
                 | Token::Try
@@ -3561,8 +3698,6 @@ impl Parser {
                 | Token::False
                 | Token::Import
                 | Token::Export
-                | Token::From
-                | Token::As
                 | Token::Class
                 | Token::Extends
                 | Token::Super
@@ -3584,7 +3719,6 @@ impl Parser {
             Token::Do => "do",
             Token::For => "for",
             Token::In => "in",
-            Token::Of => "of",
             Token::Return => "return",
             Token::Throw => "throw",
             Token::Try => "try",
@@ -3606,8 +3740,6 @@ impl Parser {
             Token::False => "false",
             Token::Import => "import",
             Token::Export => "export",
-            Token::From => "from",
-            Token::As => "as",
             Token::Class => "class",
             Token::Extends => "extends",
             Token::Super => "super",
@@ -3863,6 +3995,35 @@ impl Parser {
 
     fn check(&self, token: &Token) -> bool {
         std::mem::discriminant(self.current()) == std::mem::discriminant(token)
+    }
+
+    /// Whether the current token is the contextual keyword `word`
+    /// (`of`, `from`, `as`): an identifier everywhere else, so
+    /// `const from = 1` is a binding.
+    fn check_word(&self, word: &str) -> bool {
+        matches!(self.current(), Token::Ident(name) if name == word)
+    }
+
+    fn consume_word(&mut self, word: &str) -> bool {
+        if self.check_word(word) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect_word(&mut self, word: &str) -> Result<()> {
+        if self.consume_word(word) {
+            Ok(())
+        } else {
+            Err(ParseError::UnexpectedToken {
+                found: format!("{}", self.current()),
+                expected: format!("`{}`", word),
+                span: self.current_span(),
+            }
+            .into())
+        }
     }
 
     fn peek_is(&self, token: &Token) -> bool {

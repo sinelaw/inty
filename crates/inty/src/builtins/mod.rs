@@ -1322,6 +1322,12 @@ impl InferState {
         if name == "length" && matches!(receiver, Type::Array(_)) {
             return Ok(());
         }
+        // A regex's `lastIndex` takes a store too: it is where the next
+        // `exec`/`test` of a global or sticky regex starts (`re.lastIndex = 0`
+        // rewinds it); the number stored is checked as the property's type.
+        if name == "lastIndex" && matches!(receiver, Type::Regex) {
+            return Ok(());
+        }
         // `d.key = v` on a JavaScript `Dict<V>` stores that key, as
         // `d["key"] = v` does.
         if matches!(receiver, Type::Map(_))
