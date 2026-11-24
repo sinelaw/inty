@@ -23,7 +23,6 @@ pub enum Token {
     Do,
     For,
     In,
-    Of,
     Return,
     Throw,
     Try,
@@ -45,8 +44,6 @@ pub enum Token {
     False,
     Import,
     Export,
-    From,
-    As,
 
     // Literals
     Number(f64),
@@ -177,7 +174,6 @@ impl Token {
                 | Token::Do
                 | Token::For
                 | Token::In
-                | Token::Of
                 | Token::Return
                 | Token::Throw
                 | Token::Try
@@ -199,8 +195,6 @@ impl Token {
                 | Token::False
                 | Token::Import
                 | Token::Export
-                | Token::From
-                | Token::As
         )
     }
 
@@ -222,7 +216,6 @@ impl Token {
             "do" => Some(Token::Do),
             "for" => Some(Token::For),
             "in" => Some(Token::In),
-            "of" => Some(Token::Of),
             "return" => Some(Token::Return),
             "throw" => Some(Token::Throw),
             "try" => Some(Token::Try),
@@ -244,8 +237,6 @@ impl Token {
             "false" => Some(Token::False),
             "import" => Some(Token::Import),
             "export" => Some(Token::Export),
-            "from" => Some(Token::From),
-            "as" => Some(Token::As),
             _ => None,
         }
     }
@@ -269,7 +260,6 @@ impl fmt::Display for Token {
             Token::Do => write!(f, "do"),
             Token::For => write!(f, "for"),
             Token::In => write!(f, "in"),
-            Token::Of => write!(f, "of"),
             Token::Return => write!(f, "return"),
             Token::Throw => write!(f, "throw"),
             Token::Try => write!(f, "try"),
@@ -291,8 +281,6 @@ impl fmt::Display for Token {
             Token::False => write!(f, "false"),
             Token::Import => write!(f, "import"),
             Token::Export => write!(f, "export"),
-            Token::From => write!(f, "from"),
-            Token::As => write!(f, "as"),
             Token::Number(n) => write!(f, "{}", n),
             Token::String(s) => write!(f, "\"{}\"", s),
             Token::Regex { pattern, flags } => write!(f, "/{}/{}", pattern, flags),

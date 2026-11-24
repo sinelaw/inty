@@ -231,3 +231,149 @@ pub(super) fn rewrite(
         }
     }
 }
+
+/// Rewrite every `this.f` in a constructor statement, as [`rewrite`] does
+/// for an expression. The statement runs between the fields set before it
+/// and those set after: it may read the first (as `this.f`) but not set a
+/// field itself (only a `this.f = …` line of its own does), and it may
+/// not `return`, which would leave the instance unbuilt.
+pub(super) fn rewrite_stmt(
+    stmt: &mut Stmt,
+    fields: &HashMap<String, SetField>,
+    class: &str,
+) -> Result<()> {
+    let each = |stmts: &mut [Stmt]| -> Result<()> {
+        for s in stmts {
+            rewrite_stmt(s, fields, class)?;
+        }
+        Ok(())
+    };
+    match stmt {
+        Stmt::Block { body, .. } => each(body),
+        Stmt::Empty { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => Ok(()),
+        Stmt::Expr { expression, .. }
+        | Stmt::Throw {
+            argument: expression,
+            ..
+        } => rewrite(expression, fields, class),
+        Stmt::Var { declarations, .. } => {
+            for d in declarations {
+                if let Some(init) = &mut d.init {
+                    rewrite(init, fields, class)?;
+                }
+            }
+            Ok(())
+        }
+        Stmt::If {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => {
+            rewrite(test, fields, class)?;
+            rewrite_stmt(consequent, fields, class)?;
+            match alternate {
+                Some(a) => rewrite_stmt(a, fields, class),
+                None => Ok(()),
+            }
+        }
+        Stmt::While { test, body, .. } | Stmt::DoWhile { body, test, .. } => {
+            rewrite(test, fields, class)?;
+            rewrite_stmt(body, fields, class)
+        }
+        Stmt::For {
+            init,
+            test,
+            update,
+            body,
+            ..
+        } => {
+            match init {
+                Some(ForInit::VarDecl(decls)) => {
+                    for d in decls {
+                        if let Some(init) = &mut d.init {
+                            rewrite(init, fields, class)?;
+                        }
+                    }
+                }
+                Some(ForInit::Expr(e)) => rewrite(e, fields, class)?,
+                None => {}
+            }
+            for e in [test, update].into_iter().flatten() {
+                rewrite(e, fields, class)?;
+            }
+            rewrite_stmt(body, fields, class)
+        }
+        Stmt::ForIn {
+            left, right, body, ..
+        }
+        | Stmt::ForOf {
+            left, right, body, ..
+        } => {
+            if let ForInLhs::Expr(e) = left {
+                rewrite(e, fields, class)?;
+            }
+            rewrite(right, fields, class)?;
+            rewrite_stmt(body, fields, class)
+        }
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
+            rewrite_stmt(block, fields, class)?;
+            if let Some(h) = handler {
+                rewrite_stmt(&mut h.body, fields, class)?;
+            }
+            match finalizer {
+                Some(f) => rewrite_stmt(f, fields, class),
+                None => Ok(()),
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            ..
+        } => {
+            rewrite(discriminant, fields, class)?;
+            for c in cases {
+                if let Some(t) = &mut c.test {
+                    rewrite(t, fields, class)?;
+                }
+                each(&mut c.consequent)?;
+            }
+            Ok(())
+        }
+        Stmt::Labeled { body, .. } => rewrite_stmt(body, fields, class),
+        Stmt::FunctionDecl { .. } => {
+            if crate::ast::free_idents::mentions_this_in_stmt(stmt) {
+                Err(unsupported(class, "`this` inside a function", stmt.span()))
+            } else {
+                Ok(())
+            }
+        }
+        Stmt::Return { span, .. } => Err(ParseError::Unsupported {
+            feature: format!(
+                "`return` in the constructor of class `{}` (the instance is built from \
+                 the fields its constructor sets, so it has to run to its end)",
+                class
+            ),
+            span: *span,
+        }
+        .into()),
+        Stmt::Import { span, .. } | Stmt::Export { span, .. } => {
+            Err(unsupported(class, "an import or export", *span))
+        }
+    }
+}
+
+/// The names a constructor statement declares in the constructor's own
+/// scope (its `var`/`let`/`const` and `function` declarations).
+pub(super) fn declared_names(stmt: &Stmt) -> Vec<String> {
+    match stmt {
+        Stmt::Var { declarations, .. } => declarations.iter().map(|d| d.name.clone()).collect(),
+        Stmt::FunctionDecl { name, .. } => vec![name.clone()],
+        _ => Vec::new(),
+    }
+}

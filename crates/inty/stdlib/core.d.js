@@ -155,7 +155,14 @@ const Boolean;
 // polymorphic — each `Promise.resolve(x)` call instantiates T fresh —
 // which is exactly what the async desugaring needs to wrap the result
 // of an IIFE whose return type isn't known until inference finishes.
-/** const Promise: <T, E>{resolve: (T) => Promise<T>, reject: (E) => Promise<T>, all: (Promise<T>[]) => Promise<T[]>} */
+// `new Promise((resolve, reject) => …)` hands the executor the two
+// settling functions; each construction instantiates T and E fresh.
+/** const Promise: <T, E>{
+        ((resolve: (T) => Undefined, reject: (E) => Undefined) => Undefined) => Promise<T>,
+        resolve: (T) => Promise<T>,
+        reject: (E) => Promise<T>,
+        all: (Promise<T>[]) => Promise<T[]>
+    } */
 const Promise;
 
 /** const parseInt: (s: String, radix?: Number) => Number */
