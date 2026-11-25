@@ -120,14 +120,95 @@ impl InferState {
         self.unify_depth += 1;
         let result = self.unify_impl(span, &t1, &t2);
         self.unify_depth -= 1;
-        if let (Err(_), Some(pair)) = (&result, pair) {
-            // Not unified: a caller that recovers may meet it again.
-            self.unify_bound_pairs.remove(&pair);
+        match (&result, pair) {
+            (Err(_), Some(pair)) => {
+                // Not unified: a caller that recovers may meet it again.
+                self.unify_bound_pairs.remove(&pair);
+            }
+            (Ok(()), Some(pair)) => self.unified_bound_pairs.push(pair),
+            _ => {}
         }
         if self.unify_depth == 0 {
             self.unify_bound_pairs.clear();
+            let unified = std::mem::take(&mut self.unified_bound_pairs);
+            if result.is_ok() {
+                for (a, b) in unified {
+                    self.link_bound(a, b);
+                }
+            }
         }
         result
+    }
+
+    /// Make two variables bound to types the unification has just shown
+    /// equal one variable: `a` becomes a link to `b`, its own (equal)
+    /// type dropped. Union-find unification links what it unifies;
+    /// left apart, the two types are compared again, field by field,
+    /// at every later meeting, and a type that mentions them in many
+    /// places (an element's row, each of whose handlers' events
+    /// mentions the element, chained through `appendChild`) is compared
+    /// exponentially often.
+    fn link_bound(&mut self, a: TVarId, b: TVarId) {
+        let (Some(ra), Some(rb)) = (
+            self.var_table.find_if_present(a),
+            self.var_table.find_if_present(b),
+        ) else {
+            return;
+        };
+        if ra == rb || self.var_table.bound(ra).is_none() || self.var_table.bound(rb).is_none() {
+            return;
+        }
+        // A link closing a cycle the types don't already go through
+        // a recursive type for would make `b`'s type mention itself
+        // directly: those stay apart.
+        if self.reaches_var(rb, ra) {
+            return;
+        }
+        self.var_table.link_to_root(ra, rb);
+        self.main_subst
+            .insert(TVarName::Flex(ra), Type::Var(TVarName::Flex(rb)));
+    }
+
+    /// Whether the type `from` is bound to mentions the variable `to`,
+    /// through the substitution (each bound variable's type walked once).
+    /// A walk too long to finish answers yes, which keeps the two apart.
+    fn reaches_var(&mut self, from: TVarId, to: TVarId) -> bool {
+        const BUDGET: usize = 200_000;
+        let mut seen: std::collections::HashSet<TVarId> = std::collections::HashSet::new();
+        let mut stack: Vec<std::sync::Arc<Type>> = Vec::new();
+        let mut steps = 0usize;
+        let mut push_var = |state: &mut Self,
+                            id: TVarId,
+                            stack: &mut Vec<std::sync::Arc<Type>>,
+                            seen: &mut std::collections::HashSet<TVarId>|
+         -> bool {
+            let Some(root) = state.var_table.find_if_present(id) else {
+                return false;
+            };
+            if root == to {
+                return true;
+            }
+            if seen.insert(root) {
+                if let Some(bound) = state.main_subst.get_shared(&TVarName::Flex(root)) {
+                    stack.push(bound);
+                }
+            }
+            false
+        };
+        if push_var(self, from, &mut stack, &mut seen) {
+            return true;
+        }
+        while let Some(ty) = stack.pop() {
+            let mut vars = Vec::new();
+            ty.for_each_var(&mut |v| vars.push(v));
+            for id in vars {
+                steps += 1;
+                if steps > BUDGET || push_var(self, id, &mut stack, &mut seen) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// The roots of `t1` and `t2`, ordered, when both are variables bound

@@ -169,6 +169,28 @@ export const p = new Panel(\"dialog\");
     );
 }
 
+/// An array of elements chained through `appendChild`: each element
+/// joined into the array's element type compared the chain again, field
+/// by field, for every element, since two variables shown equal were
+/// left apart (6.9 s for four elements, twenty times more per element).
+#[test]
+fn array_of_chained_elements_checks_quickly() {
+    let n = 10;
+    let mut src = vec![
+        "export function mk() {".to_string(),
+        "  const d0 = document.createElement('span');".to_string(),
+    ];
+    for i in 1..n {
+        src.push(format!(
+            "  const d{i} = document.createElement('span'); d{}.appendChild(d{i});",
+            i - 1
+        ));
+    }
+    let all: Vec<String> = (0..n).map(|i| format!("d{i}")).collect();
+    src.push(format!("  return [{}];\n}}", all.join(", ")));
+    check_quickly(&src.join("\n"));
+}
+
 fn nested_elements_class() -> String {
     let mut src = vec![
         "export class V {".to_string(),
