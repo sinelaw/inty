@@ -339,6 +339,11 @@ pub struct InferState {
     /// at the call, with the call's span and the callee's name: settled
     /// when it is (`settle_detached`), at the latest as `Undefined`.
     pub(crate) pending_detached: Vec<(Type, Span, String)>,
+    /// The `this` of a callee called as a method (`o.f()`) that wasn't
+    /// known at the call, with the receiver and the call's span: settled
+    /// when it is (`settle_receivers`), at the latest as a function that
+    /// uses no `this`.
+    pub(crate) pending_receivers: Vec<(Type, Type, Span)>,
     /// Which declaration each identifier refers to, and which bindings
     /// are never written after their initialiser: the only ones
     /// narrowing refines (see `ast::resolve`).
@@ -572,6 +577,7 @@ impl InferState {
             reserved_class_ids: HashMap::new(),
             promise_results: Vec::new(),
             pending_detached: Vec::new(),
+            pending_receivers: Vec::new(),
             resolution: Default::default(),
             local_types: HashMap::new(),
             forward_locals: HashMap::new(),
@@ -1048,6 +1054,43 @@ impl InferState {
     /// [`MAX_GENERALISED`] nodes.
     pub(crate) fn too_large_to_generalise(&self, ty: &Type) -> bool {
         self.main_subst.flattened_size(ty, MAX_GENERALISED + 1) > MAX_GENERALISED
+    }
+
+    /// [`Self::too_large_to_generalise`], or a waiting constraint the
+    /// generalisation of `ty` would carry in its scheme (one reaching its
+    /// variables, or those of another it carries) is: `generalize` writes
+    /// those out too.
+    pub(crate) fn scheme_too_large(&self, ty: &Type) -> bool {
+        if self.too_large_to_generalise(ty) {
+            return true;
+        }
+        let mut reach = crate::types::subst::Reach::default();
+        self.main_subst.reach(ty, &mut reach);
+        let mut vars = reach.vars;
+        let mut left: Vec<&PendingConstraint> = self.pending_constraints.iter().collect();
+        loop {
+            let mut rest = Vec::new();
+            let mut took = false;
+            for c in left {
+                let mut r = crate::types::subst::Reach::default();
+                for t in &c.pred.types {
+                    self.main_subst.reach(t, &mut r);
+                }
+                if r.vars.iter().any(|v| v.is_flex() && vars.contains(v)) {
+                    if c.pred.types.iter().any(|t| self.too_large_to_generalise(t)) {
+                        return true;
+                    }
+                    vars.extend(r.vars);
+                    took = true;
+                } else {
+                    rest.push(c);
+                }
+            }
+            left = rest;
+            if !took {
+                return false;
+            }
+        }
     }
 
     /// How large `ty` is written out (see [`Subst::flattened_size`]),
@@ -1728,6 +1771,14 @@ impl InferState {
     fn assert_mirror_consistent(&mut self, var: &TVarName) {
         let TVarName::Flex(_) = var else { return };
         let ty_var = Type::Var(var.clone());
+        // Both sides write the binding out as a tree: one that mentions
+        // large types in many places (elements chained through
+        // `appendChild`) is exponentially larger, and the check alone
+        // would run out of memory. Such a binding isn't probed.
+        const PROBE_CAP: usize = 20_000;
+        if self.main_subst.flattened_size(&ty_var, PROBE_CAP) >= PROBE_CAP {
+            return;
+        }
         let via_subst = self.main_subst.apply(&ty_var);
         let via_zonk = super::zonk::zonk(&mut self.var_table, &self.main_subst, &ty_var);
         // If either side reached a non-Var (a structured type), the
@@ -2205,6 +2256,62 @@ impl InferState {
         pinned
     }
 
+    /// Settle the `this` of callees called as methods that weren't known
+    /// at the call (`pending_receivers`). One now known is checked against
+    /// the receiver as at the call (`unify_this`): no `this`, or the
+    /// receiver. One still unknown stays unknown while the environment
+    /// fixes it (`fixed`), and otherwise (and always when `fixed` is
+    /// `None`) is a function that uses no `this`: a function type whose
+    /// body isn't seen says it uses none (as an annotation does), and a
+    /// call never makes a function a method. Whether anything was
+    /// pinned.
+    pub(crate) fn settle_receivers(
+        &mut self,
+        fixed: Option<&std::collections::HashSet<TVarName>>,
+    ) -> bool {
+        let mut pinned = false;
+        let mut keep = Vec::new();
+        for (this, receiver, span) in std::mem::take(&mut self.pending_receivers) {
+            match self.zonk_head(&this) {
+                Type::Var(v) if v.is_flex() && self.this_is_read(&v) => {
+                    if let Err(e) = self.unify_this(span, &this, &receiver) {
+                        self.push_error(e);
+                    }
+                }
+                Type::Var(v) if v.is_flex() => {
+                    if fixed.is_none_or(|fixed| !fixed.contains(&v)) {
+                        if let Err(e) = self.unify(span, &Type::Var(v), &Type::ArrowThis) {
+                            self.push_error(e);
+                        }
+                        pinned = true;
+                    } else {
+                        keep.push((this, receiver, span));
+                    }
+                }
+                _ => {
+                    if let Err(e) = self.unify_this(span, &this, &receiver) {
+                        self.push_error(e);
+                    }
+                }
+            }
+        }
+        self.pending_receivers.extend(keep);
+        pinned
+    }
+
+    /// Whether something reads a field of `this` of type `v` (a waiting
+    /// `HasProp` on it): the function it is the `this` of reads `this`.
+    fn this_is_read(&mut self, v: &TVarName) -> bool {
+        let var = Type::Var(v.clone());
+        let receivers: Vec<Type> = self
+            .pending_constraints
+            .iter()
+            .filter(|c| c.pred.class == ClassName::HasProp)
+            .filter_map(|c| c.pred.types.first().cloned())
+            .collect();
+        receivers.iter().any(|r| self.zonk_head(r) == var)
+    }
+
     /// Generalize a type over free variables not in the environment.
     /// Also collects relevant predicates from pending_constraints.
     /// Generalizes over presence variables too (Remy '94), with the
@@ -2249,6 +2356,9 @@ impl InferState {
         // the environment fixes doesn't change: one is bound to a type
         // without variables.)
         if !self.pending_detached.is_empty() && self.settle_detached(Some(&fixed_vars)) {
+            ty = self.main_subst.flatten(&ty);
+        }
+        if !self.pending_receivers.is_empty() && self.settle_receivers(Some(&fixed_vars)) {
             ty = self.main_subst.flatten(&ty);
         }
         let mut ty_vars = ty.free_vars();

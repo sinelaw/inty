@@ -75,3 +75,46 @@ fn records_of_functions_check_quickly() {
         "checking took {elapsed:?}: records of functions are expensive again"
     );
 }
+
+/// A class method building nested elements with `appendChild`, the
+/// result handed to a field of unknown type: the field's `appendChild`
+/// waits as a constraint whose argument is the element tree, and
+/// generalising the class wrote that constraint out in full — elements
+/// mention each other in cycles, so it came to about 16 million nodes
+/// (20 s, and out of memory on a real client). Such a constraint now
+/// counts towards "too large to generalise", as the type does.
+#[test]
+fn nested_elements_in_a_class_check_quickly() {
+    let mut src = vec![
+        "export class V {".to_string(),
+        "  constructor(root) { this.root = root; }".to_string(),
+        "  build() {".to_string(),
+        "    const d0 = document.createElement('div');".to_string(),
+    ];
+    for i in 1..10 {
+        src.push(format!(
+            "    const d{i} = document.createElement('span'); d{i}.textContent = 'x'; \
+             d{}.appendChild(d{i});",
+            i % std::cmp::max(1, i / 2)
+        ));
+    }
+    src.push("    this.root.appendChild(d0);\n  }\n}".to_string());
+    let src = src.join("\n");
+    let program = inty::frontends::javascript::parse_source(&src).expect("parses");
+    let start = Instant::now();
+    let errors = inty::worker::run_with_inference_stack("inty-checking-time", move || {
+        let (env, mut state) = inty::stdlib::initial_env_with_stdlib().expect("stdlib");
+        let result = state.infer_program_with_env(&env, &program).map(|_| ());
+        let mut errors: Vec<String> = state.take_errors().iter().map(|e| e.to_string()).collect();
+        if let Err(e) = result.and_then(|()| state.resolve_constraints()) {
+            errors.push(e.to_string());
+        }
+        errors
+    });
+    let elapsed = start.elapsed();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "checking took {elapsed:?}: a nested element tree is written out in full again"
+    );
+}

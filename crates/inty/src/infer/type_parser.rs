@@ -1148,7 +1148,8 @@ impl<'a> TypeParser<'a> {
             "Boolean" | "boolean" => Ok(Type::Boolean),
             "Undefined" | "undefined" | "void" => Ok(Type::Undefined),
             "Null" | "null" => Ok(Type::Null),
-            "Regex" => Ok(Type::Regex),
+            // `RegExp` is how the type prints (and the constructor's name).
+            "Regex" | "RegExp" => Ok(Type::Regex),
             name if TypedArrayKind::from_name(name).is_some() => {
                 Ok(Type::TypedArray(TypedArrayKind::from_name(name).unwrap()))
             }

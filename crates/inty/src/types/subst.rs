@@ -568,24 +568,15 @@ impl Subst {
     /// events) expands to far more than the substitution holds, so a
     /// printer asks first.
     pub fn flattened_size(&self, ty: &Type, cap: usize) -> usize {
-        let mut memo: HashMap<TVarName, usize> = HashMap::new();
-        let mut in_progress: HashSet<TVarName> = HashSet::new();
-        self.size_of(ty, cap, &mut memo, &mut in_progress)
+        let mut state = SizeState::default();
+        self.size_of(ty, cap, &mut state)
     }
 
-    fn size_of(
-        &self,
-        ty: &Type,
-        cap: usize,
-        memo: &mut HashMap<TVarName, usize>,
-        in_progress: &mut HashSet<TVarName>,
-    ) -> usize {
-        let sum = |types: &mut dyn Iterator<Item = &Type>,
-                   memo: &mut HashMap<TVarName, usize>,
-                   in_progress: &mut HashSet<TVarName>| {
+    fn size_of(&self, ty: &Type, cap: usize, state: &mut SizeState) -> usize {
+        let sum = |types: &mut dyn Iterator<Item = &Type>, state: &mut SizeState| {
             let mut n = 1usize;
             for t in types {
-                n = n.saturating_add(self.size_of(t, cap, memo, in_progress));
+                n = n.saturating_add(self.size_of(t, cap, state));
                 if n >= cap {
                     return cap;
                 }
@@ -593,15 +584,13 @@ impl Subst {
             n
         };
         match ty {
-            Type::Var(name) => self.size_of_var(name, cap, memo, in_progress),
+            Type::Var(name) => self.size_of_var(name, cap, state),
             Type::Row(row) => {
-                let mut n = sum(&mut row.props.values().map(|e| &e.ty), memo, in_progress);
+                let mut n = sum(&mut row.props.values().map(|e| &e.ty), state);
                 match &row.tail {
-                    RowTail::Open(var) => {
-                        n = n.saturating_add(self.size_of_var(var, cap, memo, in_progress))
-                    }
+                    RowTail::Open(var) => n = n.saturating_add(self.size_of_var(var, cap, state)),
                     RowTail::Recursive(_, args) => {
-                        n = n.saturating_add(sum(&mut args.iter(), memo, in_progress))
+                        n = n.saturating_add(sum(&mut args.iter(), state))
                     }
                     RowTail::Closed => {}
                 }
@@ -617,41 +606,50 @@ impl Subst {
                     .map(|t| &**t)
                     .chain(params.iter().map(|p| &p.ty))
                     .chain(std::iter::once(&**ret)),
-                memo,
-                in_progress,
+                state,
             ),
             Type::Array(t) | Type::Maybe(_, t) | Type::Promise(t) | Type::Map(t) => {
-                sum(&mut std::iter::once(&**t), memo, in_progress)
+                sum(&mut std::iter::once(&**t), state)
             }
-            Type::Tuple(ts) | Type::Union(ts) | Type::Named(_, ts) => {
-                sum(&mut ts.iter(), memo, in_progress)
-            }
+            Type::Tuple(ts) | Type::Union(ts) | Type::Named(_, ts) => sum(&mut ts.iter(), state),
             _ => 1,
         }
     }
 
-    fn size_of_var(
-        &self,
-        name: &TVarName,
-        cap: usize,
-        memo: &mut HashMap<TVarName, usize>,
-        in_progress: &mut HashSet<TVarName>,
-    ) -> usize {
+    /// A variable's count, memoised exactly when `flatten` memoises its
+    /// expansion: not when the expansion cut a cycle, since `flatten`
+    /// then writes it out again at each occurrence (so a type whose
+    /// variables mention each other in cycles, as DOM elements chained
+    /// through `appendChild` do, is counted as large as `flatten` makes
+    /// it, rather than as the substitution holds it).
+    fn size_of_var(&self, name: &TVarName, cap: usize, state: &mut SizeState) -> usize {
         let Some(bound) = self.get(name) else {
             return 1;
         };
-        if let Some(&n) = memo.get(name) {
+        if let Some(&n) = state.memo.get(name) {
             return n;
         }
         // A cycle is cut where it closes, as `flatten` cuts it.
-        if !in_progress.insert(name.clone()) {
+        if !state.in_progress.insert(name.clone()) {
+            state.cuts += 1;
             return 1;
         }
-        let n = self.size_of(bound, cap, memo, in_progress);
-        in_progress.remove(name);
-        memo.insert(name.clone(), n);
+        let cuts_before = state.cuts;
+        let n = self.size_of(bound, cap, state);
+        state.in_progress.remove(name);
+        if state.cuts == cuts_before {
+            state.memo.insert(name.clone(), n);
+        }
         n
     }
+}
+
+/// [`Subst::flattened_size`]'s walk: as [`FlattenState`], counting.
+#[derive(Default)]
+struct SizeState {
+    in_progress: HashSet<TVarName>,
+    memo: HashMap<TVarName, usize>,
+    cuts: usize,
 }
 
 /// What a type reaches through a substitution: the free type and

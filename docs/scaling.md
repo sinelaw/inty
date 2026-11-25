@@ -227,3 +227,33 @@ Reasonable trigger: the first time inty needs to type-check a file
 where the depth-limit diagnostic fires on legitimate code. Today
 that's only htmx and friends. If users start running inty on more
 big single-file libraries, that day will come.
+
+## Constraints written out at generalisation (fixed)
+
+A class method building nested elements (`d0.appendChild(d1);
+d1.appendChild(d2); … this.root.appendChild(d0)`) took 20 s and, in a
+real client, ran out of memory. The type of the class was small; the
+cost was a waiting constraint, the `HasProp` of `this.root.appendChild`,
+whose argument is the element tree. `generalize` writes each constraint
+it carries out with `Subst::flatten`, and elements mention each other in
+cycles: `flatten` memoises a variable's expansion only when it cut no
+cycle, so it wrote the tree out again at every occurrence, about 16
+million nodes. Two changes:
+
+- `Subst::flattened_size` counted each variable once whatever its
+  expansion cut, so it reported such a type as small. It now memoises
+  exactly when `flatten` does, so it measures what `flatten` builds
+  (still bounded by its cap).
+- The group check before generalisation (`scheme_too_large`) counts the
+  constraints the scheme would carry, not only the type: one too large
+  makes the group keep its monomorphic types, with the existing warning,
+  as a type too large does.
+
+The example now checks in 70 ms. The debug-only mirror probe
+(`assert_mirror_consistent`) skips bindings over 20,000 nodes for the
+same reason.
+
+What stays open is the general cost described above: types are trees
+(`Box`), so `flatten` and `apply_subst` cannot share a repeated subterm.
+Hash-consed or `Rc`-shared types would remove the blow-up rather than
+detect it, but touch every type constructor.

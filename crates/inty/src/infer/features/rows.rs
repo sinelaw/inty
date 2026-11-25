@@ -122,6 +122,21 @@ impl InferState {
         // type variables.
         let shared_this = Type::Row(RowType::empty_open(self.fresh_flex()));
 
+        // The methods and getters are checked after the fields, as a
+        // recursive record is typed: `this` is the object, with every
+        // field's type known (each method's is joined when it is checked).
+        // So a method sees every field's type, whatever the order the
+        // members are written in, and a test on a value read off a field
+        // narrows as one on the same value read off a parameter of known
+        // type. Field values never depend on the methods' types, and
+        // defining a method runs no code, so checking them later changes
+        // nothing else. With a spread, which may replace members written
+        // before it, the members are checked where they are written.
+        let has_spread = properties
+            .iter()
+            .any(|p| matches!(p, PropDef::Spread { .. }));
+        let mut deferred: Vec<usize> = Vec::new();
+
         let mut props: BTreeMap<PropName, FieldEntry> = BTreeMap::new();
         let mut row_tail: RowTail = RowTail::Closed;
         // True if any spread was processed — even a closed-row spread
@@ -134,7 +149,7 @@ impl InferState {
         // since the operand may have them too.
         let mut waiting_spread: Option<TVarName> = None;
 
-        for prop in properties {
+        for (i, prop) in properties.iter().enumerate() {
             match prop {
                 PropDef::Property {
                     key,
@@ -263,77 +278,13 @@ impl InferState {
                     props.insert(prop_name, FieldEntry::pre(prop_type));
                 }
 
-                PropDef::Method {
-                    key,
-                    params,
-                    body,
-                    return_type_ast,
-                    proto,
-                    span: method_span,
-                } => {
-                    let prop_name = self.prop_key_to_name(key);
-                    // Infer method with the shared 'this' type. A Python
-                    // method's `-> T` return annotation (if any) is checked
-                    // here too.
-                    // A method that never mentions `this` uses none: it can
-                    // be called on the object or taken off it.
-                    let this = if crate::ast::free_idents::mentions_this_in_stmt(body) {
-                        shared_this.clone()
+                PropDef::Method { .. } | PropDef::Getter { .. } => {
+                    if has_spread {
+                        let (name, entry) = self.infer_object_member(env, prop, &shared_this)?;
+                        props.insert(name, entry);
                     } else {
-                        Type::ArrowThis
-                    };
-                    self.member_function = true;
-                    let method_type = self.infer_function_with_this(
-                        env,
-                        None,
-                        params,
-                        body,
-                        &None,
-                        return_type_ast.as_ref(),
-                        this,
-                        *method_span,
-                    );
-                    self.member_function = false;
-                    let method_type = method_type?;
-                    // A class's method is on its prototype; an object
-                    // literal's is its own data property.
-                    let entry = if *proto {
-                        FieldEntry::proto(method_type)
-                    } else {
-                        FieldEntry::pre(method_type)
-                    };
-                    props.insert(prop_name, entry);
-                }
-
-                PropDef::Getter {
-                    key,
-                    body,
-                    proto,
-                    span,
-                } => {
-                    let prop_name = self.prop_key_to_name(key);
-                    // Bind `this` in the getter body to the shared
-                    // instance row so `this.foo` references see the
-                    // surrounding object's fields (same trick as
-                    // methods, but the getter's value type is just
-                    // the body's return type — there's no callable
-                    // wrapper). Inferred through a `return`-collection
-                    // frame so the getter's `return`s don't leak into an
-                    // enclosing function's return type.
-                    let getter_env =
-                        env.extend("this".to_string(), TypeScheme::mono(shared_this.clone()));
-                    self.member_function = true;
-                    let ret_type = self.infer_body_return_type(&getter_env, body, true, *span);
-                    self.member_function = false;
-                    let ret_type = ret_type?;
-                    // A getter is read, not stored to: a store throws. A
-                    // class's getter is on its prototype.
-                    let entry = if *proto {
-                        FieldEntry::proto(ret_type)
-                    } else {
-                        FieldEntry::getter(ret_type)
-                    };
-                    props.insert(prop_name, entry);
+                        deferred.push(i);
+                    }
                 }
 
                 PropDef::Setter { key, span, .. } => {
@@ -405,6 +356,42 @@ impl InferState {
             }
         }
 
+        if !deferred.is_empty() {
+            // `this` is the object: its fields now (those no method or
+            // getter of the same name replaces), its methods as each is
+            // checked, and nothing else once it is complete (below).
+            let members: std::collections::BTreeSet<PropName> = deferred
+                .iter()
+                .map(|&i| match &properties[i] {
+                    PropDef::Method { key, .. } | PropDef::Getter { key, .. } => {
+                        self.prop_key_to_name(key)
+                    }
+                    _ => unreachable!("only methods and getters are deferred"),
+                })
+                .collect();
+            let fields: BTreeMap<PropName, FieldEntry> = props
+                .iter()
+                .filter(|(k, _)| !members.contains(*k))
+                .map(|(k, e)| (k.clone(), e.clone()))
+                .collect();
+            // (With none, `this` is already the empty open row it starts
+            // as: binding its tail to another empty one would only chain
+            // the two.)
+            if !fields.is_empty() {
+                let fields = Type::Row(RowType::open_entries(fields, self.fresh_flex()));
+                self.unify(span, &shared_this, &fields)?;
+            }
+            for &i in &deferred {
+                let (name, entry) = self.infer_object_member(env, &properties[i], &shared_this)?;
+                // A field written after it replaces it.
+                let replaced = properties[i + 1..].iter().any(|p| {
+                    matches!(p, PropDef::Property { key, .. } if self.prop_key_to_name(key) == name)
+                });
+                if !replaced {
+                    props.insert(name, entry);
+                }
+            }
+        }
         if spread_of_error {
             self.unify(span, &shared_this, &Type::Error)?;
             return Ok(Type::Error);
@@ -430,6 +417,89 @@ impl InferState {
 
         let _ = had_spread;
         Ok(self.zonk_head_into(obj_type))
+    }
+
+    /// Check a method or getter of an object literal whose `this` is
+    /// `this_ty`: its name and its entry in the object's row.
+    fn infer_object_member(
+        &mut self,
+        env: &TypeEnv,
+        prop: &PropDef,
+        this_ty: &Type,
+    ) -> InferResult<(PropName, FieldEntry)> {
+        match prop {
+            PropDef::Method {
+                key,
+                params,
+                body,
+                return_type_ast,
+                proto,
+                span: method_span,
+            } => {
+                let prop_name = self.prop_key_to_name(key);
+                // Infer method with the shared 'this' type. A Python
+                // method's `-> T` return annotation (if any) is checked
+                // here too.
+                // A method that never mentions `this` uses none: it can
+                // be called on the object or taken off it.
+                let this = if crate::ast::free_idents::mentions_this_in_stmt(body) {
+                    this_ty.clone()
+                } else {
+                    Type::ArrowThis
+                };
+                self.member_function = true;
+                let method_type = self.infer_function_with_this(
+                    env,
+                    None,
+                    params,
+                    body,
+                    &None,
+                    return_type_ast.as_ref(),
+                    this,
+                    *method_span,
+                );
+                self.member_function = false;
+                let method_type = method_type?;
+                // A class's method is on its prototype; an object
+                // literal's is its own data property.
+                let entry = if *proto {
+                    FieldEntry::proto(method_type)
+                } else {
+                    FieldEntry::pre(method_type)
+                };
+                Ok((prop_name, entry))
+            }
+            PropDef::Getter {
+                key,
+                body,
+                proto,
+                span,
+            } => {
+                let prop_name = self.prop_key_to_name(key);
+                // Bind `this` in the getter body to the shared
+                // instance row so `this.foo` references see the
+                // surrounding object's fields (same trick as
+                // methods, but the getter's value type is just
+                // the body's return type — there's no callable
+                // wrapper). Inferred through a `return`-collection
+                // frame so the getter's `return`s don't leak into an
+                // enclosing function's return type.
+                let getter_env = env.extend("this".to_string(), TypeScheme::mono(this_ty.clone()));
+                self.member_function = true;
+                let ret_type = self.infer_body_return_type(&getter_env, body, true, *span);
+                self.member_function = false;
+                let ret_type = ret_type?;
+                // A getter is read, not stored to: a store throws. A
+                // class's getter is on its prototype.
+                let entry = if *proto {
+                    FieldEntry::proto(ret_type)
+                } else {
+                    FieldEntry::getter(ret_type)
+                };
+                Ok((prop_name, entry))
+            }
+            _ => unreachable!("only methods and getters are checked as members"),
+        }
     }
 
     /// The fields written after a spread whose operand isn't known yet,

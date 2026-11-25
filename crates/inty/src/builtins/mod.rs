@@ -423,6 +423,19 @@ pub const SPLICE_MAX_ITEMS: usize = 4;
 /// from the caller's `InferState`; unification during the surrounding
 /// call expression binds them.
 pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Option<Type> {
+    // `Array.prototype.flat()`: an array of arrays made one array. Its
+    // receiver says the elements are arrays (`U[][]`), as `this:` would
+    // in a declaration. A depth (`flat(2)`) isn't taken: the result's
+    // type would depend on the number, and a non-array element (which
+    // `flat` keeps) isn't one, so mixed nesting is rejected, never
+    // mistyped.
+    if method == "flat" {
+        let u = state.fresh_type_var();
+        return Some(with_receiver(
+            Type::simple_func(vec![], Type::array(u.clone())),
+            Type::array(Type::array(u)),
+        ));
+    }
     js_array_method_type(state, elem, method).map(|t| with_receiver(t, Type::array(elem.clone())))
 }
 
@@ -1510,6 +1523,25 @@ impl InferState {
                 int_index(self)?;
                 self.unify(span, &element, &kind.element())?;
                 Ok(())
+            }
+
+            // Tuple indexing, as the eager rule (`infer_computed_member`):
+            // a constant index reads its component (one out of range
+            // reads nothing), any other the union of the components.
+            Type::Tuple(elems) => {
+                int_index(self)?;
+                if let Type::Literal(crate::types::LitValue::Number(n)) = &raw_index {
+                    if n.fract() == 0.0 && *n >= 0.0 && (*n as usize) < elems.len() {
+                        return self.unify(span, &element, &elems[*n as usize]);
+                    }
+                    return Err(TypeError::PropertyNotFound {
+                        prop: n.to_string(),
+                        obj_type: container.to_string(),
+                        span,
+                    }
+                    .into());
+                }
+                self.unify(span, &element, &Type::union(elems.clone()))
             }
 
             // Map indexing: Map<T>[String] = T

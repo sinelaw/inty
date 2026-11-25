@@ -219,6 +219,8 @@ impl InferState {
         let result = self.infer_stmt_list(&env, &program.statements);
         // The detached calls whose callee's `this` is still unknown.
         self.settle_detached(None);
+        // The method calls whose callee's `this` is still unknown.
+        self.settle_receivers(None);
         let mut ambient = outer_ambient;
         if let Ok((_, env)) = &result {
             for (name, key) in env.name_keys() {
