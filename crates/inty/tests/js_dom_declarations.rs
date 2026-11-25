@@ -71,3 +71,20 @@ fn document_state() {
         document.fonts.ready.then(() => { const el = document.elementFromPoint(1, 2); });\n",
     );
 }
+
+/// `addEventListener`'s options: an object with any of `capture`,
+/// `once`, `passive`, or a Boolean, and none, on the same element.
+#[test]
+fn add_event_listener_options() {
+    let src = "const el = document.createElement(\"div\");\n\
+               el.addEventListener(\"wheel\", (e) => {}, { passive: false });\n\
+               el.addEventListener(\"x\", (e) => {}, true);\n\
+               el.addEventListener(\"z\", (e) => {});\n\
+               el.addEventListener(\"y\", (e) => {}, { once: true, capture: false });\n\
+               window.addEventListener(\"resize\", (e) => {}, { passive: true });\n";
+    let r = check(src);
+    assert!(r.is_ok(), "{:?}", r);
+    let typo = "const el = document.createElement(\"div\");\n\
+                el.addEventListener(\"wheel\", (e) => {}, { pasive: false });\n";
+    assert!(check(typo).is_err(), "an unknown option is rejected");
+}
