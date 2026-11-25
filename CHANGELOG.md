@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### DOM declarations
+
+- Nodes: `firstChild`, `lastChild`, `nextSibling`, `previousSibling`,
+  `childNodes`, `nodeType`, `nodeValue`, `isConnected`; elements also
+  `parentNode`, `offsetParent`, `getClientRects()` and
+  `replaceChildren(...nodes)`.
+- `document.createTextNode`, `createRange`, `getSelection`,
+  `elementFromPoint`, `caretPositionFromPoint`, `caretRangeFromPoint`,
+  `hidden`, `visibilityState` and `fonts.ready`.
+- New types `DOMRect`, `Range<T>`, `Selection<T>` and
+  `CSSStyleDeclaration`: an element's `style` and `getComputedStyle(el)`
+  give the common properties as strings (`display`, `left`, `fontSize`,
+  `cssText`, …) besides `getPropertyValue`/`setProperty`.
+
 ### JavaScript the parser and stdlib take
 
 - `export class Name { … }` (and `export class Name;` for an external
