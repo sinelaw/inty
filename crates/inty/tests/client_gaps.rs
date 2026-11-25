@@ -52,3 +52,15 @@ fn array_flat() {
     // A depth changes the result's type with the number: not taken.
     assert!(check("export const a = [[1]].flat(2);\n").is_err());
 }
+
+/// A regular expression's type, printed `RegExp`, is named so in
+/// annotations too.
+#[test]
+fn regexp_names_a_type() {
+    let ok = "/** function f(re: RegExp) => Boolean */\n\
+              export function f(re) { return re.test(\"a\"); }\nexport const r = f(/a/);\n";
+    assert!(check(ok).is_ok(), "{:?}", check(ok));
+    let bad = "/** function f(re: RegExp) => Boolean */\n\
+               export function f(re) { return re.test(\"a\"); }\nexport const r = f(\"a\");\n";
+    assert!(check(bad).is_err(), "a string isn't a RegExp");
+}
