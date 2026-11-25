@@ -146,6 +146,12 @@ impl InferState {
                     Some(def) if def.nominal_id.is_some() => {
                         Type::Named(def.nominal_id.unwrap(), lowered_args)
                     }
+                    // Recursive structural alias: a reference to its
+                    // equi-recursive definition (as the JavaScript type
+                    // parser makes one).
+                    Some(def) if def.rec_id.is_some() => {
+                        Type::Named(def.rec_id.unwrap(), lowered_args)
+                    }
                     // Structural alias: inline its body with the type
                     // arguments substituted for the alias parameters.
                     Some(def) => {
@@ -204,6 +210,18 @@ impl InferState {
                     .collect();
                 let ret = self.lower_type_ast_scoped(ret, scope);
                 Type::wrap_callable(Type::raw_func_with_params(None, func_params, ret))
+            }
+            TypeAst::Record(fields) => {
+                let props = fields
+                    .iter()
+                    .map(|(name, t)| {
+                        (
+                            crate::types::PropName(name.clone()),
+                            self.lower_type_ast_scoped(t, scope),
+                        )
+                    })
+                    .collect();
+                Type::Row(crate::types::RowType::closed(props))
             }
         }
     }

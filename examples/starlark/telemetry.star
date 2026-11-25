@@ -10,10 +10,15 @@
 #   "strings": ["aGVsbG8=", "/bin/sh"]
 # }
 
+# The record's type, from the schema above, and the type of a finding.
+# type Record = {timestamp: str, pid: int, ppid: int, process: str, argv: list[str], exit_code: int, strings: list[str]}
+# type Finding = {matched: bool, rule: str, severity: str, pid: int, ppid: int, timestamp: str, process: str, exit_code: int, matched_argv: list[str]}
+
 SUSPICIOUS_SHELLS = {"sh": True, "bash": True, "zsh": True, "dash": True, "powershell": True, "pwsh": True}
 ENCODED_MARKERS = ["-enc", "-encodedcommand", "base64", "frombase64string"]
 
 def _contains_encoded_pattern(argv, strings):
+    # type: (list[str], list[str]) -> bool
     for arg in argv:
         low_arg = arg.lower()
         for marker in ENCODED_MARKERS:
@@ -29,10 +34,11 @@ def _contains_encoded_pattern(argv, strings):
     return False
 
 def analyze_record(record):
-    proc_name = record.get("process", "").lower()
-    argv = record.get("argv", [])
-    strings = record.get("strings", [])
-    exit_code = record.get("exit_code", 0)
+    # type: (Record) -> list[Finding]
+    proc_name = record["process"].lower()
+    argv = record["argv"]
+    strings = record["strings"]
+    exit_code = record["exit_code"]
 
     # Pattern: shell or scripting runtime invoked with encoded execution markers
     matched = proc_name in SUSPICIOUS_SHELLS and _contains_encoded_pattern(argv, strings)
@@ -40,27 +46,28 @@ def analyze_record(record):
         "matched": True,
         "rule": "encoded_shell_execution",
         "severity": "high",
-        "pid": record.get("pid"),
-        "ppid": record.get("ppid"),
-        "timestamp": record.get("timestamp"),
-        "process": record.get("process"),
+        "pid": record["pid"],
+        "ppid": record["ppid"],
+        "timestamp": record["timestamp"],
+        "process": record["process"],
         "exit_code": exit_code,
         "matched_argv": argv,
     }
 
-    # A finding, or None for no match: inty types a dict literal as a record,
-    # so the two outcomes can't be differently-shaped dicts.
-    return finding if matched else None
+    # The finding, or none: inty types a dict literal as a record, so the two
+    # outcomes can't be differently-shaped dicts. A list (rather than
+    # `Finding | None`) needs no None test where it's used, which inty can't
+    # narrow on in a loop.
+    return [finding] if matched else []
 
 def process_stream(records):
-    findings = []
+    # type: (list[Record]) -> {records_scanned: int, matches_found: int, findings: list[Finding]}
+    findings = []  # type: list[Finding]
     total_seen = 0
 
     for rec in records:
         total_seen += 1
-        res = analyze_record(rec)
-        if res != None:
-            findings.append(res)
+        findings.extend(analyze_record(rec))
 
     return {
         "records_scanned": total_seen,

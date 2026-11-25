@@ -335,13 +335,15 @@ impl InferState {
         let deps: Vec<Vec<usize>> = aliases
             .iter()
             .map(|a| {
-                let mut ds: Vec<usize> = match &a.body_ast {
-                    Some(_) => Vec::new(),
-                    None => type_body_idents(&a.body)
-                        .filter_map(|n| index.get(n).copied())
-                        .filter(|&j| !aliases[j].nominal)
-                        .collect(),
+                let names: Vec<&str> = match &a.body_ast {
+                    Some(ast) => ast.ref_names(),
+                    None => type_body_idents(&a.body).collect(),
                 };
+                let mut ds: Vec<usize> = names
+                    .into_iter()
+                    .filter_map(|n| index.get(n).copied())
+                    .filter(|&j| !aliases[j].nominal)
+                    .collect();
                 ds.sort_unstable();
                 ds.dedup();
                 ds

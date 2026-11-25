@@ -2352,3 +2352,71 @@ fn dict_methods_and_iteration() {
     let errs = check_program(src);
     assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
 }
+
+// ---- record types and alias comments ----
+
+#[test]
+fn record_types_in_annotations_and_type_comments() {
+    let ok = [
+        // An inline record type; a key may be a name or a string.
+        "def f(r):\n\
+         \x20   # type: ({name: str, \"n\": int}) -> int\n\
+         \x20   return r[\"n\"]\n\
+         y = f({\"name\": \"a\", \"n\": 1}) + 1\n",
+        "def f(p: {x: int, y: int}) -> int:\n\
+         \x20   return p[\"x\"] + p[\"y\"]\n",
+        // An alias comment names it, for annotations and type comments.
+        "# type Point = {x: int, y: int}\n\
+         p = {\"x\": 1, \"y\": 2}  # type: Point\n\
+         q = p[\"x\"] + p[\"y\"]\n\
+         def f(p: Point) -> int:\n\
+         \x20   return p[\"x\"]\n",
+        // An alias may name one declared after it, and itself.
+        "# type Finding = {rec: Record, severity: str}\n\
+         # type Record = {pid: int}\n\
+         def f(x):\n\
+         \x20   # type: (Finding) -> int\n\
+         \x20   return x[\"rec\"][\"pid\"] + 1\n",
+        "# type Tree = {value: int, kids: list[Tree]}\n\
+         def total(t):\n\
+         \x20   # type: (Tree) -> int\n\
+         \x20   s = t[\"value\"]\n\
+         \x20   for k in t[\"kids\"]:\n\
+         \x20       s += k[\"value\"]\n\
+         \x20   return s\n",
+        // Prose that happens to start with "type" is not an alias.
+        "# type checking matters\n# type = 3 things\nx = 1\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let record = "# type Record = {process: str, pid: int}\n\
+                  def f(r):\n\
+                  \x20   # type: (Record) -> str\n\
+                  \x20   return r[\"process\"]\n";
+    let bad = [
+        // A field the record doesn't have.
+        "# type R = {process: str}\n\
+         def f(r):\n\
+         \x20   # type: (R) -> str\n\
+         \x20   return r[\"procss\"]\n"
+            .to_string(),
+        // A field of the wrong type, or missing, at a call.
+        format!("{record}x = f({{\"process\": \"sh\", \"pid\": \"1\"}})\n"),
+        format!("{record}x = f({{\"process\": \"sh\"}})\n"),
+        // The record is exact: no extra fields.
+        format!("{record}x = f({{\"process\": \"sh\", \"pid\": 1, \"x\": 2}})\n"),
+    ];
+    for src in &bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+    let ok_call = format!("{record}x = f({{\"process\": \"sh\", \"pid\": 1}}) + \"!\"\n");
+    let errs = check_program(&ok_call);
+    assert!(errs.is_empty(), "rejected:\n{ok_call}\n{errs:?}");
+
+    // A malformed or repeated alias is an error.
+    assert!(parse_source("# type A = {x int}\n").is_err());
+    assert!(parse_source("# type A = {x: int, x: str}\n").is_err());
+    assert!(parse_source("# type A = {x: int}\n# type A = {y: int}\n").is_err());
+}

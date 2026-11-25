@@ -32,6 +32,11 @@
   typed by the Python rules): a string isn't iterable (`s.elems()` is),
   and `str`, `list` and `dict` have Starlark's methods, not Python-only
   ones such as `zfill`, `sort` or `copy`.
+- Python and Starlark: record types, `{name: str, pid: int}`, in
+  annotations and type comments, and alias comments `# type Name = T` to
+  name them (Starlark has no alias or annotation syntax). A record type is
+  exact: no missing or extra fields. A Python type alias may now name one
+  declared after it, or itself.
 - Python: a name read only in a keyword argument's value
   (`f(xs = [o])`) was reported as undefined; scope resolution, and the
   language server's walks, now visit keyword arguments.

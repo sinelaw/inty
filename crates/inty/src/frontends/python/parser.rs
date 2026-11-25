@@ -74,6 +74,9 @@ pub struct Parser {
     /// The file's PEP 484 type comments (`# type: T`), in source order;
     /// see [`Self::type_comment_between`].
     type_comments: Vec<TypeComment>,
+    /// The file's alias comments (`# type Name = T`), declared as type
+    /// aliases by [`Self::parse_program`].
+    alias_comments: Vec<TypeComment>,
 }
 
 impl Parser {
@@ -92,14 +95,44 @@ impl Parser {
             top_defs: Vec::new(),
             top_calls: Vec::new(),
             type_comments: Vec::new(),
+            alias_comments: Vec::new(),
         }
     }
 
     /// Attach the file's type comments (from
     /// [`super::lexer::tokenize_with_type_comments`]).
     pub fn with_type_comments(mut self, comments: Vec<TypeComment>) -> Self {
-        self.type_comments = comments;
+        (self.alias_comments, self.type_comments) =
+            comments.into_iter().partition(|c| c.alias.is_some());
         self
+    }
+
+    /// Declare a type alias for each alias comment, `# type Name = T`:
+    /// a way to name a type (a record, say) where the language has no
+    /// alias syntax (Starlark), usable in annotations and type comments.
+    fn declare_alias_comments(&mut self) -> Result<()> {
+        for c in std::mem::take(&mut self.alias_comments) {
+            let (name, name_offset) = c.alias.clone().expect("an alias comment");
+            let span = Span::new(name_offset, c.offset + c.text.len());
+            if self.type_aliases.iter().any(|a| a.name == name) {
+                return Err(ParseError::Unsupported {
+                    feature: format!("type '{name}' is already declared"),
+                    span,
+                }
+                .into());
+            }
+            let body_ast = Self::comment_type(&c)?;
+            self.type_aliases.push(TypeAlias {
+                name,
+                params: Vec::new(),
+                body: String::new(),
+                body_ast: Some(body_ast),
+                span,
+                nominal: false,
+                content_start: None,
+            });
+        }
+        Ok(())
     }
 
     /// The type comment that starts in `[from, to)`, if any.
@@ -346,6 +379,7 @@ impl Parser {
         if self.starlark {
             self.check_no_recursion()?;
         }
+        self.declare_alias_comments()?;
         // Backfill a module-scope `var` for every `global` name that never
         // received a module-level binding (e.g. one only ever assigned from
         // inside a function). Without it, those in-function assignments

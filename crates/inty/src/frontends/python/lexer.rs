@@ -175,14 +175,17 @@ struct Lexer {
     type_comments: Vec<TypeComment>,
 }
 
-/// A PEP 484 type comment, `# type: T`: the text after `type:` and the
-/// byte offset of that text in the source. Collected beside the tokens;
-/// the parser attaches each to the assignment or `def` it follows.
+/// A type comment: a PEP 484 `# type: T`, or an alias `# type Name = T`.
+/// Collected beside the tokens; the parser attaches a `# type: T` to the
+/// assignment or `def` it follows, and declares each alias.
 #[derive(Debug, Clone)]
 pub struct TypeComment {
     /// Byte offset of `text` in the source.
     pub offset: usize,
+    /// The type: after `type:`, or after the alias's `=`.
     pub text: String,
+    /// For an alias, its name and the name's byte offset.
+    pub alias: Option<(String, usize)>,
 }
 
 impl Lexer {
@@ -241,15 +244,22 @@ impl Lexer {
         }
         let text: String = self.chars[start..self.pos].iter().map(|(_, c)| c).collect();
         let body = text[1..].trim_start();
+        let at = |part: &str| self.byte_at(start) + (text.len() - part.len());
         if let Some(rest) = body.strip_prefix("type:") {
             let ty = rest.trim_start();
             if !ty.is_empty() && !ty.starts_with("ignore") {
-                let offset = self.byte_at(start) + (text.len() - ty.len());
                 self.type_comments.push(TypeComment {
-                    offset,
+                    offset: at(ty),
                     text: ty.trim_end().to_string(),
+                    alias: None,
                 });
             }
+        } else if let Some((name, ty)) = alias_comment(body) {
+            self.type_comments.push(TypeComment {
+                offset: at(ty),
+                text: ty.trim_end().to_string(),
+                alias: Some((name.to_string(), at(name))),
+            });
         }
     }
 
@@ -819,7 +829,33 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Tok>>> {
     Lexer::new(source).tokenize()
 }
 
-/// Tokenize, also returning the PEP 484 type comments (`# type: T`).
+/// Split an alias comment's text (after `#`), `type Name = T`, into the
+/// name and the type (both slices of `body`, so their offsets can be
+/// recovered). `None` for any other comment.
+fn alias_comment(body: &str) -> Option<(&str, &str)> {
+    let rest = body.strip_prefix("type")?;
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let rest = rest.trim_start();
+    let name_len = rest
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(rest.len());
+    let name = &rest[..name_len];
+    if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    let after = rest[name_len..].trim_start();
+    let ty = after.strip_prefix('=')?;
+    if ty.starts_with('=') {
+        return None;
+    }
+    let ty = ty.trim_start();
+    (!ty.trim_end().is_empty()).then_some((name, ty))
+}
+
+/// Tokenize, also returning the type comments (`# type: T` and
+/// `# type Name = T`).
 pub fn tokenize_with_type_comments(source: &str) -> Result<(Vec<Spanned<Tok>>, Vec<TypeComment>)> {
     Lexer::new(source).tokenize_with_type_comments()
 }

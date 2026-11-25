@@ -415,3 +415,27 @@ fn starlark_programs_carry_their_language() {
         crate::ast::SourceLanguage::Python
     );
 }
+
+#[test]
+fn record_aliases_type_starlark_values() {
+    let record = "# type Record = {process: str, argv: list[str]}\n\
+                  def name(r):\n\
+                  \x20   # type: (Record) -> str\n\
+                  \x20   return r[\"process\"].lower() + str(len(r[\"argv\"]))\n";
+    accepts(record);
+    accepts(&format!(
+        "{record}x = name({{\"process\": \"sh\", \"argv\": [\"-c\"]}})\n"
+    ));
+    rejects(
+        &format!("{record}x = name({{\"process\": \"sh\"}})\n"),
+        "Record",
+    );
+    // Methods of a record's fields are checked: here a Python-only one.
+    rejects(
+        "# type R = {s: str}\n\
+         def f(r):\n\
+         \x20   # type: (R) -> str\n\
+         \x20   return r[\"s\"].casefold()\n",
+        "casefold",
+    );
+}

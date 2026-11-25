@@ -57,4 +57,41 @@ pub enum TypeAst {
     /// (the surfaces that produce this — e.g. `Callable[[A, B], R]` —
     /// have no optionality).
     Func(Vec<TypeAst>, Box<TypeAst>),
+    /// A record of exactly these fields, `{name: str, pid: int}` in a
+    /// Python or Starlark annotation or type comment. Lowers to a closed
+    /// row, as an object literal's type is.
+    Record(Vec<(String, TypeAst)>),
+}
+
+impl TypeAst {
+    /// The names this type refers to ([`TypeAst::Ref`]s), at any depth,
+    /// in order with repeats: what an alias's body depends on.
+    pub fn ref_names(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        self.collect_refs(&mut out);
+        out
+    }
+
+    fn collect_refs<'a>(&'a self, out: &mut Vec<&'a str>) {
+        match self {
+            TypeAst::Ref(name, args) => {
+                out.push(name);
+                args.iter().for_each(|a| a.collect_refs(out));
+            }
+            TypeAst::Array(t) | TypeAst::Map(t) => t.collect_refs(out),
+            TypeAst::Union(ts) | TypeAst::Tuple(ts) => ts.iter().for_each(|t| t.collect_refs(out)),
+            TypeAst::Func(ps, r) => {
+                ps.iter().for_each(|p| p.collect_refs(out));
+                r.collect_refs(out);
+            }
+            TypeAst::Record(fields) => fields.iter().for_each(|(_, t)| t.collect_refs(out)),
+            TypeAst::Number
+            | TypeAst::String
+            | TypeAst::Boolean
+            | TypeAst::Null
+            | TypeAst::Opaque
+            | TypeAst::Var(_)
+            | TypeAst::Lit(_) => {}
+        }
+    }
 }
