@@ -108,3 +108,16 @@ fn ranges_selections_and_styles_keep_their_receiver() {
         assert!(check(bad).is_err(), "{bad}");
     }
 }
+
+/// Review of #116: an options object bound to a `const` fills
+/// `addEventListener`'s optional parameter and fields per call, as a
+/// literal does.
+#[test]
+fn add_event_listener_options_from_a_const() {
+    let src = "const b = {passive: true};\nconst el = document.createElement(\"div\");\n\
+               el.addEventListener(\"click\", (e) => undefined, b);\n\
+               el.addEventListener(\"x\", (e) => undefined);\n\
+               el.addEventListener(\"y\", (e) => undefined, {once: true});\n";
+    let r = check(src);
+    assert!(r.is_ok(), "{:?}", r);
+}

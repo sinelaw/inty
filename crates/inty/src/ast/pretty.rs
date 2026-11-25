@@ -153,6 +153,16 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             write!(w, "]")
         }
 
+        // An `async` body's `return e`, marked (see
+        // `crate::types::ASYNC_RETURN`): written as it was, `e`.
+        Expr::Call {
+            callee, arguments, ..
+        } if matches!(callee.as_ref(), Expr::Ident { name, .. } if name == crate::types::ASYNC_RETURN)
+            && arguments.len() == 1 =>
+        {
+            write_expr(w, &arguments[0], needs_parens)
+        }
+
         Expr::Call {
             callee, arguments, ..
         } => {
