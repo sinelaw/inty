@@ -123,6 +123,56 @@
     putImageData: (this: CanvasRenderingContext2D<T>, {width: Number, height: Number, data: Uint8Array}, Number, Number) => Undefined
 } */
 
+// A rectangle on screen (`getBoundingClientRect`, a Range's rects).
+/** type DOMRect = {top: Number, right: Number, bottom: Number, left: Number, width: Number, height: Number, x: Number, y: Number} */
+
+// An element's inline style (`el.style`) and a computed style
+// (`getComputedStyle(el)`): the properties as strings, as the CSSOM gives
+// them ("12px", "none", ""), and the property-name accessors.
+/** type CSSStyleDeclaration = {
+    setProperty: (String, String) => Undefined,
+    removeProperty: (String) => String,
+    getPropertyValue: (String) => String,
+    cssText: String,
+    display: String, position: String, visibility: String, opacity: String, zIndex: String,
+    top: String, right: String, bottom: String, left: String,
+    width: String, height: String, minWidth: String, minHeight: String, maxWidth: String, maxHeight: String,
+    margin: String, padding: String, border: String, outline: String, boxShadow: String,
+    overflow: String, overflowX: String, overflowY: String,
+    flex: String, gap: String,
+    transform: String, transition: String,
+    color: String, background: String, backgroundColor: String,
+    font: String, fontFamily: String, fontSize: String, fontWeight: String, fontStyle: String, lineHeight: String,
+    textAlign: String, textDecoration: String, whiteSpace: String,
+    cursor: String, pointerEvents: String, userSelect: String
+} */
+
+// A range of the document (`document.createRange()`): between two
+// boundary points, each a node and an offset in it.
+/** type Range<T> = {
+    startContainer: T, startOffset: Number, endContainer: T, endOffset: Number,
+    collapsed: Boolean, commonAncestorContainer: T,
+    setStart: (T, Number) => Undefined, setEnd: (T, Number) => Undefined,
+    setStartBefore: (T) => Undefined, setStartAfter: (T) => Undefined,
+    setEndBefore: (T) => Undefined, setEndAfter: (T) => Undefined,
+    collapse: (Boolean) => Undefined,
+    selectNode: (T) => Undefined, selectNodeContents: (T) => Undefined,
+    cloneRange: () => Range<T>,
+    getBoundingClientRect: () => DOMRect,
+    getClientRects: () => DOMRect[],
+    toString: () => String
+} */
+
+// The user's selection (`document.getSelection()`).
+/** type Selection<T> = {
+    rangeCount: Number, isCollapsed: Boolean,
+    anchorNode: T | Null, anchorOffset: Number, focusNode: T | Null, focusOffset: Number,
+    getRangeAt: (Number) => Range<T>,
+    addRange: (Range<T>) => Undefined,
+    removeAllRanges: () => Undefined,
+    toString: () => String
+} */
+
 /** type Element<T> = {
     value: String, textContent: String, innerHTML: String, outerHTML: String,
     className: String, id: String, hidden: Boolean, disabled: Boolean,
@@ -159,21 +209,24 @@
     before: (T) => Undefined, after: (T) => Undefined,
     append: (T) => Undefined, prepend: (T) => Undefined,
     remove: () => Undefined, replaceWith: (T) => Undefined,
-    getBoundingClientRect: () => {top: Number, right: Number, bottom: Number, left: Number, width: Number, height: Number, x: Number, y: Number},
+    getBoundingClientRect: () => DOMRect,
+    getClientRects: () => DOMRect[],
     scrollIntoView: () => Undefined,
     focus: () => Undefined, blur: () => Undefined,
     click: () => Undefined,
     submit: () => Undefined, requestSubmit: () => Undefined, reset: () => Undefined,
     showModal: () => Undefined, show: () => Undefined, close: () => Undefined,
     open: Boolean,
-    children: T[], parentElement: T | Null,
+    children: T[], parentElement: T | Null, parentNode: T | Null,
+    childNodes: T[], firstChild: T | Null, lastChild: T | Null,
+    nextSibling: T | Null, previousSibling: T | Null,
+    nodeType: Number, nodeValue: String | Null, isConnected: Boolean,
+    offsetParent: T | Null,
+    // Called with the new children spread (`el.replaceChildren(...nodes)`).
+    replaceChildren: (T) => Undefined,
     firstElementChild: T | Null, lastElementChild: T | Null,
     nextElementSibling: T | Null, previousElementSibling: T | Null,
-    style: {
-        setProperty: (String, String) => Undefined,
-        removeProperty: (String) => String,
-        getPropertyValue: (String) => String
-    },
+    style: CSSStyleDeclaration,
     form: T | Null,
     getRootNode: ({composed: Boolean}) => T,
     compareDocumentPosition: (T) => Number,
@@ -198,8 +251,10 @@
 } */
 
 /** type Node<T> = {
-    nodeName: String, textContent: String,
+    nodeName: String, textContent: String, nodeType: Number, nodeValue: String | Null,
     parentElement: T | Null, parentNode: T | Null,
+    childNodes: T[], firstChild: T | Null, lastChild: T | Null,
+    nextSibling: T | Null, previousSibling: T | Null, isConnected: Boolean,
     appendChild: (T) => T, removeChild: (T) => T,
     insertBefore: (T, T) => T, replaceChild: (T, T) => T,
     cloneNode: (Boolean) => T,
@@ -242,6 +297,15 @@
         getElementById: (String) => Element<T> | Null,
         createElement: (String) => Element<T>,
         createDocumentFragment: () => T,
+        createTextNode: (String) => T,
+        createRange: () => Range<T>,
+        getSelection: () => Selection<T> | Null,
+        elementFromPoint: (Number, Number) => T | Null,
+        caretPositionFromPoint: (Number, Number) => {offsetNode: T, offset: Number} | Null,
+        caretRangeFromPoint: (Number, Number) => Range<T> | Null,
+        hidden: Boolean,
+        visibilityState: String,
+        fonts: {ready: Promise<Undefined>},
         querySelector: (String) => T | Null,
         querySelectorAll: (String) => T[],
         addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
@@ -272,7 +336,7 @@ const document;
         location: Location,
         scrollTo: (Number, Number) => Undefined,
         scrollBy: (Number, Number) => Undefined,
-        getComputedStyle: (T) => {getPropertyValue: (String) => String},
+        getComputedStyle: (T) => CSSStyleDeclaration,
         requestAnimationFrame: ((Number) => Undefined) => Number,
         cancelAnimationFrame: (Number) => Undefined,
         setTimeout: (() => Undefined, Number) => Number,
@@ -550,7 +614,7 @@ const alert;
 // Window globals also available bare under `globalThis`. Most code
 // reaches them via `window.X`, but a few helpers (e.g. fizzy's
 // scroll_helpers) call `getComputedStyle(el)` directly.
-/** const getComputedStyle: <T>(T) => {getPropertyValue: (String) => String} */
+/** const getComputedStyle: <T>(T) => CSSStyleDeclaration */
 const getComputedStyle;
 
 /** const requestAnimationFrame: ((Number) => Undefined) => Number */
