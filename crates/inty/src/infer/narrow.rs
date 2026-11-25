@@ -437,13 +437,87 @@ fn strip_unknown(
     if !scheme.is_mono() {
         return None;
     }
-    let ty = state.apply_subst(scheme.ty());
+    let ty = state.zonk_head(scheme.ty());
     if !matches!(ty, Type::Var(crate::types::TVarName::Flex(_))) || state.is_numeric(&ty) {
         return None;
     }
     let sigma = state.fresh_type_var();
     state.add_constraint(crate::types::TypePred::strip(ty, sigma.clone()), *span);
     Some(env.narrow(&key, TypeScheme::mono(sigma)))
+}
+
+/// `ty` resolved through the substitution as far as narrowing looks:
+/// its head, a union's (or sum's) members, and along `steps` the field
+/// each step reads. The rest is left as it is: resolving a type whole
+/// writes it out as a tree, and one that mentions a large type in many
+/// places (an element's, chained through `appendChild`) is exponentially
+/// larger than the substitution holds it.
+pub fn resolve_for_narrowing(
+    state: &super::state::InferState,
+    ty: &Type,
+    steps: &[PropName],
+) -> Type {
+    resolve_shallow(&state.main_subst, ty, steps, 0)
+}
+
+fn resolve_shallow(
+    subst: &crate::types::Subst,
+    ty: &Type,
+    steps: &[PropName],
+    depth: usize,
+) -> Type {
+    let head = resolve_head(subst, ty);
+    if depth > 32 {
+        return head;
+    }
+    match head {
+        Type::Union(members) => Type::Union(
+            members
+                .iter()
+                .map(|m| resolve_shallow(subst, m, steps, depth + 1))
+                .collect(),
+        ),
+        Type::Maybe(z, inner) => Type::Maybe(
+            z,
+            Box::new(resolve_shallow(subst, &inner, steps, depth + 1)),
+        ),
+        Type::Row(mut row) if !steps.is_empty() => {
+            // The field may be in the row's tail.
+            while !row.props.contains_key(&steps[0]) {
+                let RowTail::Open(var) = &row.tail else {
+                    break;
+                };
+                let Type::Row(rest) = resolve_head(subst, &Type::Var(var.clone())) else {
+                    break;
+                };
+                for (k, e) in rest.props {
+                    row.props.entry(k).or_insert(e);
+                }
+                row.tail = rest.tail;
+            }
+            if let Some(entry) = row.props.get_mut(&steps[0]) {
+                entry.ty = resolve_shallow(subst, &entry.ty, &steps[1..], depth + 1);
+            }
+            Type::Row(row)
+        }
+        t => t,
+    }
+}
+
+/// A variable resolved through the substitution to what it is bound to
+/// (the binding's head may itself be a bound variable).
+fn resolve_head(subst: &crate::types::Subst, ty: &Type) -> Type {
+    let mut cur = ty;
+    for _ in 0..64 {
+        match cur {
+            Type::Var(v) => match subst.get(v) {
+                Some(bound) => cur = bound,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    cur.clone()
 }
 
 /// The binding `path` is rooted at, its type, and its type refined by
@@ -468,15 +542,18 @@ fn refinement(
         return None;
     }
 
-    let original_ty = state.apply_subst(scheme.ty());
+    let steps = path_steps(path);
+    let original_ty = resolve_for_narrowing(state, scheme.ty(), &steps);
     let exposed = expose_named(state, &original_ty);
+    // An unrolled named type's members are resolved as the type's were.
+    let exposed = resolve_for_narrowing(state, &exposed, &steps);
     // A sum is refined as the union of its arms, which `Type::union`
     // makes a sum again from what is kept.
     let arms = match &exposed {
         Type::Maybe(..) => Type::Union(exposed.arms()),
         t => t.clone(),
     };
-    let new_ty = refine_at_path(&arms, &path_steps(path), narrowing, state.language);
+    let new_ty = refine_at_path(&arms, &steps, narrowing, state.language);
     // Nothing ruled out: leave the binding (and a named type) alone.
     (new_ty != exposed).then_some((key, exposed, new_ty))
 }

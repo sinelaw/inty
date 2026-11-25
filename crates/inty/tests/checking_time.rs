@@ -85,6 +85,113 @@ fn records_of_functions_check_quickly() {
 /// counts towards "too large to generalise", as the type does.
 #[test]
 fn nested_elements_in_a_class_check_quickly() {
+    check_quickly(&nested_elements_class());
+}
+
+/// A method of an object literal testing a field that holds an element
+/// tree (`if (this.el)`): the test asks only whether the value may be a
+/// function or a promise, which its head says. Resolving the whole type to
+/// ask wrote the tree out (out of memory on a real client, once fields
+/// were typed before methods made `this.el` known at the test).
+#[test]
+fn testing_an_element_field_checks_quickly() {
+    let mut src = vec!["export function mk(parent) {".to_string()];
+    src.push("  const root = document.createElement('div');".to_string());
+    let mut prev = "root".to_string();
+    for i in 1..5 {
+        src.push(format!(
+            "  const d{i} = document.createElement('span'); d{i}.textContent = 'x'; \
+             {prev}.appendChild(d{i});"
+        ));
+        prev = format!("d{i}");
+    }
+    src.push("  parent.appendChild(root);".to_string());
+    src.push(
+        "  const o = { el: root, parent, m() { if (this.el) { return 1; } \
+         if (this.parent) { return 2; } return 0; } };\n  return o;\n}"
+            .to_string(),
+    );
+    check_quickly(&src.join("\n"));
+}
+
+/// A test narrowing a binding that holds an element (`const p =
+/// this.el.parentElement; if (p !== null)`, `const el = this.el; if
+/// (el)`): narrowing looks at the binding's head and a union's members,
+/// and resolving its whole type to do so wrote the element tree out (out
+/// of memory on a real client).
+#[test]
+fn narrowing_an_element_binding_checks_quickly() {
+    for method in [
+        "m() { const el = this.el; if (el) { return 1; } const p = this.parent; if (p) return 2; return 0; }",
+        "m() { const p = this.el.parentElement; if (p !== null) { return 1; } return 0; }",
+        "m(x) { if (x === this.el) { return 1; } return 0; }",
+    ] {
+        let mut src = vec!["export function mk(parent) {".to_string()];
+        src.push("  const root = document.createElement('div');".to_string());
+        let mut prev = "root".to_string();
+        for i in 1..5 {
+            src.push(format!(
+                "  const d{i} = document.createElement('span'); d{i}.textContent = 'x'; \
+                 {prev}.appendChild(d{i});"
+            ));
+            prev = format!("d{i}");
+        }
+        src.push("  parent.appendChild(root);".to_string());
+        src.push(format!("  const o = {{ el: root, parent, {method} }};\n  return o;\n}}"));
+        check_quickly(&src.join("\n"));
+    }
+}
+
+/// A class whose constructor builds elements, one field set from a
+/// conditional (`HTMLDivElement | Null`), copied to a `const` and tested,
+/// then `new` of the class (reduced from a real client, which ran out of
+/// memory): `new` asked whether the constructor's result is an object by
+/// resolving the whole instance type.
+#[test]
+fn constructing_a_class_of_elements_checks_quickly() {
+    check_quickly(
+        "class Panel {
+  constructor(place) {
+    this.el = document.createElement(\"div\");
+    this.body = document.createElement(\"div\");
+    this.backdrop = place === \"dialog\" ? document.createElement(\"div\") : null;
+    this.el.appendChild(this.body);
+    const backdrop = this.backdrop;
+    if (backdrop) {
+      backdrop.className = \"backdrop\";
+      backdrop.appendChild(this.el);
+      document.body.appendChild(backdrop);
+    }
+  }
+}
+export const p = new Panel(\"dialog\");
+",
+    );
+}
+
+/// An array of elements chained through `appendChild`: each element
+/// joined into the array's element type compared the chain again, field
+/// by field, for every element, since two variables shown equal were
+/// left apart (6.9 s for four elements, twenty times more per element).
+#[test]
+fn array_of_chained_elements_checks_quickly() {
+    let n = 10;
+    let mut src = vec![
+        "export function mk() {".to_string(),
+        "  const d0 = document.createElement('span');".to_string(),
+    ];
+    for i in 1..n {
+        src.push(format!(
+            "  const d{i} = document.createElement('span'); d{}.appendChild(d{i});",
+            i - 1
+        ));
+    }
+    let all: Vec<String> = (0..n).map(|i| format!("d{i}")).collect();
+    src.push(format!("  return [{}];\n}}", all.join(", ")));
+    check_quickly(&src.join("\n"));
+}
+
+fn nested_elements_class() -> String {
     let mut src = vec![
         "export class V {".to_string(),
         "  constructor(root) { this.root = root; }".to_string(),
@@ -99,7 +206,11 @@ fn nested_elements_in_a_class_check_quickly() {
         ));
     }
     src.push("    this.root.appendChild(d0);\n  }\n}".to_string());
-    let src = src.join("\n");
+    src.join("\n")
+}
+
+/// Check `src` (it must have no errors) within the time bound.
+fn check_quickly(src: &str) {
     let program = inty::frontends::javascript::parse_source(&src).expect("parses");
     let start = Instant::now();
     let errors = inty::worker::run_with_inference_stack("inty-checking-time", move || {
@@ -115,6 +226,6 @@ fn nested_elements_in_a_class_check_quickly() {
     assert!(errors.is_empty(), "{errors:?}");
     assert!(
         elapsed < Duration::from_secs(10),
-        "checking took {elapsed:?}: a nested element tree is written out in full again"
+        "checking took {elapsed:?}: an element tree is written out in full again"
     );
 }

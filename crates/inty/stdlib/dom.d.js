@@ -39,6 +39,9 @@
 // `KeyboardEvent<T>`, … name the same shape, to say which fields a
 // handler means to read.
 
+// The options of `addEventListener` / `removeEventListener`: an object
+// with any of these, or a Boolean (`capture`).
+/** type ListenerOptions = {capture?: Boolean, once?: Boolean, passive?: Boolean} */
 /** type DataTransfer = {
     dropEffect: String, effectAllowed: String, types: String[],
     files: {length: Number, item: (Number) => {name: String, size: Number, type: String, lastModified: Number, text: () => Promise<String>} | Null},
@@ -193,8 +196,8 @@
     hasAttribute: (String) => Boolean,
     removeAttribute: (String) => Undefined,
     toggleAttribute: (String) => Boolean,
-    addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
-    removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+    addEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
+    removeEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
     dispatchEvent: (T) => Boolean,
     querySelector: (String) => T | Null,
     querySelectorAll: (String) => T[],
@@ -259,8 +262,8 @@
     insertBefore: (T, T) => T, replaceChild: (T, T) => T,
     cloneNode: (Boolean) => T,
     contains: (T) => Boolean,
-    addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
-    removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+    addEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
+    removeEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
     dispatchEvent: (T) => Boolean
 } */
 
@@ -308,8 +311,8 @@
         fonts: {ready: Promise<Undefined>},
         querySelector: (String) => T | Null,
         querySelectorAll: (String) => T[],
-        addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
-        removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+        addEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
+        removeEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
         dispatchEvent: (T) => Boolean,
         head: T,
         body: T,
@@ -329,9 +332,9 @@ const document;
         pageXOffset: Number,
         pageYOffset: Number,
         devicePixelRatio: Number,
-        visualViewport: {width: Number, height: Number, offsetLeft: Number, offsetTop: Number, pageLeft: Number, pageTop: Number, scale: Number, addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined, removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined},
-        addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
-        removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+        visualViewport: {width: Number, height: Number, offsetLeft: Number, offsetTop: Number, pageLeft: Number, pageTop: Number, scale: Number, addEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined, removeEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined},
+        addEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
+        removeEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
         dispatchEvent: (T) => Boolean,
         location: Location,
         scrollTo: (Number, Number) => Undefined,
@@ -354,7 +357,7 @@ const document;
         alert: (String) => Undefined,
         confirm: (String) => Boolean,
         prompt: (message: String, default?: String) => String | Null,
-        matchMedia: (String) => {matches: Boolean, addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined},
+        matchMedia: (String) => {matches: Boolean, addEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined},
         onpopstate: (T) => Undefined,
         origin: String
     } */
@@ -691,8 +694,8 @@ const URL;
         getAllResponseHeaders: () => String,
         overrideMimeType: (String) => Undefined,
         abort: () => Undefined,
-        addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
-        removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+        addEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
+        removeEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
         readyState: Number,
         status: Number,
         statusText: String,
@@ -702,8 +705,8 @@ const URL;
         responseURL: String,
         responseXML: T,
         upload: {
-            addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
-            removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined
+            addEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
+            removeEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined
         },
         withCredentials: Boolean,
         timeout: Number,

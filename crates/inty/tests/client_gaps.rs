@@ -64,3 +64,40 @@ fn regexp_names_a_type() {
                export function f(re) { return re.test(\"a\"); }\nexport const r = f(\"a\");\n";
     assert!(check(bad).is_err(), "a string isn't a RegExp");
 }
+
+/// `return p` in an `async` function, `p` a promise: the function's
+/// promise resolves to `p`'s value (not to `p`), as `then`'s callback's
+/// does, whether or not `p`'s type is known at the `return`.
+#[test]
+fn async_return_of_a_promise_is_its_value() {
+    let ok = "async function inner(x) { return { path: x }; }\n\
+              export async function outer(p) { if (p === \"\") return { path: \"a\" }; return inner(p); }\n\
+              export async function use() { const r = await outer(\"a\"); return r.path.length; }\n";
+    assert!(check(ok).is_ok(), "{:?}", check(ok));
+    // The method returned is checked after the one returning its promise.
+    let later = "export class S {\n  constructor() { this.buffers = new Map(); }\n  \
+                 async load(abs) { const b = [...this.buffers.values()].find((x) => x.path === abs); \
+                 if (b) return b; return this.adopt({ path: abs }); }\n  \
+                 async adopt(d) { const b = { path: d.path }; this.buffers.set(d.path, b); return b; }\n}\n";
+    assert!(check(later).is_ok(), "{:?}", check(later));
+    // A value and a promise of another type still disagree.
+    let bad = "async function inner() { return 1; }\n\
+               export async function outer(p) { if (p) return \"a\"; return inner(); }\n";
+    assert!(check(bad).is_err());
+}
+
+/// A call fills or skips a declared optional parameter for itself only,
+/// leaving the function's type as it was: one canvas context's `arc` is
+/// called with and without `ccw`.
+#[test]
+fn optional_parameter_filled_or_skipped_per_call() {
+    let ok = "const c = document.createElement(\"canvas\");\nconst ctx = c.getContext(\"2d\");\n\
+              if (ctx) { ctx.arc(1, 2, 3, 0, 1); ctx.arc(1, 2, 3, 0, 1, true); ctx.arc(0, 0, 1, 0, 2); }\n";
+    assert!(check(ok).is_ok(), "{:?}", check(ok));
+    // A callback the function passes to `map` (which may give it an
+    // index) and calls with one argument: a callback needing the index
+    // is still rejected, as the call decides the parameter where the
+    // function is generalised.
+    let bad = "export function f(cb) { [1].map(cb); cb(1); }\nf((x, i) => i.toFixed());\n";
+    assert!(check(bad).is_err());
+}
