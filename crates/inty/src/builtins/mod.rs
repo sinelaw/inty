@@ -1512,6 +1512,25 @@ impl InferState {
                 Ok(())
             }
 
+            // Tuple indexing, as the eager rule (`infer_computed_member`):
+            // a constant index reads its component (one out of range
+            // reads nothing), any other the union of the components.
+            Type::Tuple(elems) => {
+                int_index(self)?;
+                if let Type::Literal(crate::types::LitValue::Number(n)) = &raw_index {
+                    if n.fract() == 0.0 && *n >= 0.0 && (*n as usize) < elems.len() {
+                        return self.unify(span, &element, &elems[*n as usize]);
+                    }
+                    return Err(TypeError::PropertyNotFound {
+                        prop: n.to_string(),
+                        obj_type: container.to_string(),
+                        span,
+                    }
+                    .into());
+                }
+                self.unify(span, &element, &Type::union(elems.clone()))
+            }
+
             // Map indexing: Map<T>[String] = T
             Type::Map(value_ty) => {
                 self.unify(span, &index, &Type::String)?;
