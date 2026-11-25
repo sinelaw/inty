@@ -550,7 +550,8 @@ const AudioWorkletNode;
 const AbortController;
 
 // FormData / URLSearchParams. Construct from a form Element or with no
-// arguments; both expose the same get/set/append surface.
+// arguments (URLSearchParams also from a query string, "?a=1&b=2"); both
+// expose the same get/set/append surface.
 /** const FormData: <T>(T) => {
         get: (String) => String | Null,
         getAll: (String) => String[],
@@ -561,7 +562,7 @@ const AbortController;
     } */
 const FormData;
 
-/** const URLSearchParams: () => {
+/** const URLSearchParams: (init?: String) => {
         get: (String) => String | Null,
         getAll: (String) => String[],
         has: (String) => Boolean,
