@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Starlark, and Python lowerings
+
+- A Starlark frontend (`.star`, `.bzl`, `.sky`), a mode of the Python
+  one. It rejects what Starlark leaves out of Python (`class`, `try`,
+  `raise`, `while`, `import`, `global`, `with`, decorators, `is`, `**`,
+  f-strings) and checks Starlark's static rules: no `if`/`for` at the top
+  level, a global is bound once, and no recursion. `load("//pkg:f.bzl",
+  "name", local = "name")` loads typed names from another file, resolving
+  the label against the workspace root (`MODULE.bazel`, `WORKSPACE`,
+  `.buckconfig`, …) or the loading file's package; a label in another
+  repository (`@repo//…`) binds its names unchecked. `fail(…)` is a
+  `throw`, and `struct(a = 1)` a record. A `.bzl` file sees Bazel's
+  globals (`rule`, `attr`, `native`, `provider`, `depset`, …), accepted
+  without checking until they are declared. The CLI and the language
+  server pick it from the extension.
+- Python: list comprehensions (several `for`/`if` clauses, tuple
+  targets), and a generator expression as a call's sole argument.
+- Python: slices `xs[a:b:c]` of lists and strings.
+- Python: keyword-only parameters (`def f(a, *, b)`).
+- Python: PEP 484 type comments, `x = []  # type: list[str]` and
+  `# type: (int, str) -> bool` after a `def` header.
+- Python: a name read only in a keyword argument's value
+  (`f(xs = [o])`) was reported as undefined; scope resolution, and the
+  language server's walks, now visit keyword arguments.
+
 ### DOM declarations
 
 - Nodes: `firstChild`, `lastChild`, `nextSibling`, `previousSibling`,

@@ -1409,8 +1409,10 @@ fn builtin_variadic_is_opaque_not_constrained() {
 }
 
 #[test]
-fn rejects_comprehension() {
-    assert!(parse_source("xs = [a for a in items]").is_err());
+fn rejects_dict_comprehension() {
+    // A list comprehension is lowered; a dict comprehension needs a
+    // dictionary (`Dict`) result, which a dict literal never infers to.
+    assert!(parse_source("d = {k: 1 for k in items}").is_err());
 }
 
 #[test]
@@ -2112,4 +2114,173 @@ fn narrowing_holds_only_for_its_own_binding() {
     for src in rejected {
         assert!(!check_program(src).is_empty(), "accepted:\n{src}");
     }
+}
+
+// ---- keyword arguments ----
+
+#[test]
+fn keyword_argument_values_see_local_bindings() {
+    // A name read only inside a keyword argument's value is still a use
+    // of the binding: scope resolution walks keyword values too.
+    let ok = [
+        "def h(xs = []):\n\
+         \x20   return xs\n\
+         def g():\n\
+         \x20   o = 1\n\
+         \x20   return h(xs = [o])\n",
+        "def h(xs = []):\n\
+         \x20   return xs\n\
+         o = 1\n\
+         r = h(xs = [o])\n",
+        "def g(a):\n\
+         \x20   out = a.f(1)\n\
+         \x20   a.h(xs = [out])\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    // The value is still checked against the parameter.
+    let bad = "def h(n = 0):\n\
+               \x20   return n + 1\n\
+               s = \"a\"\n\
+               r = h(n = s)\n";
+    assert!(!check_program(bad).is_empty(), "accepted:\n{bad}");
+}
+
+// ---- comprehensions ----
+
+#[test]
+fn list_comprehensions_are_typed() {
+    let ok = [
+        "xs = [x * 2 for x in [1, 2, 3]]\nz = xs[0] + 1\n",
+        "ys = [s.upper() for s in [\"a\", \"b\"] if s != \"a\"]\nz = ys[0] + \"!\"\n",
+        // A tuple target destructures each element.
+        "pairs = [(1, \"a\")]\nks = [k + 1 for k, v in pairs]\nvs = [v + \"x\" for k, v in pairs]\n",
+        // Several clauses nest in order.
+        "m = [[1, 2], [3]]\nflat = [y for row in m for y in row if y > 1]\nz = flat[0] + 1\n",
+        // The first iterable is read in the enclosing scope.
+        "x = [1, 2]\nx2 = [x + 1 for x in x]\nz = x2[0] + 1\n",
+        // A loop variable doesn't clobber an enclosing name.
+        "x = 5\nys = [x for x in [\"a\"]]\nz = x + 1\n",
+        // A generator expression as a call's sole argument, or parenthesised.
+        "b = any(v > 1 for v in [1, 2])\ns = sum(v for v in [1, 2])\nn = s + 1\n",
+        "g = (x for x in [1, 2])\n",
+        // In a method, `self` inside the comprehension is the receiver.
+        "class C:\n\
+         \x20   def __init__(self):\n\
+         \x20       self.k = 2\n\
+         \x20   def m(self, xs):\n\
+         \x20       return [x * self.k for x in xs]\n\
+         c = C()\n\
+         r = c.m([1])\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        "xs = [x * 2 for x in [1, 2, 3]]\nz = xs[0] + \"a\"\n",
+        "pairs = [(1, \"a\")]\nvs = [v + 1 for k, v in pairs]\n",
+        "ys = [s for s in [\"a\"] if s > 1]\n",
+        // Loop variables are local to the comprehension.
+        "ys = [q for q in [1]]\nz = q\n",
+    ];
+    for src in bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+}
+
+// ---- slicing ----
+
+#[test]
+fn slices_keep_the_receiver_type() {
+    let ok = [
+        "xs = [1, 2, 3]\n\
+         a = xs[1:]\nb = xs[:2]\nc = xs[::-1]\nd = xs[:]\n\
+         z = a[0] + b[0] + c[0] + d[0]\n",
+        "s = \"hello\"\nt = s[1:3] + s[-2:]\n",
+        // A parameter sliced takes whichever of a list or string it gets.
+        "def tail(v):\n\
+         \x20   return v[1:]\n\
+         a = tail(\"abc\") + \"x\"\n\
+         b = tail([1])[0] + 1\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        "xs = [1, 2]\nz = xs[1:] + \"a\"\n",
+        "xs = [1, 2]\nz = xs[\"a\":]\n",
+        "n = 5\nz = n[1:]\n",
+    ];
+    for src in bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+}
+
+// ---- keyword-only parameters ----
+
+#[test]
+fn keyword_only_marker_is_accepted() {
+    let ok = [
+        "def f(a, *, b = 1):\n\
+         \x20   return a + b\n\
+         r = f(1, b = 2)\n",
+        "class C:\n\
+         \x20   def m(self, *, k):\n\
+         \x20       return k\n\
+         c = C()\n\
+         r = c.m(k = 1)\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = "def f(a, *, b = 1):\n\
+               \x20   return a + b\n\
+               r = f(1, b = \"s\")\n";
+    assert!(!check_program(bad).is_empty(), "accepted:\n{bad}");
+    // `*args` is still out.
+    assert!(parse_source("def f(*args):\n    pass\n").is_err());
+}
+
+// ---- PEP 484 type comments ----
+
+#[test]
+fn type_comments_declare_types() {
+    let ok = [
+        "names = []  # type: list[str]\nnames.append(\"a\")\n",
+        "def f(a, b):  # type: (int, str) -> str\n\
+         \x20   return b + \"x\"\n\
+         r = f(1, \"y\")\n",
+        "def f(a, b):\n\
+         \x20   # type: (int, str) -> str\n\
+         \x20   return b + \"x\"\n",
+        // `# type: ignore` and ordinary comments are not types.
+        "x = 1  # type: ignore\ny = x + 1\n",
+        "x = 1  # just a comment\n# type: int\ny = 2\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        "names = []  # type: list[str]\nnames.append(1)\n",
+        "def f(a, b):\n\
+         \x20   # type: (int, str) -> str\n\
+         \x20   return b\n\
+         r = f(\"no\", \"x\")\n",
+        // `(...)` states only the return type.
+        "def f(a):\n\
+         \x20   # type: (...) -> int\n\
+         \x20   return a\n\
+         r = f(\"s\")\n",
+    ];
+    for src in bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+    // The comment must give one type per parameter.
+    assert!(parse_source("def f(a):\n    # type: (int, int) -> int\n    return a\n").is_err());
 }

@@ -172,6 +172,17 @@ struct Lexer {
     indents: Vec<usize>,
     bracket_depth: usize,
     out: Vec<Spanned<Tok>>,
+    type_comments: Vec<TypeComment>,
+}
+
+/// A PEP 484 type comment, `# type: T`: the text after `type:` and the
+/// byte offset of that text in the source. Collected beside the tokens;
+/// the parser attaches each to the assignment or `def` it follows.
+#[derive(Debug, Clone)]
+pub struct TypeComment {
+    /// Byte offset of `text` in the source.
+    pub offset: usize,
+    pub text: String,
 }
 
 impl Lexer {
@@ -183,6 +194,7 @@ impl Lexer {
             indents: vec![0],
             bracket_depth: 0,
             out: Vec::new(),
+            type_comments: Vec::new(),
         }
     }
 
@@ -216,7 +228,42 @@ impl Lexer {
         self.out.push(Spanned::new(tok, Span::new(b, b)));
     }
 
+    /// Skip a `#` comment up to (not including) the end of the line,
+    /// recording it if it is a type comment (`# type: T`, other than
+    /// `# type: ignore`).
+    fn comment(&mut self) {
+        let start = self.pos;
+        while let Some(c) = self.peek() {
+            if c == '\n' {
+                break;
+            }
+            self.bump();
+        }
+        let text: String = self.chars[start..self.pos].iter().map(|(_, c)| c).collect();
+        let body = text[1..].trim_start();
+        if let Some(rest) = body.strip_prefix("type:") {
+            let ty = rest.trim_start();
+            if !ty.is_empty() && !ty.starts_with("ignore") {
+                let offset = self.byte_at(start) + (text.len() - ty.len());
+                self.type_comments.push(TypeComment {
+                    offset,
+                    text: ty.trim_end().to_string(),
+                });
+            }
+        }
+    }
+
     fn tokenize(mut self) -> Result<Vec<Spanned<Tok>>> {
+        self.run()?;
+        Ok(self.out)
+    }
+
+    fn tokenize_with_type_comments(mut self) -> Result<(Vec<Spanned<Tok>>, Vec<TypeComment>)> {
+        self.run()?;
+        Ok((self.out, self.type_comments))
+    }
+
+    fn run(&mut self) -> Result<()> {
         let mut at_line_start = true;
         loop {
             if at_line_start && self.bracket_depth == 0 {
@@ -232,14 +279,7 @@ impl Lexer {
                 Some(' ') | Some('\t') => {
                     self.bump();
                 }
-                Some('#') => {
-                    while let Some(c) = self.peek() {
-                        if c == '\n' {
-                            break;
-                        }
-                        self.bump();
-                    }
-                }
+                Some('#') => self.comment(),
                 Some('\\') if self.peek2() == Some('\n') => {
                     self.bump();
                     self.bump();
@@ -264,7 +304,7 @@ impl Lexer {
             self.emit_here(Tok::Dedent);
         }
         self.emit_here(Tok::Eof);
-        Ok(self.out)
+        Ok(())
     }
 
     /// At the physical start of a line (outside brackets): skip blank and
@@ -303,12 +343,7 @@ impl Lexer {
                 return Ok(true);
             }
             Some('#') => {
-                while let Some(c) = self.peek() {
-                    if c == '\n' {
-                        break;
-                    }
-                    self.bump();
-                }
+                self.comment();
                 return Ok(true);
             }
             _ => {}
@@ -782,4 +817,9 @@ impl Lexer {
 
 pub fn tokenize(source: &str) -> Result<Vec<Spanned<Tok>>> {
     Lexer::new(source).tokenize()
+}
+
+/// Tokenize, also returning the PEP 484 type comments (`# type: T`).
+pub fn tokenize_with_type_comments(source: &str) -> Result<(Vec<Spanned<Tok>>, Vec<TypeComment>)> {
+    Lexer::new(source).tokenize_with_type_comments()
 }

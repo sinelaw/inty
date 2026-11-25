@@ -917,6 +917,9 @@ impl Walker {
                 for a in arguments {
                     self.expr(a);
                 }
+                for (_, v) in expr.keyword_args() {
+                    self.expr(v);
+                }
             }
             Expr::Unary { op, argument, .. } => {
                 if matches!(

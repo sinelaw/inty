@@ -691,6 +691,16 @@ pub enum Expr {
 }
 
 impl Expr {
+    /// The keyword arguments of a call (`f(k=v)`, Python/Starlark); empty
+    /// for any other expression. Walkers that match `Call | New` together
+    /// use this so a keyword argument's value is visited too.
+    pub fn keyword_args(&self) -> &[(String, Expr)] {
+        match self {
+            Expr::Call { keywords, .. } => keywords,
+            _ => &[],
+        }
+    }
+
     /// Get the source span for this expression
     pub fn span(&self) -> Source {
         match self {

@@ -298,6 +298,8 @@ pub fn python_string_method_type(state: &mut InferState, method: &str) -> Option
             )
         }
         "splitlines" => Type::simple_func(vec![], Type::array(s.clone())),
+        // `s[a:b:c]`, lowered by the parser to `s.__slice__(a, b, c)`.
+        crate::frontends::python::SLICE_METHOD => slice_method(s.clone()),
         // `sep.join(iterable)` — element type unconstrained (permissive to
         // avoid false positives on generators / maps).
         "join" => {
@@ -606,6 +608,14 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
     })
 }
 
+/// The type of the `__slice__` method a slice subscript lowers to: three
+/// bounds, each a number or `None` (omitted), giving a value of the
+/// receiver's own type `of`.
+fn slice_method(of: Type) -> Type {
+    let bound = Type::union([Type::Number, Type::Null]);
+    Type::simple_func(vec![bound.clone(), bound.clone(), bound], of)
+}
+
 /// Look up a Python `list` method by name for a list whose element type
 /// is `elem`. Separate from the JavaScript [`array_method_type`] surface
 /// (issue #67); inference picks the table by `Program::language`. In-place
@@ -641,6 +651,8 @@ pub fn python_list_method_type(state: &mut InferState, elem: &Type, method: &str
         "count" => Type::simple_func(vec![elem.clone()], Type::Number),
         "sort" | "reverse" | "clear" => Type::simple_func(vec![], nil.clone()),
         "copy" => Type::simple_func(vec![], arr.clone()),
+        // `xs[a:b:c]`, lowered by the parser to `xs.__slice__(a, b, c)`.
+        crate::frontends::python::SLICE_METHOD => slice_method(arr.clone()),
         _ => {
             let _ = (state, n, nil, arr);
             return None;

@@ -28,6 +28,7 @@ fn parse_language(name: Option<String>) -> Language {
     match name.as_deref() {
         Some("python") | Some("py") => Language::Python,
         Some("lua") => Language::Lua,
+        Some("starlark") | Some("star") | Some("bzl") => Language::Starlark,
         _ => Language::JavaScript,
     }
 }
@@ -37,8 +38,8 @@ impl Analysis {
     /// Lex, parse, and infer `source`. Always returns an `Analysis`; on
     /// failure `errors()` is non-empty and queries return null/empty.
     ///
-    /// `language` is `"javascript"` (the default), `"python"`, or
-    /// `"lua"`. Unknown values fall back to JavaScript so older callers
+    /// `language` is `"javascript"` (the default), `"python"`, `"lua"`
+    /// or `"starlark"`. Unknown values fall back to JavaScript so older callers
     /// keep working.
     #[wasm_bindgen(constructor)]
     pub fn new(source: &str, language: Option<String>) -> Analysis {

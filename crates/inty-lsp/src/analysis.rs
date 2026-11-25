@@ -100,6 +100,21 @@ impl Analysis {
                 inty::frontends::python::prelude::load(&mut state, inty::builtins::initial_env())
                     .map(|env| (env, state))
             }
+            Language::Starlark => {
+                // No file path here to resolve `load` labels against, so
+                // loaded names are bound opaquely; Bazel's globals are
+                // included, as most Starlark is `.bzl`.
+                let mut state = inty::infer::InferState::new();
+                inty::frontends::starlark::prelude::load(
+                    &mut state,
+                    inty::builtins::initial_env(),
+                    true,
+                )
+                .and_then(|env| {
+                    inty::frontends::starlark::bind_loads_opaquely(&mut state, env, &program)
+                })
+                .map(|env| (env, state))
+            }
             Language::Lua => Ok((inty::builtins::initial_env(), {
                 let mut state = inty::infer::InferState::new();
                 state.set_language(inty::ast::SourceLanguage::Lua);
@@ -855,6 +870,9 @@ fn find_call_expr<'a>(expr: &'a Expr, offset: usize, best: &mut Option<&'a Expr>
         for a in arguments {
             find_call_expr(a, offset, best);
         }
+        for (_, v) in expr.keyword_args() {
+            find_call_expr(v, offset, best);
+        }
         return;
     }
     match expr {
@@ -1129,6 +1147,9 @@ fn visit_expr(expr: &Expr, offset: usize, best: &mut Option<(String, Span)>) {
             for a in arguments {
                 visit_expr(a, offset, best);
             }
+            for (_, v) in expr.keyword_args() {
+                visit_expr(v, offset, best);
+            }
         }
         Expr::Function { body, .. } => visit_stmt(body, offset, best),
         Expr::Unary { argument, .. } => visit_expr(argument, offset, best),
@@ -1253,5 +1274,24 @@ const func = function() { return {id: '123', name: 'hello'}; };";
 
         let bad = Analysis::check_lang("x = 1 + \"oops\"\n", Language::Python);
         assert!(!bad.errors.is_empty(), "expected a type error");
+    }
+
+    #[test]
+    fn check_lang_dispatches_to_starlark() {
+        // Loaded names are bound opaquely (no path to resolve labels);
+        // Bazel's globals are in scope.
+        let ok = Analysis::check_lang(
+            "load(\"//lib:a.bzl\", \"helper\")\n\
+             def _impl(ctx):\n    return [DefaultInfo(files = depset(helper(ctx)))]\n\
+             my_rule = rule(implementation = _impl)\n\
+             names = [s.upper() for s in [\"a\"]]\n",
+            Language::Starlark,
+        );
+        assert!(ok.errors.is_empty(), "expected ok, got {:?}", ok.errors);
+
+        let bad = Analysis::check_lang("x = 1 + \"oops\"\n", Language::Starlark);
+        assert!(!bad.errors.is_empty(), "expected a type error");
+        let not_starlark = Analysis::check_lang("class C:\n    pass\n", Language::Starlark);
+        assert!(!not_starlark.errors.is_empty(), "expected a parse error");
     }
 }

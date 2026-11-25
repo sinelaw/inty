@@ -54,6 +54,7 @@ fn lang_from_str(s: &str) -> Language {
     match s {
         "python" => Language::Python,
         "lua" => Language::Lua,
+        "starlark" => Language::Starlark,
         _ => Language::JavaScript,
     }
 }
@@ -63,6 +64,7 @@ fn lang_extension(lang: Language) -> &'static str {
         Language::JavaScript => "js",
         Language::Python => "py",
         Language::Lua => "lua",
+        Language::Starlark => "star",
     }
 }
 
@@ -94,6 +96,16 @@ fn check(lang: Language, src: &str) -> Result<(), String> {
             state.set_language(inty::ast::SourceLanguage::Lua);
             (inty::builtins::initial_env(), state)
         }
+        Language::Starlark => {
+            let mut state = inty::infer::InferState::new();
+            let env = inty::frontends::starlark::prelude::load(
+                &mut state,
+                inty::builtins::initial_env(),
+                false,
+            )
+            .map_err(|e| format!("starlark prelude error: {:?}", e))?;
+            (env, state)
+        }
     };
     let (_ty, _) = state
         .infer_program_with_env(&env, &program)
@@ -115,7 +127,7 @@ fn check(lang: Language, src: &str) -> Result<(), String> {
 fn comment_prefix(lang: Language) -> &'static str {
     match lang {
         Language::JavaScript => "//",
-        Language::Python => "#",
+        Language::Python | Language::Starlark => "#",
         // Lua isn't surfaced in the playground yet; pick a benign
         // prefix that won't accidentally match anything if it ever is.
         Language::Lua => "--",
@@ -299,7 +311,7 @@ fn marker_lines_actually_trigger_errors() {
                 match lang {
                     Language::JavaScript => js_marker += 1,
                     Language::Python => py_marker += 1,
-                    Language::Lua => {}
+                    Language::Lua | Language::Starlark => {}
                 }
             }
         }

@@ -16,6 +16,7 @@ Frontends:
 And also:
 
 - **Python** - *experimental* a deliberately limited subset that lowers cleanly onto the type system.
+- **Starlark** - *experimental* the build-file dialect of Python used by Bazel and Buck2 (`.star`, `.bzl`, `.sky`), through the Python frontend: `load()` resolves Bazel-style labels, and Starlark's own rules (no recursion, globals bound once, no top-level `if`/`for`) are checked. Bazel's API isn't declared yet, so its globals (`rule`, `attr`, `native`, …) are accepted without checking.
 - **Lua** - *experimental* early sketch; the frontend parses a small subset, but it's not shipped end-to-end (no playground, no LSP integration).
 
 The type system was designed to cover JavaScript's "good parts" and the common ground of these languages,
@@ -55,6 +56,7 @@ Check a file:
 ```sh
 inty path/to/file.js
 inty path/to/file.py
+inty path/to/defs.bzl
 ```
 
 The frontend is picked from the file extension. Run `inty --help` for the full
