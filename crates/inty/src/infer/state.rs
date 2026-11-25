@@ -2263,12 +2263,29 @@ impl InferState {
     ) -> bool {
         let mut pinned = false;
         let mut keep = Vec::new();
+        let methods: std::collections::HashSet<crate::types::TVarId> = self
+            .method_this_vars
+            .clone()
+            .into_iter()
+            .filter_map(|id| self.var_table.find_if_present(id))
+            .collect();
         for (this, span, callee) in std::mem::take(&mut self.pending_detached) {
             match self.zonk_head(&this) {
                 Type::ArrowThis | Type::Undefined | Type::Error | Type::NewTarget => {}
                 Type::Var(v) => {
                     if fixed.is_none_or(|fixed| !fixed.contains(&v)) {
-                        if let Err(e) = self.unify(span, &Type::Var(v), &Type::Undefined) {
+                        // A function whose body mentions `this` reads it, as
+                        // `undefined` here; any other uses none (a function
+                        // type whose body isn't seen says so), which a
+                        // detached call accepts and an arrow function has.
+                        let reads = matches!(&v, TVarName::Flex(id)
+                            if self.var_table.find_if_present(*id).is_some_and(|r| methods.contains(&r)));
+                        let pin = if reads {
+                            Type::Undefined
+                        } else {
+                            Type::ArrowThis
+                        };
+                        if let Err(e) = self.unify(span, &Type::Var(v), &pin) {
                             self.push_error(e);
                         }
                         pinned = true;
@@ -2450,13 +2467,10 @@ impl InferState {
         }
         let mut ty = self.main_subst.flatten(ty);
         let (fixed_vars, fixed_pvars) = self.env_fixed_vars(env_free, &ty);
-        // A detached call's `this` that would be generalised is settled
-        // first: as `Undefined`, what the call passes. (Which variables
-        // the environment fixes doesn't change: one is bound to a type
-        // without variables.)
-        if !self.pending_detached.is_empty() && self.settle_detached(Some(&fixed_vars)) {
-            ty = self.main_subst.flatten(&ty);
-        }
+        // A method call's `this` first: a callee called both on a receiver
+        // and detached that doesn't read `this` uses none, which both
+        // calls accept; settling the detached call first would pin it to
+        // `Undefined`, which the method call's receiver then contradicts.
         if !self.pending_receivers.is_empty() {
             // The variables generalising would quantify: the type's, and
             // those of the constraints it may carry.
@@ -2472,6 +2486,13 @@ impl InferState {
             if self.settle_receivers(Some(&reached)) {
                 ty = self.main_subst.flatten(&ty);
             }
+        }
+        // A detached call's `this` that would be generalised is settled
+        // then: as `Undefined`, what the call passes. (Which variables
+        // the environment fixes doesn't change: one is bound to a type
+        // without variables.)
+        if !self.pending_detached.is_empty() && self.settle_detached(Some(&fixed_vars)) {
+            ty = self.main_subst.flatten(&ty);
         }
         if !self.pending_async_returns.is_empty() && self.settle_async_returns(Some(&fixed_vars)) {
             ty = self.main_subst.flatten(&ty);

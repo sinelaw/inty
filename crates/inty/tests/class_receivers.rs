@@ -119,3 +119,24 @@ fn method_called_before_its_body_is_checked() {
         "b reads `this`: calling it detached is rejected"
     );
 }
+
+/// A callee called detached whose `this` is still unknown where it is
+/// generalised (a callback parameter) uses no `this`, by the rule that a
+/// function type whose body isn't seen uses none: an arrow function can
+/// then be stored where it is expected. It was pinned to `Undefined`, so
+/// an arrow in a record field was rejected ("found one that reads `this`
+/// (a method of Undefined)"). A function whose body reads `this` is
+/// still rejected there.
+#[test]
+fn detached_callback_uses_no_this() {
+    let ok = "const wrap = (f) => (arg) => f(arg);\n\
+              const reg = (app, spec) => { app.set(1, wrap(spec.run)); };\n\
+              export function go(app) { reg(app, { run: (x) => x }); }\n";
+    assert!(check(ok).is_ok(), "{:?}", check(ok));
+    let bad = "const call = (f) => f(1);\nconst o = { n: 1, m(x) { return this.n + x; } };\n\
+               export const r = call(o.m);\n";
+    assert!(
+        check(bad).is_err(),
+        "a method that reads `this` can't be called detached"
+    );
+}
