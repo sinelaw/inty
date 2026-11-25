@@ -176,6 +176,7 @@
     setStartBefore: (this: Range<T>, T) => Undefined, setStartAfter: (this: Range<T>, T) => Undefined,
     setEndBefore: (this: Range<T>, T) => Undefined, setEndAfter: (this: Range<T>, T) => Undefined,
     collapse: (this: Range<T>, Boolean) => Undefined,
+    comparePoint: (this: Range<T>, T, Number) => Number, isPointInRange: (this: Range<T>, T, Number) => Boolean,
     selectNode: (this: Range<T>, T) => Undefined, selectNodeContents: (this: Range<T>, T) => Undefined,
     cloneRange: (this: Range<T>) => Range<T>,
     getBoundingClientRect: (this: Range<T>) => DOMRect,
@@ -203,6 +204,13 @@
     onclick: (DomEvent<T>) => Undefined, oninput: (DomEvent<T>) => Undefined, onchange: (DomEvent<T>) => Undefined,
     onkeydown: (DomEvent<T>) => Undefined, onkeyup: (DomEvent<T>) => Undefined,
     onsubmit: (DomEvent<T>) => Undefined, onload: (DomEvent<T>) => Undefined,
+    onmousedown: (DomEvent<T>) => Undefined, onmouseup: (DomEvent<T>) => Undefined,
+    onmousemove: (DomEvent<T>) => Undefined, onmouseenter: (DomEvent<T>) => Undefined,
+    onmouseleave: (DomEvent<T>) => Undefined, ondblclick: (DomEvent<T>) => Undefined,
+    oncontextmenu: (DomEvent<T>) => Undefined, onwheel: (DomEvent<T>) => Undefined,
+    onfocus: (DomEvent<T>) => Undefined, onblur: (DomEvent<T>) => Undefined,
+    onscroll: (DomEvent<T>) => Undefined,
+    dataset: Dict<String>,
     classList: {
         add: (String) => Undefined, remove: (String) => Undefined,
         toggle: (String) => Boolean, contains: (String) => Boolean,
@@ -263,7 +271,6 @@
     toDataURL: () => String,
     setPointerCapture: (Number) => Undefined, releasePointerCapture: (Number) => Undefined,
     hasPointerCapture: (Number) => Boolean,
-    dataset: {},
     scrollBy: (Number, Number) => Undefined, scrollTo: (Number, Number) => Undefined,
     select: () => Undefined,
     selectionStart: Number, selectionEnd: Number,
@@ -327,6 +334,7 @@
         caretPositionFromPoint: (Number, Number) => {offsetNode: T, offset: Number} | Null,
         caretRangeFromPoint: (Number, Number) => Range<T> | Null,
         hidden: Boolean,
+        hasFocus: () => Boolean,
         visibilityState: String,
         fonts: {ready: Promise<{status: String}>},
         querySelector: (String) => T | Null,
@@ -567,7 +575,8 @@ const AudioWorkletNode;
 const AbortController;
 
 // FormData / URLSearchParams. Construct from a form Element or with no
-// arguments; both expose the same get/set/append surface.
+// arguments (URLSearchParams also from a query string, "?a=1&b=2"); both
+// expose the same get/set/append surface.
 /** const FormData: <T>(T) => {
         get: (String) => String | Null,
         getAll: (String) => String[],
@@ -578,7 +587,7 @@ const AbortController;
     } */
 const FormData;
 
-/** const URLSearchParams: () => {
+/** const URLSearchParams: (init?: String) => {
         get: (String) => String | Null,
         getAll: (String) => String[],
         has: (String) => Boolean,
