@@ -114,6 +114,34 @@ fn testing_an_element_field_checks_quickly() {
     check_quickly(&src.join("\n"));
 }
 
+/// A test narrowing a binding that holds an element (`const p =
+/// this.el.parentElement; if (p !== null)`, `const el = this.el; if
+/// (el)`): narrowing looks at the binding's head and a union's members,
+/// and resolving its whole type to do so wrote the element tree out (out
+/// of memory on a real client).
+#[test]
+fn narrowing_an_element_binding_checks_quickly() {
+    for method in [
+        "m() { const el = this.el; if (el) { return 1; } const p = this.parent; if (p) return 2; return 0; }",
+        "m() { const p = this.el.parentElement; if (p !== null) { return 1; } return 0; }",
+        "m(x) { if (x === this.el) { return 1; } return 0; }",
+    ] {
+        let mut src = vec!["export function mk(parent) {".to_string()];
+        src.push("  const root = document.createElement('div');".to_string());
+        let mut prev = "root".to_string();
+        for i in 1..5 {
+            src.push(format!(
+                "  const d{i} = document.createElement('span'); d{i}.textContent = 'x'; \
+                 {prev}.appendChild(d{i});"
+            ));
+            prev = format!("d{i}");
+        }
+        src.push("  parent.appendChild(root);".to_string());
+        src.push(format!("  const o = {{ el: root, parent, {method} }};\n  return o;\n}}"));
+        check_quickly(&src.join("\n"));
+    }
+}
+
 fn nested_elements_class() -> String {
     let mut src = vec![
         "export class V {".to_string(),
