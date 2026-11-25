@@ -229,13 +229,26 @@ pub enum SourceLanguage {
     JavaScript,
     Python,
     Lua,
+    /// Starlark, the Python dialect of Bazel and Buck2: typed as Python,
+    /// except where the two languages differ (a string isn't iterable,
+    /// and the `str` methods differ a little).
+    Starlark,
 }
 
 impl SourceLanguage {
     /// Whether this language's unit / "no value" type is null (Python
     /// `None`, Lua `nil`) rather than `undefined` (JS).
     pub fn unit_is_null(self) -> bool {
-        matches!(self, SourceLanguage::Python | SourceLanguage::Lua)
+        matches!(
+            self,
+            SourceLanguage::Python | SourceLanguage::Lua | SourceLanguage::Starlark
+        )
+    }
+
+    /// Python or its dialect Starlark: the languages typed by the Python
+    /// rules (`None`, `==` narrowing, the `str`/`list`/`dict` methods).
+    pub fn is_python_like(self) -> bool {
+        matches!(self, SourceLanguage::Python | SourceLanguage::Starlark)
     }
 }
 

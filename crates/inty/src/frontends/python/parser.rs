@@ -389,7 +389,11 @@ impl Parser {
             type_aliases: std::mem::take(&mut self.type_aliases),
             class_brands: std::mem::take(&mut self.class_names),
             class_decls: Vec::new(),
-            language: crate::ast::SourceLanguage::Python,
+            language: if self.starlark {
+                crate::ast::SourceLanguage::Starlark
+            } else {
+                crate::ast::SourceLanguage::Python
+            },
         })
     }
 

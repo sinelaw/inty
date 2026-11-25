@@ -23,6 +23,15 @@
 - Python: keyword-only parameters (`def f(a, *, b)`).
 - Python: PEP 484 type comments, `x = []  # type: list[str]` and
   `# type: (int, str) -> bool` after a `def` header.
+- Python: a `dict[str, V]`'s methods (`get`, `keys`, `values`, `items`,
+  `pop`, `popitem`, `setdefault`, `update`, `clear`, `copy`), and
+  iterating it gives its keys. `d.get(k)` is `V | None`; `d.get(k, default)`
+  is `V` when `d` is known to be a dict at the call.
+- Python: `str.partition`, `str.rpartition` and `str.isascii`.
+- Starlark is its own language to inference (`SourceLanguage::Starlark`,
+  typed by the Python rules): a string isn't iterable (`s.elems()` is),
+  and `str`, `list` and `dict` have Starlark's methods, not Python-only
+  ones such as `zfill`, `sort` or `copy`.
 - Python: a name read only in a keyword argument's value
   (`f(xs = [o])`) was reported as undefined; scope resolution, and the
   language server's walks, now visit keyword arguments.

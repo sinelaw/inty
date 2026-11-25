@@ -4,7 +4,10 @@
 //! Bazel, Buck2 and others for build files and extensions. It is close to
 //! a subset of Python, so it shares the Python lexer and parser
 //! ([`crate::frontends::python`]) run in a Starlark mode, and its programs
-//! are inferred exactly as Python programs are (`SourceLanguage::Python`).
+//! are inferred by the Python rules (`SourceLanguage::Starlark`, which is
+//! [`is_python_like`](crate::ast::SourceLanguage::is_python_like)), except
+//! where the languages differ: a Starlark string isn't iterable, and its
+//! `str` methods differ a little (`elems()`, `codepoints()`).
 //!
 //! What the Starlark mode changes:
 //!
@@ -93,7 +96,7 @@ pub mod prelude {
     /// Extend `env` with the Starlark builtins, and with Bazel's globals
     /// when `bazel` (a `.bzl` file).
     pub fn load(state: &mut InferState, mut env: TypeEnv, bazel: bool) -> Result<TypeEnv> {
-        state.set_language(crate::ast::SourceLanguage::Python);
+        state.set_language(crate::ast::SourceLanguage::Starlark);
         let python = read_stub(state, crate::frontends::python::prelude::PRELUDE)?;
         for (name, scheme) in python.exports {
             if FROM_PYTHON.contains(&name.as_str()) {

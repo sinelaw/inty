@@ -2284,3 +2284,71 @@ fn type_comments_declare_types() {
     // The comment must give one type per parameter.
     assert!(parse_source("def f(a):\n    # type: (int, int) -> int\n    return a\n").is_err());
 }
+
+// ---- str and dict methods ----
+
+#[test]
+fn str_partition_methods() {
+    let ok = [
+        "a, sep, b = \"k=v\".partition(\"=\")\nx = a + sep + b\n",
+        "a, sep, b = \"a.b.c\".rpartition(\".\")\nx = a + b\n",
+        "b = \"a\".isascii()\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        "a, sep, b = \"k=v\".partition(\"=\")\nx = a + 1\n",
+        // Starlark's `elems` isn't Python's.
+        "x = \"ab\".elems()\n",
+    ];
+    for src in bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+}
+
+#[test]
+fn dict_methods_and_iteration() {
+    let d = "d = {}  # type: dict[str, int]\n";
+    let ok = [
+        "a = d.get(\"a\")\nb = d.get(\"a\", 0) + 1\n",
+        "k = d.keys()[0] + \"!\"\nv = d.values()[0] + 1\n",
+        "for kk, vv in d.items():\n    z = kk + str(vv + 1)\n",
+        "p = d.pop(\"a\") + 1\nq = d.pop(\"a\", 0) + 1\n",
+        "s = d.setdefault(\"b\", 2) + 1\n",
+        "d.update(d)\nc = d.copy()\nd.clear()\ne = d.popitem()\n",
+        // Iterating a dict gives its keys.
+        "for k in d:\n    x = k + \"!\"\n",
+        "ks = [k.upper() for k in d]\n",
+        "b = \"a\" in d\n",
+    ];
+    for body in ok {
+        let src = format!("{d}{body}");
+        let errs = check_program(&src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        // Without a default, `get` may give `None`.
+        "a = d.get(\"a\") + 1\n",
+        "a = d.get(\"a\", None)\nb = a + 1\n",
+        // A default must be a value.
+        "a = d.get(\"a\", \"x\")\n",
+        "for k in d:\n    x = k + 1\n",
+        "for k, v in d.items():\n    x = v + \"!\"\n",
+        "x = d.nope()\n",
+        "x = d.setdefault(\"a\", \"s\")\n",
+    ];
+    for body in bad {
+        let src = format!("{d}{body}");
+        assert!(!check_program(&src).is_empty(), "accepted:\n{src}");
+    }
+    // A receiver not known to be a dict at the call keeps `get`'s general
+    // type: the value or `None`, whatever the default.
+    let src = "def f(d):\n\
+               \x20   return d.get(\"a\", 0)\n\
+               x = {}  # type: dict[str, int]\n\
+               r = f(x)\n";
+    let errs = check_program(src);
+    assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+}

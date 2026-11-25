@@ -675,6 +675,28 @@ impl InferState {
         Ok(self.zonk_head_into(func_type))
     }
 
+    /// Python / Starlark `d.get(k, default)` on a receiver already known
+    /// to be a `Dict`, with a default that isn't `None`: the value type,
+    /// with no `None` (see [`crate::builtins::dict_get_with_default`]).
+    /// `None` for any other call, which takes `get`'s general type.
+    fn dict_get_with_default(
+        &mut self,
+        receiver: &Type,
+        property: &str,
+        arguments: &[Expr],
+        keywords: &[(String, Expr)],
+    ) -> Option<Type> {
+        let Type::Map(value) = receiver else {
+            return None;
+        };
+        let defaulted = matches!(
+            arguments,
+            [_, default] if !matches!(default, Expr::Lit { value: crate::ast::Literal::Null, .. })
+        );
+        (self.language.is_python_like() && property == "get" && defaulted && keywords.is_empty())
+            .then(|| crate::builtins::dict_get_with_default(value))
+    }
+
     /// Infer the type of a function call.
     pub(in crate::infer) fn infer_call(
         &mut self,
@@ -726,6 +748,10 @@ impl InferState {
                         *member_span,
                     );
                     deferred_this = Some(this);
+                    (method_type, Some(obj_type_applied))
+                } else if let Some(method_type) =
+                    self.dict_get_with_default(&obj_type_applied, property, arguments, keywords)
+                {
                     (method_type, Some(obj_type_applied))
                 } else {
                     // Get method type from the object without re-inferring

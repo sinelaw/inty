@@ -266,6 +266,12 @@ pub fn boolean_method_type(method: &str) -> Option<Type> {
 /// methods (issue #67); inference picks the table by `Program::language`.
 pub fn python_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
     use crate::types::FuncParam;
+    let starlark = state.language == crate::ast::SourceLanguage::Starlark;
+    // Starlark's strings have fewer methods than Python's, and one of their
+    // own (`elems`); a Python-only method doesn't exist on them.
+    if starlark && !STARLARK_STRING_METHODS.contains(&method) {
+        return None;
+    }
     let n = Type::Number;
     let s = Type::String;
     let b = Type::Boolean;
@@ -298,6 +304,16 @@ pub fn python_string_method_type(state: &mut InferState, method: &str) -> Option
             )
         }
         "splitlines" => Type::simple_func(vec![], Type::array(s.clone())),
+        // `s.partition(sep)` → (before, sep, after); `rpartition` splits at
+        // the last `sep`.
+        "partition" | "rpartition" => Type::simple_func(
+            vec![s.clone()],
+            Type::Tuple(vec![s.clone(), s.clone(), s.clone()]),
+        ),
+        // Starlark: `s.elems()`, the one-character strings of `s` (a
+        // string itself isn't iterable). Modelled as a list of them,
+        // which is what the elements are iterated and indexed as.
+        "elems" if starlark => Type::simple_func(vec![], Type::array(s.clone())),
         // `s[a:b:c]`, lowered by the parser to `s.__slice__(a, b, c)`.
         crate::frontends::python::SLICE_METHOD => slice_method(s.clone()),
         // `sep.join(iterable)` — element type unconstrained (permissive to
@@ -326,7 +342,7 @@ pub fn python_string_method_type(state: &mut InferState, method: &str) -> Option
             )
         }
         "isdigit" | "isalpha" | "isalnum" | "isspace" | "isupper" | "islower" | "istitle"
-        | "isnumeric" | "isdecimal" | "isidentifier" | "isprintable" => {
+        | "isnumeric" | "isdecimal" | "isidentifier" | "isprintable" | "isascii" => {
             Type::simple_func(vec![], b.clone())
         }
         _ => {
@@ -616,12 +632,132 @@ fn slice_method(of: Type) -> Type {
     Type::simple_func(vec![bound.clone(), bound.clone(), bound], of)
 }
 
+/// The `str` methods of the Starlark specification (and Bazel), plus the
+/// slice method a slice subscript lowers to. The others in
+/// [`python_string_method_type`] are Python's only.
+const STARLARK_STRING_METHODS: &[&str] = &[
+    "capitalize",
+    "count",
+    "elems",
+    "endswith",
+    "find",
+    "format",
+    "index",
+    "isalnum",
+    "isalpha",
+    "isdigit",
+    "islower",
+    "isspace",
+    "istitle",
+    "isupper",
+    "join",
+    "lower",
+    "lstrip",
+    "partition",
+    "removeprefix",
+    "removesuffix",
+    "replace",
+    "rfind",
+    "rindex",
+    "rpartition",
+    "rsplit",
+    "rstrip",
+    "split",
+    "splitlines",
+    "startswith",
+    "strip",
+    "title",
+    "upper",
+    crate::frontends::python::SLICE_METHOD,
+];
+
+/// The `list` methods of the Starlark specification (and Bazel), plus the
+/// slice method. Python's `count`, `sort`, `reverse` and `copy` aren't
+/// among them.
+const STARLARK_LIST_METHODS: &[&str] = &[
+    "append",
+    "clear",
+    "extend",
+    "index",
+    "insert",
+    "pop",
+    "remove",
+    crate::frontends::python::SLICE_METHOD,
+];
+
+/// Look up a Python `dict` method by name, for a `Dict` (`dict[str, V]`)
+/// whose values are `value`. The keys are strings, as a `Dict`'s are.
+/// Mutators return `None` (the language unit `Null`).
+///
+/// `keys()`, `values()` and `items()` are modelled as lists: they are in
+/// Starlark, and in Python they are views that iterate the same way (a
+/// view can't be indexed, which a list can).
+pub fn python_dict_method_type(state: &mut InferState, value: &Type, method: &str) -> Option<Type> {
+    use crate::types::FuncParam;
+    if state.language == crate::ast::SourceLanguage::Starlark && method == "copy" {
+        return None;
+    }
+    let s = Type::String;
+    let nil = Type::Null;
+    let entry = Type::Tuple(vec![s.clone(), value.clone()]);
+    Some(match method {
+        // `d.get(k, default?)`: the value, or `None` for a missing key. A
+        // call that gives a default the receiver is known to be a `Dict`
+        // for gets a tighter type at the call ([`dict_get_with_default`]).
+        "get" => {
+            let pvar = state.fresh_pvar();
+            let maybe = Type::union([value.clone(), nil.clone()]);
+            Type::simple_func_with_params(
+                vec![
+                    FuncParam::required(s.clone()),
+                    FuncParam::optional(pvar, maybe.clone()),
+                ],
+                maybe,
+            )
+        }
+        "keys" => Type::simple_func(vec![], Type::array(s.clone())),
+        "values" => Type::simple_func(vec![], Type::array(value.clone())),
+        "items" => Type::simple_func(vec![], Type::array(entry.clone())),
+        // `d.pop(k, default?)`: the value (a missing key without a default
+        // raises).
+        "pop" => {
+            let pvar = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![
+                    FuncParam::required(s.clone()),
+                    FuncParam::optional(pvar, value.clone()),
+                ],
+                value.clone(),
+            )
+        }
+        "popitem" => Type::simple_func(vec![], entry),
+        "setdefault" => Type::simple_func(vec![s.clone(), value.clone()], value.clone()),
+        "update" => Type::simple_func(vec![Type::map(value.clone())], nil.clone()),
+        "clear" => Type::simple_func(vec![], nil.clone()),
+        "copy" => Type::simple_func(vec![], Type::map(value.clone())),
+        _ => return None,
+    })
+}
+
+/// The type of `d.get(k, default)` when `d` is known to be a `Dict` with
+/// values `value` and the default isn't `None`: the value, never `None`
+/// (the default stands in for a missing key, and must be a value).
+pub fn dict_get_with_default(value: &Type) -> Type {
+    Type::simple_func(vec![Type::String, value.clone()], value.clone())
+}
+
 /// Look up a Python `list` method by name for a list whose element type
 /// is `elem`. Separate from the JavaScript [`array_method_type`] surface
 /// (issue #67); inference picks the table by `Program::language`. In-place
 /// mutators return `None` (modelled as the language unit `Null`).
 pub fn python_list_method_type(state: &mut InferState, elem: &Type, method: &str) -> Option<Type> {
     use crate::types::FuncParam;
+    // Starlark's lists have only some of Python's methods.
+    if state.language == crate::ast::SourceLanguage::Starlark
+        && !STARLARK_LIST_METHODS.contains(&method)
+    {
+        return None;
+    }
     let n = Type::Number;
     let nil = Type::Null;
     let arr = Type::array(elem.clone());
@@ -1212,6 +1348,15 @@ impl InferState {
             }
             Type::Error => Ok(()),
             Type::Array(elem) => self.unify(span, element, &elem),
+            Type::String | Type::Literal(crate::types::LitValue::String(_))
+                if self.language == crate::ast::SourceLanguage::Starlark =>
+            {
+                not_iterable(
+                    self,
+                    "a Starlark string isn't iterable: iterate `s.elems()` for its \
+                     one-character strings",
+                )
+            }
             Type::String | Type::Literal(crate::types::LitValue::String(_)) => {
                 self.unify(span, element, &Type::String)
             }
@@ -1248,6 +1393,10 @@ impl InferState {
                      `Object.entries(o)`",
                 ),
             },
+            // Python and Starlark iterate a dict's keys.
+            Type::Map(_) if self.language.is_python_like() => {
+                self.unify(span, element, &Type::String)
+            }
             Type::Map(_) => not_iterable(
                 self,
                 "a `Dict` is a plain object: iterate `Object.keys(d)`, `Object.values(d)` or \

@@ -358,3 +358,60 @@ fn loads_bring_in_typed_names() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn strings_are_not_iterable() {
+    rejects(
+        "def f(s):\n    for c in s:\n        print(c)\nf(\"abc\")\n",
+        "a Starlark string isn't iterable",
+    );
+    rejects(
+        "def f():\n    return [c for c in \"abc\"]\n",
+        "a Starlark string isn't iterable",
+    );
+    accepts("def f(s):\n    return [c.upper() for c in s.elems()]\nr = f(\"ab\")\n");
+    // `in` on a string is a substring test, not iteration.
+    accepts("b = \"a\" in \"abc\"\n");
+}
+
+#[test]
+fn methods_are_starlarks_not_pythons() {
+    // Python-only `str`, `list` and `dict` methods don't exist here.
+    rejects("x = \"1\".zfill(3)\n", "zfill");
+    rejects("x = \"a\".casefold()\n", "casefold");
+    rejects(
+        "def f():\n    xs = [2, 1]\n    xs.sort()\n    return xs\n",
+        "sort",
+    );
+    rejects(
+        "def f(d):\n    # type: (dict[str, int]) -> int\n    c = d.copy()\n    return 0\n",
+        "copy",
+    );
+    // Starlark's own, and the shared ones, do.
+    accepts(
+        "def f(d, xs):\n\
+         \x20   # type: (dict[str, int], list[str]) -> int\n\
+         \x20   a, sep, b = \"k=v\".partition(\"=\")\n\
+         \x20   xs.append(a.removeprefix(\"k\") + b)\n\
+         \x20   t = 0\n\
+         \x20   for k, v in d.items():\n\
+         \x20       t += v + d.get(k, 0)\n\
+         \x20   for k in d:\n\
+         \x20       t += len(k)\n\
+         \x20   return t + xs.index(\"x\")\n",
+    );
+}
+
+#[test]
+fn starlark_programs_carry_their_language() {
+    assert_eq!(
+        parse_source("x = 1\n").unwrap().language,
+        crate::ast::SourceLanguage::Starlark
+    );
+    assert_eq!(
+        crate::frontends::python::parse_source("x = 1\n")
+            .unwrap()
+            .language,
+        crate::ast::SourceLanguage::Python
+    );
+}
