@@ -344,6 +344,10 @@ pub struct InferState {
     /// when it is (`settle_receivers`), at the latest as a function that
     /// uses no `this`.
     pub(crate) pending_receivers: Vec<(Type, Type, Span)>,
+    /// The `this` variables of functions whose bodies mention `this`
+    /// (methods, by the rule that a body says whether a function is
+    /// one): see `settle_receivers`.
+    pub(crate) method_this_vars: Vec<crate::types::TVarId>,
     /// An `async` body's `return e` whose type wasn't known at the
     /// `return`, and what it gives the promise: settled when it is
     /// (`settle_async_returns`), at the latest as a value that isn't a
@@ -591,6 +595,7 @@ impl InferState {
             promise_results: Vec::new(),
             pending_detached: Vec::new(),
             pending_receivers: Vec::new(),
+            method_this_vars: Vec::new(),
             pending_async_returns: Vec::new(),
             pending_optional_params: Vec::new(),
             resolution: Default::default(),
@@ -2276,44 +2281,52 @@ impl InferState {
     /// Settle the `this` of callees called as methods that weren't known
     /// at the call (`pending_receivers`). One now known is checked against
     /// the receiver as at the call (`unify_this`): no `this`, or the
-    /// receiver. One still unknown stays unknown while the environment
-    /// fixes it (`fixed`), and otherwise (and always when `fixed` is
-    /// `None`) is a function that uses no `this`: a function type whose
-    /// body isn't seen says it uses none (as an annotation does), and a
-    /// call never makes a function a method. Whether anything was
-    /// pinned.
+    /// receiver. One that is the `this` of a function whose body mentions
+    /// `this` (`method_this_vars`) is that function's: it is called on the
+    /// receiver. One still unknown stays unknown until the type being
+    /// generalised reaches it (`reached`), and is then (and always when
+    /// `reached` is `None`, the program done) a function that uses no
+    /// `this`: a function type whose body isn't seen says it uses none,
+    /// as an annotation does, and a call never makes a function a
+    /// method. Whether anything was decided.
     pub(crate) fn settle_receivers(
         &mut self,
-        fixed: Option<&std::collections::HashSet<TVarName>>,
+        reached: Option<&std::collections::HashSet<TVarName>>,
     ) -> bool {
-        let mut pinned = false;
+        let mut decided = false;
         let mut keep = Vec::new();
+        let methods: std::collections::HashSet<crate::types::TVarId> = self
+            .method_this_vars
+            .clone()
+            .into_iter()
+            .filter_map(|id| self.var_table.find_if_present(id))
+            .collect();
         for (this, receiver, span) in std::mem::take(&mut self.pending_receivers) {
-            match self.zonk_head(&this) {
-                Type::Var(v) if v.is_flex() && self.this_is_read(&v) => {
-                    if let Err(e) = self.unify_this(span, &this, &receiver) {
-                        self.push_error(e);
-                    }
+            let result = match self.zonk_head(&this) {
+                Type::Var(TVarName::Flex(id))
+                    if self
+                        .var_table
+                        .find_if_present(id)
+                        .is_some_and(|r| methods.contains(&r)) =>
+                {
+                    self.unify_this(span, &this, &receiver)
                 }
                 Type::Var(v) if v.is_flex() => {
-                    if fixed.is_none_or(|fixed| !fixed.contains(&v)) {
-                        if let Err(e) = self.unify(span, &Type::Var(v), &Type::ArrowThis) {
-                            self.push_error(e);
-                        }
-                        pinned = true;
-                    } else {
+                    if reached.is_some_and(|r| !r.contains(&v)) {
                         keep.push((this, receiver, span));
+                        continue;
                     }
+                    self.unify(span, &Type::Var(v), &Type::ArrowThis)
                 }
-                _ => {
-                    if let Err(e) = self.unify_this(span, &this, &receiver) {
-                        self.push_error(e);
-                    }
-                }
+                _ => self.unify_this(span, &this, &receiver),
+            };
+            decided = true;
+            if let Err(e) = result {
+                self.push_error(e);
             }
         }
         self.pending_receivers.extend(keep);
-        pinned
+        decided
     }
 
     /// Settle the `return`s of `async` bodies whose value's type wasn't
@@ -2395,19 +2408,6 @@ impl InferState {
         self.pending_optional_params.extend(keep);
     }
 
-    /// Whether something reads a field of `this` of type `v` (a waiting
-    /// `HasProp` on it): the function it is the `this` of reads `this`.
-    fn this_is_read(&mut self, v: &TVarName) -> bool {
-        let var = Type::Var(v.clone());
-        let receivers: Vec<Type> = self
-            .pending_constraints
-            .iter()
-            .filter(|c| c.pred.class == ClassName::HasProp)
-            .filter_map(|c| c.pred.types.first().cloned())
-            .collect();
-        receivers.iter().any(|r| self.zonk_head(r) == var)
-    }
-
     /// Generalize a type over free variables not in the environment.
     /// Also collects relevant predicates from pending_constraints.
     /// Generalizes over presence variables too (Remy '94), with the
@@ -2454,8 +2454,21 @@ impl InferState {
         if !self.pending_detached.is_empty() && self.settle_detached(Some(&fixed_vars)) {
             ty = self.main_subst.flatten(&ty);
         }
-        if !self.pending_receivers.is_empty() && self.settle_receivers(Some(&fixed_vars)) {
-            ty = self.main_subst.flatten(&ty);
+        if !self.pending_receivers.is_empty() {
+            // The variables generalising would quantify: the type's, and
+            // those of the constraints it may carry.
+            let mut reached = ty.free_vars();
+            for c in &self.pending_constraints {
+                let mut r = crate::types::subst::Reach::default();
+                for t in &c.pred.types {
+                    self.main_subst.reach(t, &mut r);
+                }
+                reached.extend(r.vars);
+            }
+            reached.retain(|v| !fixed_vars.contains(v));
+            if self.settle_receivers(Some(&reached)) {
+                ty = self.main_subst.flatten(&ty);
+            }
         }
         if !self.pending_async_returns.is_empty() && self.settle_async_returns(Some(&fixed_vars)) {
             ty = self.main_subst.flatten(&ty);

@@ -460,6 +460,15 @@ impl InferState {
         // (Taken here, so that nothing inferred before the body, such as a
         // parameter's default, takes it.)
         let member = std::mem::take(&mut self.member_function);
+        // A body says whether a function is a method: one that mentions
+        // `this` reads it. Recorded, so that a call that met this
+        // function's `this` before it was known calls it on its receiver
+        // (`settle_receivers`).
+        if let Type::Var(TVarName::Flex(id)) = &this_type {
+            if crate::ast::free_idents::mentions_this_in_stmt(body) {
+                self.method_this_vars.push(*id);
+            }
+        }
         let param_types: Vec<Type> = params
             .iter()
             .enumerate()

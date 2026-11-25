@@ -94,3 +94,28 @@ fn callback_reading_the_instance_as_this_is_rejected() {
     );
     assert!(r.is_err(), "a callback reading `this` must be rejected");
 }
+
+/// Whether a callee met before it was known reads `this` is decided by
+/// its body (it mentions `this`), not by when the checker meets it: the
+/// result is the same whatever the order of the declarations or an
+/// unrelated `const` in between (review of #115).
+#[test]
+fn method_called_before_its_body_is_checked() {
+    for src in [
+        "function a() { const o = {n: 1, run: b}; return o.run(); }\n\
+         function b() { if (false) { a(); } const k = 1; return this.n; }\nconst x = a();\n",
+        "function a() { const o = {n: 1, run: b}; return o.run().n; }\n\
+         function b() { if (false) { a(); } return this; }\nconst x = a();\n",
+        "function b() { if (false) { a(); } return this; }\n\
+         function a() { const o = {n: 1, run: b}; return o.run().n; }\nconst x = a();\n",
+    ] {
+        let r = check(src);
+        assert!(r.is_ok(), "{src}: {:?}", r);
+    }
+    let detached = "function a() { const o = {n: 1, run: b}; return o.run(); }\n\
+                    function b() { if (false) { a(); } return this.n; }\nconst bad = b();\n";
+    assert!(
+        check(detached).is_err(),
+        "b reads `this`: calling it detached is rejected"
+    );
+}

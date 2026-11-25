@@ -177,10 +177,10 @@ impl InferState {
         let mut seen: std::collections::HashSet<TVarId> = std::collections::HashSet::new();
         let mut stack: Vec<std::sync::Arc<Type>> = Vec::new();
         let mut steps = 0usize;
-        let mut push_var = |state: &mut Self,
-                            id: TVarId,
-                            stack: &mut Vec<std::sync::Arc<Type>>,
-                            seen: &mut std::collections::HashSet<TVarId>|
+        let push_var = |state: &mut Self,
+                        id: TVarId,
+                        stack: &mut Vec<std::sync::Arc<Type>>,
+                        seen: &mut std::collections::HashSet<TVarId>|
          -> bool {
             let Some(root) = state.var_table.find_if_present(id) else {
                 return false;
