@@ -310,6 +310,7 @@
         caretPositionFromPoint: (Number, Number) => {offsetNode: T, offset: Number} | Null,
         caretRangeFromPoint: (Number, Number) => Range<T> | Null,
         hidden: Boolean,
+        hasFocus: () => Boolean,
         visibilityState: String,
         fonts: {ready: Promise<Undefined>},
         querySelector: (String) => T | Null,
