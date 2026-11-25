@@ -224,7 +224,7 @@ impl InferState {
         // The `async` returns whose value's type is still unknown.
         self.settle_async_returns(None);
         // Optional parameters calls left open: fine either way.
-        self.settle_optional_params(None);
+        self.settle_optional_params(true);
         let mut ambient = outer_ambient;
         if let Ok((_, env)) = &result {
             for (name, key) in env.name_keys() {

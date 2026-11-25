@@ -2364,30 +2364,27 @@ impl InferState {
         decided
     }
 
-    /// Settle the parameters calls filled or skipped without deciding
-    /// them (`pending_optional_params`). One decided since must agree
-    /// with the call: a call can't skip one the function requires, nor
-    /// pass one it doesn't take. One still undecided that the type
-    /// being generalised reaches (`reached`, not fixed by the
-    /// environment) is decided by the call, as calls always did: a
-    /// generalised function's callers would otherwise decide it without
-    /// the call. Otherwise (and at the end, `reached` `None`) it is left
-    /// open: the call was fine either way.
+    /// Check the parameters (and fields) calls filled or skipped without
+    /// deciding them (`pending_optional_params`). One decided since must
+    /// agree with the call: a call can't skip one the function requires,
+    /// nor pass one it doesn't take. One still undecided stays pending
+    /// (and, at a generalisation, isn't quantified: see
+    /// `generalize_seeded`), so a later decision is still checked; at the
+    /// end (`done`) it is dropped: the call was fine either way. Returns
+    /// the presence variables still pending.
     pub(crate) fn settle_optional_params(
         &mut self,
-        reached: Option<&std::collections::HashSet<crate::types::PVarName>>,
-    ) {
+        done: bool,
+    ) -> std::collections::HashSet<crate::types::PVarName> {
         use crate::types::Presence;
         let mut keep = Vec::new();
+        let mut open = std::collections::HashSet::new();
         for (v, passed, span) in std::mem::take(&mut self.pending_optional_params) {
             let wanted = if passed { Presence::Pre } else { Presence::Abs };
             match self.main_subst.resolve_presence(&Presence::Var(v.clone())) {
                 Presence::Var(now) => {
-                    if reached.is_some_and(|r| r.contains(&now)) {
-                        if let Err(e) = self.unify_presence(span, &Presence::Var(now), &wanted) {
-                            self.push_error(e);
-                        }
-                    } else if reached.is_some() {
+                    if !done {
+                        open.insert(now.clone());
                         keep.push((now, passed, span));
                     }
                 }
@@ -2411,6 +2408,7 @@ impl InferState {
             }
         }
         self.pending_optional_params.extend(keep);
+        open
     }
 
     /// Generalize a type over free variables not in the environment.
@@ -2485,20 +2483,15 @@ impl InferState {
         for (_, value, _) in &self.pending_async_returns {
             fixed_vars.extend(self.main_subst.flatten(value).free_vars());
         }
+        // A parameter or field a call filled or skipped without deciding
+        // isn't generalised while it is undecided: a generalised
+        // function's callers would decide it apart from the call (one
+        // passing a callback that needs the argument the call left out).
+        // Kept monomorphic, a later decision is still checked against the
+        // call (`settle_optional_params`).
+        let mut fixed_pvars = fixed_pvars;
         if !self.pending_optional_params.is_empty() {
-            // The presence variables generalising would quantify: the
-            // type's, and those of the constraints it may carry.
-            let mut reached = ty.free_pvars();
-            for c in &self.pending_constraints {
-                let mut r = crate::types::subst::Reach::default();
-                for t in &c.pred.types {
-                    self.main_subst.reach(t, &mut r);
-                }
-                reached.extend(r.pvars);
-            }
-            reached.retain(|p| !fixed_pvars.contains(p));
-            self.settle_optional_params(Some(&reached));
-            ty = self.main_subst.flatten(&ty);
+            fixed_pvars.extend(self.settle_optional_params(false));
         }
         let mut ty_vars = ty.free_vars();
         ty_vars.extend(extra.iter().cloned());
