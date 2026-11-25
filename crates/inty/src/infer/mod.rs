@@ -182,6 +182,7 @@ impl InferState {
         // with the type argument substituted.
         self.reserve_class_names(program);
         self.load_type_aliases(&program.type_aliases)?;
+        self.check_alias_refs(env, program);
         // Inject constructors for declared nominal types before checking
         // the body, so `Name(repr)` resolves to a branded value.
         let env = self.nominal_constructor_env(env, &program.type_aliases);
@@ -297,6 +298,65 @@ impl InferState {
         }
 
         result
+    }
+
+    /// Report a name in a Python / Starlark alias body (`type X = …`,
+    /// `# type X = …`) that names nothing: not an alias, not in scope (the
+    /// prelude, an import), and not bound at the program's top level. Such
+    /// a name would otherwise lower to a fresh variable, leaving whatever
+    /// it types unchecked. A name the program binds (a class, say) isn't
+    /// resolvable while aliases load, so it is left to lower as before.
+    fn check_alias_refs(&mut self, env: &TypeEnv, program: &crate::ast::Program) {
+        fn top_level<'a>(stmts: &'a [crate::ast::Stmt], out: &mut Vec<&'a str>) {
+            use crate::ast::{ImportSpecifier, Stmt};
+            for s in stmts {
+                match s {
+                    Stmt::Var { declarations, .. } => {
+                        out.extend(declarations.iter().map(|d| d.name.as_str()))
+                    }
+                    Stmt::FunctionDecl { name, .. } => out.push(name),
+                    Stmt::Import { specifiers, .. } => {
+                        out.extend(specifiers.iter().filter_map(|sp| match sp {
+                            ImportSpecifier::Named { local, .. }
+                            | ImportSpecifier::Namespace { local, .. }
+                            | ImportSpecifier::Default { local, .. } => Some(local.as_str()),
+                        }))
+                    }
+                    Stmt::Block { body, .. } => top_level(body, out),
+                    _ => {}
+                }
+            }
+        }
+        if !program.type_aliases.iter().any(|a| a.body_ast.is_some()) {
+            return;
+        }
+        let mut bound = Vec::new();
+        top_level(&program.statements, &mut bound);
+        bound.extend(program.class_brands.iter().map(String::as_str));
+        for alias in &program.type_aliases {
+            let Some(ast) = &alias.body_ast else {
+                continue;
+            };
+            let mut reported: Vec<&str> = Vec::new();
+            for name in ast.ref_names() {
+                let head = name.split('.').next().unwrap_or(name);
+                if self.type_aliases.contains_key(name)
+                    || env.lookup(head).is_some()
+                    || bound.contains(&head)
+                    || reported.contains(&name)
+                {
+                    continue;
+                }
+                reported.push(name);
+                self.push_error(
+                    TypeError::UnknownTypeRef {
+                        name: name.to_string(),
+                        span: alias.span,
+                    }
+                    .into(),
+                );
+            }
+        }
     }
 
     /// Parse each declared type alias's body once, with the alias's

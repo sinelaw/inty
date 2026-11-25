@@ -35,10 +35,10 @@ def _contains_encoded_pattern(argv, strings):
 
 def analyze_record(record):
     # type: (Record) -> list[Finding]
-    proc_name = record["process"].lower()
-    argv = record["argv"]
-    strings = record["strings"]
-    exit_code = record["exit_code"]
+    proc_name = record.get("process", "").lower()
+    argv = record.get("argv", [])
+    strings = record.get("strings", [])
+    exit_code = record.get("exit_code", 0)
 
     # Pattern: shell or scripting runtime invoked with encoded execution markers
     matched = proc_name in SUSPICIOUS_SHELLS and _contains_encoded_pattern(argv, strings)
@@ -46,10 +46,10 @@ def analyze_record(record):
         "matched": True,
         "rule": "encoded_shell_execution",
         "severity": "high",
-        "pid": record["pid"],
-        "ppid": record["ppid"],
-        "timestamp": record["timestamp"],
-        "process": record["process"],
+        "pid": record.get("pid"),
+        "ppid": record.get("ppid"),
+        "timestamp": record.get("timestamp"),
+        "process": record.get("process"),
         "exit_code": exit_code,
         "matched_argv": argv,
     }

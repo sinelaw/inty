@@ -697,6 +697,64 @@ impl InferState {
             .then(|| crate::builtins::dict_get_with_default(value))
     }
 
+    /// Python / Starlark `r.get("key", default?)` on a receiver already
+    /// known to be a record (a dict literal, or a value whose type says
+    /// it is one), with a literal key: the field's type. The record type
+    /// says the field is there, so the result is never `None`; a key the
+    /// record doesn't have is the missing-field error a subscript gets.
+    /// The default, never used, may be the field's type or `None`.
+    ///
+    /// `None` (not this rule) for any other call: a non-literal key, a
+    /// record with a `get` field of its own, a class instance, or a
+    /// receiver whose type isn't known yet at the call.
+    fn record_get(
+        &mut self,
+        receiver: &Type,
+        property: &str,
+        arguments: &[Expr],
+        keywords: &[(String, Expr)],
+    ) -> Option<InferResult<Type>> {
+        if !self.language.is_python_like()
+            || property != "get"
+            || !keywords.is_empty()
+            || !(1..=2).contains(&arguments.len())
+        {
+            return None;
+        }
+        let Expr::Lit {
+            value: crate::ast::Literal::String(key),
+            span: key_span,
+        } = &arguments[0]
+        else {
+            return None;
+        };
+        // A record, or a recursive structural alias of one (not a class,
+        // whose instances aren't dicts).
+        let row = match receiver {
+            Type::Row(_) => receiver.clone(),
+            Type::Named(id, args) if self.named_types.get(id).is_some_and(|d| !d.nominal) => {
+                self.unroll_named(*id, args)?
+            }
+            _ => return None,
+        };
+        let row = self.zonk_head(&row);
+        if !matches!(row, Type::Row(_)) || self.row_field_entry(&row, "get").is_some() {
+            return None;
+        }
+        Some((|| {
+            let field = self.infer_member_on_type(&row, key, *key_span)?;
+            let pvar = self.fresh_pvar();
+            let default = Type::union([field.clone(), Type::Null]);
+            Ok(Type::simple_func_with_params(
+                vec![
+                    crate::types::FuncParam::required(Type::String),
+                    crate::types::FuncParam::optional(pvar, default),
+                ],
+                field,
+            ))
+        })())
+    }
+
     /// Infer the type of a function call.
     pub(in crate::infer) fn infer_call(
         &mut self,
@@ -753,6 +811,10 @@ impl InferState {
                     self.dict_get_with_default(&obj_type_applied, property, arguments, keywords)
                 {
                     (method_type, Some(obj_type_applied))
+                } else if let Some(method_type) =
+                    self.record_get(&obj_type_applied, property, arguments, keywords)
+                {
+                    (method_type?, Some(obj_type_applied))
                 } else {
                     // Get method type from the object without re-inferring
                     let method_type =

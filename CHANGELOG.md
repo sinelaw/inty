@@ -37,6 +37,12 @@
   name them (Starlark has no alias or annotation syntax). A record type is
   exact: no missing or extra fields. A Python type alias may now name one
   declared after it, or itself.
+- Python and Starlark: `r.get("key", default?)` on a record with a literal
+  key gives the field's type (a key the record lacks is an error), when `r`
+  is known to be a record at the call.
+- Python and Starlark: a name in a type alias that names nothing (not an
+  alias, not in scope, not bound by the program) is reported, instead of
+  leaving what it types unchecked.
 - Python: a name read only in a keyword argument's value
   (`f(xs = [o])`) was reported as undefined; scope resolution, and the
   language server's walks, now visit keyword arguments.

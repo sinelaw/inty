@@ -2420,3 +2420,73 @@ fn record_types_in_annotations_and_type_comments() {
     assert!(parse_source("# type A = {x: int, x: str}\n").is_err());
     assert!(parse_source("# type A = {x: int}\n# type A = {y: int}\n").is_err());
 }
+
+#[test]
+fn get_on_records() {
+    let record = "# type Record = {process: str, pid: int, argv: list[str]}\n";
+    let ok = [
+        "def f(r):\n\
+         \x20   # type: (Record) -> str\n\
+         \x20   p = r.get(\"process\", \"\").lower()\n\
+         \x20   a = r.get(\"argv\", [])\n\
+         \x20   return p + str(r.get(\"pid\") + len(a))\n",
+        // `None` as the (never used) default.
+        "def f(r):\n    # type: (Record) -> str\n    return r.get(\"process\", None)\n",
+        // A dict literal is a record too.
+        "def f():\n\
+         \x20   res = {\"matched\": True, \"n\": 1}\n\
+         \x20   if res.get(\"matched\"):\n\
+         \x20       return res.get(\"n\") + 1\n\
+         \x20   return 0\n",
+        "def f(r: Record) -> str:\n    return r.get(\"process\", \"\")\n",
+    ];
+    for body in ok {
+        let src = format!("{record}{body}");
+        let errs = check_program(&src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        // A key the record doesn't have.
+        "def f(r):\n    # type: (Record) -> str\n    return r.get(\"procss\", \"\")\n",
+        // A default of another type.
+        "def f(r):\n    # type: (Record) -> str\n    return r.get(\"process\", 0)\n",
+        "def f(r):\n    # type: (Record) -> int\n    return r.get(\"process\") + 1\n",
+        // A key known only at run time.
+        "def f(r, k):\n    # type: (Record, str) -> str\n    return r.get(k)\n",
+    ];
+    for body in bad {
+        let src = format!("{record}{body}");
+        assert!(!check_program(&src).is_empty(), "accepted:\n{src}");
+    }
+    // A recursive alias's record has `.get` too.
+    let tree = "# type Tree = {value: int, kids: list[Tree]}\n\
+                def f(t):\n\
+                \x20   # type: (Tree) -> int\n\
+                \x20   return t.get(\"value\", 0) + len(t.get(\"kids\", []))\n";
+    let errs = check_program(tree);
+    assert!(errs.is_empty(), "rejected:\n{tree}\n{errs:?}");
+}
+
+#[test]
+fn unknown_names_in_aliases_are_reported() {
+    for src in [
+        "# type A = {x: Nope}\n",
+        "# type A = {x: list[Recrd]}\n# type Record = {pid: int}\n",
+        "type A = Nope\n",
+    ] {
+        let errs = check_program(src);
+        assert!(
+            errs.iter().any(|e| e.contains("UnknownTypeRef")),
+            "expected an unknown type in:\n{src}\ngot {errs:?}"
+        );
+    }
+    // A name an alias may refer to: another alias, a class, an import.
+    for src in [
+        "# type A = {x: list[Record], y: str | None}\n# type Record = {pid: int}\n",
+        "class C:\n    pass\ntype A = C\n",
+        "from typing import Sequence\ntype A = Sequence[int]\n",
+    ] {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+}
