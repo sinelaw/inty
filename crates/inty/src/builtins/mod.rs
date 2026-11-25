@@ -562,6 +562,14 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
             let cb = element_callback(state, elem, u_var.clone());
             Type::simple_func(vec![cb], Type::array(u_var))
         }
+        // `flatMap(f)`: each element's array of a fresh element type U,
+        // joined into one. (JavaScript also takes a non-array result as
+        // a single element; here the callback gives an array.)
+        "flatMap" => {
+            let u_var = state.fresh_type_var();
+            let cb = element_callback(state, elem, Type::array(u_var.clone()));
+            Type::simple_func(vec![cb], Type::array(u_var))
+        }
         // Polymorphic: reduce carries an accumulator of a fresh type U.
         "reduce" | "reduceRight" => {
             let u_var = state.fresh_type_var();
