@@ -1243,7 +1243,13 @@ impl InferState {
             }
             .into()
         };
-        let result = self.zonk(result);
+        // Its head decides (and a union's members' heads): resolving it
+        // whole writes out a large instance type (one holding elements)
+        // as a tree.
+        let result = match self.zonk_head(result) {
+            Type::Union(ts) => Type::Union(ts.iter().map(|t| self.zonk_head(t)).collect()),
+            head => head,
+        };
         let primitive = match &result {
             Type::Number
             | Type::String
