@@ -63,6 +63,7 @@ Beside the rules: `Expr.assignsMutable` is `check_assignment_target`;
 | inty | Why |
 |---|---|
 | `infer_array_from` | `Array.from` with a map function (the standard library and iteration: remaining) |
+| `check_alias_refs` | an unknown name in a Python / Starlark type alias's body, reported (aliases: not in the model) |
 | `infer_keyword_call` | Python's keyword arguments |
 | `infer_optional_chain` | `?.` (phase 5) |
 | `infer_rest_array` | destructuring (remaining syntax) |
