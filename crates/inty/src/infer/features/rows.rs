@@ -374,8 +374,13 @@ impl InferState {
                 .filter(|(k, _)| !members.contains(*k))
                 .map(|(k, e)| (k.clone(), e.clone()))
                 .collect();
-            let fields = Type::Row(RowType::open_entries(fields, self.fresh_flex()));
-            self.unify(span, &shared_this, &fields)?;
+            // (With none, `this` is already the empty open row it starts
+            // as: binding its tail to another empty one would only chain
+            // the two.)
+            if !fields.is_empty() {
+                let fields = Type::Row(RowType::open_entries(fields, self.fresh_flex()));
+                self.unify(span, &shared_this, &fields)?;
+            }
             for &i in &deferred {
                 let (name, entry) = self.infer_object_member(env, &properties[i], &shared_this)?;
                 // A field written after it replaces it.

@@ -90,3 +90,18 @@ fn narrows_whatever_the_member_order() {
     let r = check(&class);
     assert!(r.is_ok(), "class field after the method: {:?}", r);
 }
+
+/// A class without fields whose method reads `this`: typing the fields
+/// first must leave its `this` as it was (found by the differential test
+/// against the Lean model, as a recursion-depth error).
+#[test]
+fn class_without_fields_reading_this() {
+    for src in [
+        "class C { m(x) { return this; } }\nnew C().m(1);\n",
+        "class C { m(x) { const f = function () { return this; }; return 1; } }\nnew C().m(1);\n",
+        "const o = { m() { return this; } };\no.m().m();\n",
+    ] {
+        let r = check(src);
+        assert!(r.is_ok(), "{src}: {:?}", r);
+    }
+}
