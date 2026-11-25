@@ -2155,8 +2155,10 @@ impl InferState {
     pub fn unroll_named(&self, id: TypeId, args: &[Type]) -> Option<Type> {
         let def = self.named_types.get(&id)?;
 
-        // Create substitution from params to args
-        let mut subst = Subst::empty();
+        // Parameters to arguments, at once: an argument may mention a
+        // parameter (the body unrolled at its own parameter), which a
+        // transitive substitution would replace again, without end.
+        let mut subst = Subst::simultaneous();
         for (param, arg) in def.params.iter().zip(args.iter()) {
             subst.insert(param.clone(), arg.clone());
         }

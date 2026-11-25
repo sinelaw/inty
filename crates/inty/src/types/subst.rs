@@ -104,6 +104,10 @@ pub struct Subst {
     /// (the default) records nothing; the inference state's main
     /// substitution enables it (`with_trail`).
     trail: Option<Vec<SubstUndo>>,
+    /// Apply each binding once, not again to what it is bound to: a
+    /// simultaneous substitution of parameters by arguments, which may
+    /// mention the parameters themselves (`Subst::simultaneous`).
+    simultaneous: bool,
 }
 
 /// One entry of [`Subst`]'s undo log: a key and what it mapped to
@@ -125,11 +129,23 @@ impl Subst {
             map: HashMap::new(),
             presences: HashMap::new(),
             trail: None,
+            simultaneous: false,
         }
     }
 
     /// An empty substitution that records its writes, so it can be
     /// rolled back to a [`Subst::mark`] with [`Subst::undo_to`].
+    /// An empty substitution applied simultaneously: a variable is
+    /// replaced by its binding, which is not substituted again. For
+    /// instantiating a named type's parameters with arguments that may
+    /// mention those parameters (`Range<T>`'s body, unrolled at `T`).
+    pub fn simultaneous() -> Self {
+        Subst {
+            simultaneous: true,
+            ..Subst::empty()
+        }
+    }
+
     pub fn with_trail() -> Self {
         Subst {
             trail: Some(Vec::new()),
@@ -183,6 +199,7 @@ impl Subst {
             map,
             presences: HashMap::new(),
             trail: None,
+            simultaneous: false,
         }
     }
 
@@ -359,6 +376,7 @@ impl Subst {
             map: result,
             presences,
             trail: None,
+            simultaneous: false,
         }
     }
 
@@ -389,6 +407,7 @@ impl Subst {
             map,
             presences: self.presences.clone(),
             trail: None,
+            simultaneous: false,
         }
     }
 
@@ -820,6 +839,7 @@ impl FromIterator<(TVarName, Type)> for Subst {
             map: iter.into_iter().map(|(v, t)| (v, Arc::new(t))).collect(),
             presences: HashMap::new(),
             trail: None,
+            simultaneous: false,
         }
     }
 }
@@ -859,6 +879,9 @@ impl Substitutable for Type {
             // Variable substitution
             Type::Var(name) => {
                 if let Some(ty) = subst.get(name) {
+                    if subst.simultaneous {
+                        return ty.clone();
+                    }
                     // Recursively apply to handle transitive substitutions
                     ty.apply_subst(subst)
                 } else {
@@ -1203,6 +1226,22 @@ mod tests {
             take_apply_subst_overflow(),
             "overflow flag must be set past the depth cap"
         );
+    }
+
+    /// A simultaneous substitution replaces a variable once: `T ↦ T[]`
+    /// applied to `T` is `T[]`, not `T[][]…` until the depth cap (how a
+    /// named type's body is unrolled at its own parameter).
+    #[test]
+    fn simultaneous_substitution_replaces_once() {
+        let t = TVarName::Flex(7);
+        let mut s = Subst::simultaneous();
+        s.insert(t.clone(), Type::array(Type::Var(t.clone())));
+        let _ = take_apply_subst_overflow();
+        assert_eq!(
+            s.apply(&Type::Var(t.clone())),
+            Type::array(Type::Var(t.clone()))
+        );
+        assert!(!take_apply_subst_overflow());
     }
 
     #[test]
