@@ -447,6 +447,10 @@ pub struct InferState {
     /// each of its handlers' events mentions the element) is compared
     /// again at each, which is exponential in how deeply such types nest.
     pub(in crate::infer) unify_bound_pairs: std::collections::HashSet<(TVarId, TVarId)>,
+    /// The pairs of [`Self::unify_bound_pairs`] the outermost
+    /// unification under way has unified: linked when it succeeds
+    /// (`link_bound`).
+    pub(in crate::infer) unified_bound_pairs: Vec<(TVarId, TVarId)>,
     /// The type of the value each plain `x = e` assigned, by where its
     /// `x` is: what narrowing knows about a binding written once
     /// (`resolve::Resolution::sole_write_at`) after that write.
@@ -605,6 +609,7 @@ impl InferState {
             unfold_assumptions: Vec::new(),
             unify_depth: 0,
             unify_bound_pairs: std::collections::HashSet::new(),
+            unified_bound_pairs: Vec::new(),
             assigned_values: HashMap::new(),
         }
     }
@@ -1009,6 +1014,7 @@ impl InferState {
         self.var_table.restore(snap.trail);
         // A pair unified in what was undone isn't unified any more.
         self.unify_bound_pairs.clear();
+        self.unified_bound_pairs.clear();
         // Post-restore probe (debug only): the var_table and
         // main_subst should still agree on every key that survives
         // the rollback. Spot-check a handful — full-table sweep

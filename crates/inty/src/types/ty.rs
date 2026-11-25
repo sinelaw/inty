@@ -941,6 +941,46 @@ impl ModuleType {
 }
 
 impl Type {
+    /// Call `f` with the id of each flexible type variable `self`
+    /// mentions, a row's tail included (with repeats).
+    pub fn for_each_var(&self, f: &mut dyn FnMut(TVarId)) {
+        match self {
+            Type::Var(TVarName::Flex(id)) => f(*id),
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                if let Some(t) = this_type {
+                    t.for_each_var(f);
+                }
+                for p in params {
+                    p.ty.for_each_var(f);
+                }
+                ret.for_each_var(f);
+            }
+            Type::Row(row) => {
+                for e in row.props.values() {
+                    e.ty.for_each_var(f);
+                }
+                match &row.tail {
+                    RowTail::Open(TVarName::Flex(id)) => f(*id),
+                    RowTail::Recursive(_, args) => args.iter().for_each(|a| a.for_each_var(f)),
+                    _ => {}
+                }
+            }
+            Type::Array(t) | Type::Maybe(_, t) | Type::Promise(t) | Type::Map(t) => {
+                t.for_each_var(f)
+            }
+            Type::Tuple(ts) | Type::Union(ts) | Type::Named(_, ts) => {
+                ts.iter().for_each(|t| t.for_each_var(f))
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Type {
     // === Constructors ===
 
     /// Create a type variable.
