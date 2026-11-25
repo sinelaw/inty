@@ -229,3 +229,50 @@ fn check_quickly(src: &str) {
         "checking took {elapsed:?}: an element tree is written out in full again"
     );
 }
+
+/// A module whose exports hold element trees, imported by another: the
+/// importer's checking wrote each export's type out in full (a real
+/// client's entry module ran out of memory importing its editor).
+#[test]
+fn importing_a_module_of_element_trees_checks_quickly() {
+    let dir = std::env::temp_dir().join(format!("inty-checking-time-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut lib = vec![
+        "export function mk() {".to_string(),
+        "  const d0 = document.createElement('span');".to_string(),
+    ];
+    for i in 1..10 {
+        lib.push(format!(
+            "  const d{i} = document.createElement('span'); d{}.appendChild(d{i});",
+            i - 1
+        ));
+    }
+    lib.push(
+        "  return { root: d0, leaf: d9, all: [d0, d1, d2, d3, d4, d5, d6, d7, d8, d9] };\n}"
+            .to_string(),
+    );
+    std::fs::write(dir.join("lib.js"), lib.join("\n")).unwrap();
+    std::fs::write(
+        dir.join("main.js"),
+        "import { mk } from \"./lib.js\";\nconst t = mk();\nt.root.appendChild(t.leaf);\n",
+    )
+    .unwrap();
+    let main = dir.join("main.js");
+    let start = Instant::now();
+    let errors = inty::worker::run_with_inference_stack("inty-checking-time", move || {
+        let (env, mut state) = inty::stdlib::initial_env_with_stdlib().expect("stdlib");
+        let mut errors: Vec<String> = Vec::new();
+        if let Err(e) = inty::modules::check_module(&mut state, env, &main) {
+            errors.push(format!("{e:?}"));
+        }
+        errors.extend(state.take_errors().iter().map(|e| e.to_string()));
+        errors
+    });
+    let elapsed = start.elapsed();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "checking took {elapsed:?}: an import writes an element tree out in full again"
+    );
+}

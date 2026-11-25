@@ -460,6 +460,15 @@ impl InferState {
         // (Taken here, so that nothing inferred before the body, such as a
         // parameter's default, takes it.)
         let member = std::mem::take(&mut self.member_function);
+        // A body says whether a function is a method: one that mentions
+        // `this` reads it. Recorded, so that a call that met this
+        // function's `this` before it was known calls it on its receiver
+        // (`settle_receivers`).
+        if let Type::Var(TVarName::Flex(id)) = &this_type {
+            if crate::ast::free_idents::mentions_this_in_stmt(body) {
+                self.method_this_vars.push(*id);
+            }
+        }
         let param_types: Vec<Type> = params
             .iter()
             .enumerate()
@@ -853,7 +862,17 @@ impl InferState {
                     // An object literal fills or leaves out the expected
                     // record's optional fields for this call only, as a
                     // call does a function's optional parameters.
-                    let param = self.fill_optional_fields(param, properties, arg.span());
+                    let param = match Self::written_keys(properties) {
+                        Some(keys) => self.fill_optional_fields(param, &keys, arg.span()),
+                        None => param.clone(),
+                    };
+                    self.check_expr(env, arg, &param)?;
+                }
+                _ if self.closed_row_keys(env, arg).is_some() => {
+                    // So does a value of a known record type (an options
+                    // object bound to a `const`).
+                    let keys = self.closed_row_keys(env, arg).unwrap_or_default();
+                    let param = self.fill_optional_fields(param, &keys, arg.span());
                     self.check_expr(env, arg, &param)?;
                 }
                 _ => {
@@ -1202,17 +1221,15 @@ impl InferState {
     }
 
     /// `expected` (a record, or a union with records among its arms) as
-    /// an object literal with `properties` sees it: a field of undecided
+    /// an object writing the fields `written` sees it: a field of undecided
     /// presence (declared optional, `x?: T`) is present when the literal
     /// writes it and absent when it doesn't, for this literal only,
     /// recorded as [`Self::fill_optional_params`] records a parameter.
-    fn fill_optional_fields(
-        &mut self,
-        expected: &Type,
+    /// The fields an object literal writes, when it writes only named
+    /// ones (a spread or a computed key may write any).
+    fn written_keys(
         properties: &[crate::ast::PropDef],
-        span: Span,
-    ) -> Type {
-        use crate::types::Presence;
+    ) -> Option<std::collections::BTreeSet<String>> {
         let written: std::collections::BTreeSet<String> = properties
             .iter()
             .filter_map(|p| match p {
@@ -1223,10 +1240,42 @@ impl InferState {
                 _ => None,
             })
             .collect();
-        // A spread or a computed key may write any field: left as it is.
-        if written.len() != properties.len() {
-            return expected.clone();
+        (written.len() == properties.len()).then_some(written)
+    }
+
+    /// The fields of `arg`'s type when it is a variable of a known,
+    /// closed record type with every field present.
+    fn closed_row_keys(
+        &mut self,
+        env: &TypeEnv,
+        arg: &Expr,
+    ) -> Option<std::collections::BTreeSet<String>> {
+        let Expr::Ident { name, span } = arg else {
+            return None;
+        };
+        let scheme = env.lookup_key(&self.key_of(*span, name))?.scheme.clone();
+        if !scheme.is_mono() {
+            return None;
         }
+        let Type::Row(row) = self.zonk_head(scheme.ty()) else {
+            return None;
+        };
+        let all_present = row.props.values().all(|e| {
+            matches!(
+                self.main_subst.resolve_presence(&e.presence),
+                crate::types::Presence::Pre
+            )
+        });
+        (row.is_closed() && all_present).then(|| row.props.keys().map(|k| k.0.clone()).collect())
+    }
+
+    fn fill_optional_fields(
+        &mut self,
+        expected: &Type,
+        written: &std::collections::BTreeSet<String>,
+        span: Span,
+    ) -> Type {
+        use crate::types::Presence;
         let fill_row = |state: &mut Self, t: &Type| -> Option<Type> {
             let t = match state.zonk_head(t) {
                 Type::Named(id, args) if !state.is_nominal_type(id) => {
@@ -1283,7 +1332,7 @@ impl InferState {
     fn async_return(&mut self, ty: Type, span: Span) -> Type {
         match self.zonk_head(&ty) {
             Type::Promise(value) => *value,
-            Type::Var(TVarName::Flex(_)) if !self.is_numeric(&ty) => {
+            Type::Var(TVarName::Flex(_)) => {
                 let value = self.fresh_type_var();
                 self.pending_async_returns.push((ty, value.clone(), span));
                 value

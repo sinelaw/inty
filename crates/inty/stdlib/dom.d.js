@@ -129,13 +129,12 @@
 // A rectangle on screen (`getBoundingClientRect`, a Range's rects).
 /** type DOMRect = {top: Number, right: Number, bottom: Number, left: Number, width: Number, height: Number, x: Number, y: Number} */
 
-// An element's inline style (`el.style`) and a computed style
-// (`getComputedStyle(el)`): the properties as strings, as the CSSOM gives
+// An element's inline style (`el.style`): the properties as strings, as the CSSOM gives
 // them ("12px", "none", ""), and the property-name accessors.
 /** type CSSStyleDeclaration = {
-    setProperty: (String, String) => Undefined,
-    removeProperty: (String) => String,
-    getPropertyValue: (String) => String,
+    setProperty: (this: CSSStyleDeclaration, String, String) => Undefined,
+    removeProperty: (this: CSSStyleDeclaration, String) => String,
+    getPropertyValue: (this: CSSStyleDeclaration, String) => String,
     cssText: String,
     display: String, position: String, visibility: String, opacity: String, zIndex: String,
     top: String, right: String, bottom: String, left: String,
@@ -150,30 +149,49 @@
     cursor: String, pointerEvents: String, userSelect: String
 } */
 
+// A computed style (`getComputedStyle(el)`): the same properties, but
+// read-only (a store, `setProperty` or `removeProperty` throws).
+/** type ComputedStyle = {
+    getPropertyValue: (this: ComputedStyle, String) => String,
+    readonly cssText: String,
+    readonly display: String, readonly position: String, readonly visibility: String, readonly opacity: String, readonly zIndex: String,
+    readonly top: String, readonly right: String, readonly bottom: String, readonly left: String,
+    readonly width: String, readonly height: String, readonly minWidth: String, readonly minHeight: String, readonly maxWidth: String, readonly maxHeight: String,
+    readonly margin: String, readonly padding: String, readonly border: String, readonly outline: String, readonly boxShadow: String,
+    readonly overflow: String, readonly overflowX: String, readonly overflowY: String,
+    readonly flex: String, readonly gap: String,
+    readonly transform: String, readonly transition: String,
+    readonly color: String, readonly background: String, readonly backgroundColor: String,
+    readonly font: String, readonly fontFamily: String, readonly fontSize: String, readonly fontWeight: String, readonly fontStyle: String, readonly lineHeight: String,
+    readonly textAlign: String, readonly textDecoration: String, readonly whiteSpace: String,
+    readonly cursor: String, readonly pointerEvents: String, readonly userSelect: String
+} */
+
 // A range of the document (`document.createRange()`): between two
 // boundary points, each a node and an offset in it.
 /** type Range<T> = {
     startContainer: T, startOffset: Number, endContainer: T, endOffset: Number,
     collapsed: Boolean, commonAncestorContainer: T,
-    setStart: (T, Number) => Undefined, setEnd: (T, Number) => Undefined,
-    setStartBefore: (T) => Undefined, setStartAfter: (T) => Undefined,
-    setEndBefore: (T) => Undefined, setEndAfter: (T) => Undefined,
-    collapse: (Boolean) => Undefined,
-    selectNode: (T) => Undefined, selectNodeContents: (T) => Undefined,
-    cloneRange: () => Range<T>,
-    getBoundingClientRect: () => DOMRect,
-    getClientRects: () => DOMRect[],
-    toString: () => String
+    setStart: (this: Range<T>, T, Number) => Undefined, setEnd: (this: Range<T>, T, Number) => Undefined,
+    setStartBefore: (this: Range<T>, T) => Undefined, setStartAfter: (this: Range<T>, T) => Undefined,
+    setEndBefore: (this: Range<T>, T) => Undefined, setEndAfter: (this: Range<T>, T) => Undefined,
+    collapse: (this: Range<T>, Boolean) => Undefined,
+    comparePoint: (this: Range<T>, T, Number) => Number, isPointInRange: (this: Range<T>, T, Number) => Boolean,
+    selectNode: (this: Range<T>, T) => Undefined, selectNodeContents: (this: Range<T>, T) => Undefined,
+    cloneRange: (this: Range<T>) => Range<T>,
+    getBoundingClientRect: (this: Range<T>) => DOMRect,
+    getClientRects: (this: Range<T>) => DOMRect[],
+    toString: (this: Range<T>) => String
 } */
 
 // The user's selection (`document.getSelection()`).
 /** type Selection<T> = {
     rangeCount: Number, isCollapsed: Boolean,
     anchorNode: T | Null, anchorOffset: Number, focusNode: T | Null, focusOffset: Number,
-    getRangeAt: (Number) => Range<T>,
-    addRange: (Range<T>) => Undefined,
-    removeAllRanges: () => Undefined,
-    toString: () => String
+    getRangeAt: (this: Selection<T>, Number) => Range<T>,
+    addRange: (this: Selection<T>, Range<T>) => Undefined,
+    removeAllRanges: (this: Selection<T>) => Undefined,
+    toString: (this: Selection<T>) => String
 } */
 
 /** type Element<T> = {
@@ -186,6 +204,13 @@
     onclick: (DomEvent<T>) => Undefined, oninput: (DomEvent<T>) => Undefined, onchange: (DomEvent<T>) => Undefined,
     onkeydown: (DomEvent<T>) => Undefined, onkeyup: (DomEvent<T>) => Undefined,
     onsubmit: (DomEvent<T>) => Undefined, onload: (DomEvent<T>) => Undefined,
+    onmousedown: (DomEvent<T>) => Undefined, onmouseup: (DomEvent<T>) => Undefined,
+    onmousemove: (DomEvent<T>) => Undefined, onmouseenter: (DomEvent<T>) => Undefined,
+    onmouseleave: (DomEvent<T>) => Undefined, ondblclick: (DomEvent<T>) => Undefined,
+    oncontextmenu: (DomEvent<T>) => Undefined, onwheel: (DomEvent<T>) => Undefined,
+    onfocus: (DomEvent<T>) => Undefined, onblur: (DomEvent<T>) => Undefined,
+    onscroll: (DomEvent<T>) => Undefined,
+    dataset: Dict<String>,
     classList: {
         add: (String) => Undefined, remove: (String) => Undefined,
         toggle: (String) => Boolean, contains: (String) => Boolean,
@@ -225,8 +250,11 @@
     nextSibling: T | Null, previousSibling: T | Null,
     nodeType: Number, nodeValue: String | Null, isConnected: Boolean,
     offsetParent: T | Null,
-    // Called with the new children spread (`el.replaceChildren(...nodes)`).
-    replaceChildren: (T) => Undefined,
+    // Called with no children (to clear the element), one, or the new
+    // children spread (`el.replaceChildren(...nodes)`); inty has no
+    // variadic function type, so two or more separate arguments aren't
+    // taken.
+    replaceChildren: (node?: T) => Undefined,
     firstElementChild: T | Null, lastElementChild: T | Null,
     nextElementSibling: T | Null, previousElementSibling: T | Null,
     style: CSSStyleDeclaration,
@@ -243,7 +271,6 @@
     toDataURL: () => String,
     setPointerCapture: (Number) => Undefined, releasePointerCapture: (Number) => Undefined,
     hasPointerCapture: (Number) => Boolean,
-    dataset: {},
     scrollBy: (Number, Number) => Undefined, scrollTo: (Number, Number) => Undefined,
     select: () => Undefined,
     selectionStart: Number, selectionEnd: Number,
@@ -307,8 +334,9 @@
         caretPositionFromPoint: (Number, Number) => {offsetNode: T, offset: Number} | Null,
         caretRangeFromPoint: (Number, Number) => Range<T> | Null,
         hidden: Boolean,
+        hasFocus: () => Boolean,
         visibilityState: String,
-        fonts: {ready: Promise<Undefined>},
+        fonts: {ready: Promise<{status: String}>},
         querySelector: (String) => T | Null,
         querySelectorAll: (String) => T[],
         addEventListener: (String, (DomEvent<T>) => Undefined, options?: ListenerOptions | Boolean) => Undefined,
@@ -339,7 +367,7 @@ const document;
         location: Location,
         scrollTo: (Number, Number) => Undefined,
         scrollBy: (Number, Number) => Undefined,
-        getComputedStyle: (T) => CSSStyleDeclaration,
+        getComputedStyle: (T) => ComputedStyle,
         requestAnimationFrame: ((Number) => Undefined) => Number,
         cancelAnimationFrame: (Number) => Undefined,
         setTimeout: (() => Undefined, Number) => Number,
@@ -547,7 +575,8 @@ const AudioWorkletNode;
 const AbortController;
 
 // FormData / URLSearchParams. Construct from a form Element or with no
-// arguments; both expose the same get/set/append surface.
+// arguments (URLSearchParams also from a query string, "?a=1&b=2"); both
+// expose the same get/set/append surface.
 /** const FormData: <T>(T) => {
         get: (String) => String | Null,
         getAll: (String) => String[],
@@ -558,7 +587,7 @@ const AbortController;
     } */
 const FormData;
 
-/** const URLSearchParams: () => {
+/** const URLSearchParams: (init?: String) => {
         get: (String) => String | Null,
         getAll: (String) => String[],
         has: (String) => Boolean,
@@ -617,7 +646,7 @@ const alert;
 // Window globals also available bare under `globalThis`. Most code
 // reaches them via `window.X`, but a few helpers (e.g. fizzy's
 // scroll_helpers) call `getComputedStyle(el)` directly.
-/** const getComputedStyle: <T>(T) => CSSStyleDeclaration */
+/** const getComputedStyle: <T>(T) => ComputedStyle */
 const getComputedStyle;
 
 /** const requestAnimationFrame: ((Number) => Undefined) => Number */

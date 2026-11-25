@@ -344,6 +344,10 @@ pub struct InferState {
     /// when it is (`settle_receivers`), at the latest as a function that
     /// uses no `this`.
     pub(crate) pending_receivers: Vec<(Type, Type, Span)>,
+    /// The `this` variables of functions whose bodies mention `this`
+    /// (methods, by the rule that a body says whether a function is
+    /// one): see `settle_receivers`.
+    pub(crate) method_this_vars: Vec<crate::types::TVarId>,
     /// An `async` body's `return e` whose type wasn't known at the
     /// `return`, and what it gives the promise: settled when it is
     /// (`settle_async_returns`), at the latest as a value that isn't a
@@ -451,6 +455,9 @@ pub struct InferState {
     /// unification under way has unified: linked when it succeeds
     /// (`link_bound`).
     pub(in crate::infer) unified_bound_pairs: Vec<(TVarId, TVarId)>,
+    /// Whether the outermost unification under way went through an arm
+    /// that accepts two types that aren't equal (see `link_bound`).
+    pub(in crate::infer) unify_inexact: bool,
     /// The type of the value each plain `x = e` assigned, by where its
     /// `x` is: what narrowing knows about a binding written once
     /// (`resolve::Resolution::sole_write_at`) after that write.
@@ -591,6 +598,7 @@ impl InferState {
             promise_results: Vec::new(),
             pending_detached: Vec::new(),
             pending_receivers: Vec::new(),
+            method_this_vars: Vec::new(),
             pending_async_returns: Vec::new(),
             pending_optional_params: Vec::new(),
             resolution: Default::default(),
@@ -610,6 +618,7 @@ impl InferState {
             unify_depth: 0,
             unify_bound_pairs: std::collections::HashSet::new(),
             unified_bound_pairs: Vec::new(),
+            unify_inexact: false,
             assigned_values: HashMap::new(),
         }
     }
@@ -1015,6 +1024,7 @@ impl InferState {
         // A pair unified in what was undone isn't unified any more.
         self.unify_bound_pairs.clear();
         self.unified_bound_pairs.clear();
+        self.unify_inexact = false;
         // Post-restore probe (debug only): the var_table and
         // main_subst should still agree on every key that survives
         // the rollback. Spot-check a handful — full-table sweep
@@ -2145,8 +2155,10 @@ impl InferState {
     pub fn unroll_named(&self, id: TypeId, args: &[Type]) -> Option<Type> {
         let def = self.named_types.get(&id)?;
 
-        // Create substitution from params to args
-        let mut subst = Subst::empty();
+        // Parameters to arguments, at once: an argument may mention a
+        // parameter (the body unrolled at its own parameter), which a
+        // transitive substitution would replace again, without end.
+        let mut subst = Subst::simultaneous();
         for (param, arg) in def.params.iter().zip(args.iter()) {
             subst.insert(param.clone(), arg.clone());
         }
@@ -2253,12 +2265,29 @@ impl InferState {
     ) -> bool {
         let mut pinned = false;
         let mut keep = Vec::new();
+        let methods: std::collections::HashSet<crate::types::TVarId> = self
+            .method_this_vars
+            .clone()
+            .into_iter()
+            .filter_map(|id| self.var_table.find_if_present(id))
+            .collect();
         for (this, span, callee) in std::mem::take(&mut self.pending_detached) {
             match self.zonk_head(&this) {
                 Type::ArrowThis | Type::Undefined | Type::Error | Type::NewTarget => {}
                 Type::Var(v) => {
                     if fixed.is_none_or(|fixed| !fixed.contains(&v)) {
-                        if let Err(e) = self.unify(span, &Type::Var(v), &Type::Undefined) {
+                        // A function whose body mentions `this` reads it, as
+                        // `undefined` here; any other uses none (a function
+                        // type whose body isn't seen says so), which a
+                        // detached call accepts and an arrow function has.
+                        let reads = matches!(&v, TVarName::Flex(id)
+                            if self.var_table.find_if_present(*id).is_some_and(|r| methods.contains(&r)));
+                        let pin = if reads {
+                            Type::Undefined
+                        } else {
+                            Type::ArrowThis
+                        };
+                        if let Err(e) = self.unify(span, &Type::Var(v), &pin) {
                             self.push_error(e);
                         }
                         pinned = true;
@@ -2276,44 +2305,52 @@ impl InferState {
     /// Settle the `this` of callees called as methods that weren't known
     /// at the call (`pending_receivers`). One now known is checked against
     /// the receiver as at the call (`unify_this`): no `this`, or the
-    /// receiver. One still unknown stays unknown while the environment
-    /// fixes it (`fixed`), and otherwise (and always when `fixed` is
-    /// `None`) is a function that uses no `this`: a function type whose
-    /// body isn't seen says it uses none (as an annotation does), and a
-    /// call never makes a function a method. Whether anything was
-    /// pinned.
+    /// receiver. One that is the `this` of a function whose body mentions
+    /// `this` (`method_this_vars`) is that function's: it is called on the
+    /// receiver. One still unknown stays unknown until the type being
+    /// generalised reaches it (`reached`), and is then (and always when
+    /// `reached` is `None`, the program done) a function that uses no
+    /// `this`: a function type whose body isn't seen says it uses none,
+    /// as an annotation does, and a call never makes a function a
+    /// method. Whether anything was decided.
     pub(crate) fn settle_receivers(
         &mut self,
-        fixed: Option<&std::collections::HashSet<TVarName>>,
+        reached: Option<&std::collections::HashSet<TVarName>>,
     ) -> bool {
-        let mut pinned = false;
+        let mut decided = false;
         let mut keep = Vec::new();
+        let methods: std::collections::HashSet<crate::types::TVarId> = self
+            .method_this_vars
+            .clone()
+            .into_iter()
+            .filter_map(|id| self.var_table.find_if_present(id))
+            .collect();
         for (this, receiver, span) in std::mem::take(&mut self.pending_receivers) {
-            match self.zonk_head(&this) {
-                Type::Var(v) if v.is_flex() && self.this_is_read(&v) => {
-                    if let Err(e) = self.unify_this(span, &this, &receiver) {
-                        self.push_error(e);
-                    }
+            let result = match self.zonk_head(&this) {
+                Type::Var(TVarName::Flex(id))
+                    if self
+                        .var_table
+                        .find_if_present(id)
+                        .is_some_and(|r| methods.contains(&r)) =>
+                {
+                    self.unify_this(span, &this, &receiver)
                 }
                 Type::Var(v) if v.is_flex() => {
-                    if fixed.is_none_or(|fixed| !fixed.contains(&v)) {
-                        if let Err(e) = self.unify(span, &Type::Var(v), &Type::ArrowThis) {
-                            self.push_error(e);
-                        }
-                        pinned = true;
-                    } else {
+                    if reached.is_some_and(|r| !r.contains(&v)) {
                         keep.push((this, receiver, span));
+                        continue;
                     }
+                    self.unify(span, &Type::Var(v), &Type::ArrowThis)
                 }
-                _ => {
-                    if let Err(e) = self.unify_this(span, &this, &receiver) {
-                        self.push_error(e);
-                    }
-                }
+                _ => self.unify_this(span, &this, &receiver),
+            };
+            decided = true;
+            if let Err(e) = result {
+                self.push_error(e);
             }
         }
         self.pending_receivers.extend(keep);
-        pinned
+        decided
     }
 
     /// Settle the `return`s of `async` bodies whose value's type wasn't
@@ -2346,30 +2383,27 @@ impl InferState {
         decided
     }
 
-    /// Settle the parameters calls filled or skipped without deciding
-    /// them (`pending_optional_params`). One decided since must agree
-    /// with the call: a call can't skip one the function requires, nor
-    /// pass one it doesn't take. One still undecided that the type
-    /// being generalised reaches (`reached`, not fixed by the
-    /// environment) is decided by the call, as calls always did: a
-    /// generalised function's callers would otherwise decide it without
-    /// the call. Otherwise (and at the end, `reached` `None`) it is left
-    /// open: the call was fine either way.
+    /// Check the parameters (and fields) calls filled or skipped without
+    /// deciding them (`pending_optional_params`). One decided since must
+    /// agree with the call: a call can't skip one the function requires,
+    /// nor pass one it doesn't take. One still undecided stays pending
+    /// (and, at a generalisation, isn't quantified: see
+    /// `generalize_seeded`), so a later decision is still checked; at the
+    /// end (`done`) it is dropped: the call was fine either way. Returns
+    /// the presence variables still pending.
     pub(crate) fn settle_optional_params(
         &mut self,
-        reached: Option<&std::collections::HashSet<crate::types::PVarName>>,
-    ) {
+        done: bool,
+    ) -> std::collections::HashSet<crate::types::PVarName> {
         use crate::types::Presence;
         let mut keep = Vec::new();
+        let mut open = std::collections::HashSet::new();
         for (v, passed, span) in std::mem::take(&mut self.pending_optional_params) {
             let wanted = if passed { Presence::Pre } else { Presence::Abs };
             match self.main_subst.resolve_presence(&Presence::Var(v.clone())) {
                 Presence::Var(now) => {
-                    if reached.is_some_and(|r| r.contains(&now)) {
-                        if let Err(e) = self.unify_presence(span, &Presence::Var(now), &wanted) {
-                            self.push_error(e);
-                        }
-                    } else if reached.is_some() {
+                    if !done {
+                        open.insert(now.clone());
                         keep.push((now, passed, span));
                     }
                 }
@@ -2393,19 +2427,7 @@ impl InferState {
             }
         }
         self.pending_optional_params.extend(keep);
-    }
-
-    /// Whether something reads a field of `this` of type `v` (a waiting
-    /// `HasProp` on it): the function it is the `this` of reads `this`.
-    fn this_is_read(&mut self, v: &TVarName) -> bool {
-        let var = Type::Var(v.clone());
-        let receivers: Vec<Type> = self
-            .pending_constraints
-            .iter()
-            .filter(|c| c.pred.class == ClassName::HasProp)
-            .filter_map(|c| c.pred.types.first().cloned())
-            .collect();
-        receivers.iter().any(|r| self.zonk_head(r) == var)
+        open
     }
 
     /// Generalize a type over free variables not in the environment.
@@ -2447,33 +2469,52 @@ impl InferState {
         }
         let mut ty = self.main_subst.flatten(ty);
         let (fixed_vars, fixed_pvars) = self.env_fixed_vars(env_free, &ty);
-        // A detached call's `this` that would be generalised is settled
-        // first: as `Undefined`, what the call passes. (Which variables
-        // the environment fixes doesn't change: one is bound to a type
-        // without variables.)
-        if !self.pending_detached.is_empty() && self.settle_detached(Some(&fixed_vars)) {
-            ty = self.main_subst.flatten(&ty);
-        }
-        if !self.pending_receivers.is_empty() && self.settle_receivers(Some(&fixed_vars)) {
-            ty = self.main_subst.flatten(&ty);
-        }
-        if !self.pending_async_returns.is_empty() && self.settle_async_returns(Some(&fixed_vars)) {
-            ty = self.main_subst.flatten(&ty);
-        }
-        if !self.pending_optional_params.is_empty() {
-            // The presence variables generalising would quantify: the
-            // type's, and those of the constraints it may carry.
-            let mut reached = ty.free_pvars();
+        // A method call's `this` first: a callee called both on a receiver
+        // and detached that doesn't read `this` uses none, which both
+        // calls accept; settling the detached call first would pin it to
+        // `Undefined`, which the method call's receiver then contradicts.
+        if !self.pending_receivers.is_empty() {
+            // The variables generalising would quantify: the type's, and
+            // those of the constraints it may carry.
+            let mut reached = ty.free_vars();
             for c in &self.pending_constraints {
                 let mut r = crate::types::subst::Reach::default();
                 for t in &c.pred.types {
                     self.main_subst.reach(t, &mut r);
                 }
-                reached.extend(r.pvars);
+                reached.extend(r.vars);
             }
-            reached.retain(|p| !fixed_pvars.contains(p));
-            self.settle_optional_params(Some(&reached));
+            reached.retain(|v| !fixed_vars.contains(v));
+            if self.settle_receivers(Some(&reached)) {
+                ty = self.main_subst.flatten(&ty);
+            }
+        }
+        // A detached call's `this` that would be generalised is settled
+        // then: as `Undefined`, what the call passes. (Which variables
+        // the environment fixes doesn't change: one is bound to a type
+        // without variables.)
+        if !self.pending_detached.is_empty() && self.settle_detached(Some(&fixed_vars)) {
             ty = self.main_subst.flatten(&ty);
+        }
+        if !self.pending_async_returns.is_empty() && self.settle_async_returns(Some(&fixed_vars)) {
+            ty = self.main_subst.flatten(&ty);
+        }
+        // What a `return` still waiting gives its promise is decided when
+        // the returned type is: it isn't generalised meanwhile (an
+        // instance would keep a variable the settling never reaches).
+        let mut fixed_vars = fixed_vars;
+        for (_, value, _) in &self.pending_async_returns {
+            fixed_vars.extend(self.main_subst.flatten(value).free_vars());
+        }
+        // A parameter or field a call filled or skipped without deciding
+        // isn't generalised while it is undecided: a generalised
+        // function's callers would decide it apart from the call (one
+        // passing a callback that needs the argument the call left out).
+        // Kept monomorphic, a later decision is still checked against the
+        // call (`settle_optional_params`).
+        let mut fixed_pvars = fixed_pvars;
+        if !self.pending_optional_params.is_empty() {
+            fixed_pvars.extend(self.settle_optional_params(false));
         }
         let mut ty_vars = ty.free_vars();
         ty_vars.extend(extra.iter().cloned());
@@ -2761,15 +2802,19 @@ impl InferState {
                 continue;
             };
             let params: HashSet<TVarName> = def.params.iter().cloned().collect();
-            let body = self.main_subst.flatten(&def.body.clone());
-            let body = self.zonk(&body);
+            // What the body reaches through the substitution, found
+            // without writing it out (a body holding element types is
+            // exponentially larger as a tree: see `Subst::reach`).
+            let mut body = crate::types::subst::Reach::default();
+            let def_body = def.body.clone();
+            self.main_subst.reach(&def_body, &mut body);
             let free: Vec<TVarName> = body
-                .free_vars()
+                .vars
                 .into_iter()
                 .filter(|v| !params.contains(v))
                 .collect();
-            let free_pvars = body.free_pvars();
-            let inner: Vec<TypeId> = body.named_ids().into_iter().filter(|n| *n != id).collect();
+            let free_pvars = body.pvars;
+            let inner: Vec<TypeId> = body.named.into_iter().filter(|n| *n != id).collect();
             // Only its parameters, and named types that are closed too: no
             // substitution reaches inside it again.
             if free.is_empty()

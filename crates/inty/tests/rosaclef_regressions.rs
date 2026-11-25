@@ -284,7 +284,12 @@ fn b7_index_callbacks() {
         const e = xs.findIndex((x, i) => i > 0);
         const f = xs.find((x, i) => i > 0);
         const g = xs.reduce((acc, x, i) => acc + i, 0);
+        const h = xs.flatMap((x, i) => [x, String(i)]);
+        const n = h.length;
     "#);
+    // flatMap's callback gives an array; the result holds its elements.
+    err(r#"const xs = ["a"].flatMap((x) => [x]).map((y) => y * 2);"#);
+    err(r#"const xs = ["a"].flatMap((x) => x);"#);
     // A function taking only the element still fits.
     ok(r#"
         /** function up(s: String) => String */

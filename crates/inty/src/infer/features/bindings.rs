@@ -591,7 +591,11 @@ impl InferState {
                 if decl.init.is_none() {
                     self.subsume(ann_span, &var_type, &ann_ty)?;
                 }
-                self.zonk(&ann_ty)
+                // Its head only: what is inside is read through the
+                // substitution, and resolving a declaration's type whole
+                // (a document holding elements, events holding elements,
+                // …) writes it out as a tree.
+                self.zonk_head(&ann_ty)
             } else {
                 self.widen(decl.span, &var_type)
             };

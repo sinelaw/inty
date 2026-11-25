@@ -217,14 +217,14 @@ impl InferState {
             .cloned()
             .collect();
         let result = self.infer_stmt_list(&env, &program.statements);
-        // The detached calls whose callee's `this` is still unknown.
-        self.settle_detached(None);
-        // The method calls whose callee's `this` is still unknown.
+        // The method calls whose callee's `this` is still unknown, then
+        // the detached ones (see `generalize_seeded`).
         self.settle_receivers(None);
+        self.settle_detached(None);
         // The `async` returns whose value's type is still unknown.
         self.settle_async_returns(None);
         // Optional parameters calls left open: fine either way.
-        self.settle_optional_params(None);
+        self.settle_optional_params(true);
         let mut ambient = outer_ambient;
         if let Ok((_, env)) = &result {
             for (name, key) in env.name_keys() {
