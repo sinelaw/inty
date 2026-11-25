@@ -88,3 +88,23 @@ fn add_event_listener_options() {
                 el.addEventListener(\"wheel\", (e) => {}, { pasive: false });\n";
     assert!(check(typo).is_err(), "an unknown option is rejected");
 }
+
+/// Host methods that throw when called detached say their `this`; a
+/// computed style is read-only; `replaceChildren()` clears (review of
+/// #114).
+#[test]
+fn ranges_selections_and_styles_keep_their_receiver() {
+    let ok = "const r = document.createRange(); r.setStart(document.body, 0); r.collapse(true);\n\
+              const s = document.getSelection();\n\
+              if (s) { s.removeAllRanges(); s.addRange(r); s.getRangeAt(0).cloneRange().toString(); }\n\
+              const el = document.createElement(\"div\"); el.style.setProperty(\"color\", \"red\");\n\
+              const d = getComputedStyle(el).display; el.replaceChildren();\n";
+    assert!(check(ok).is_ok(), "{:?}", check(ok));
+    for bad in [
+        "const r = document.createRange(); const f = r.setStart; f(document.body, 0);\n",
+        "const sp = document.createElement(\"div\").style.setProperty; sp(\"a\", \"b\");\n",
+        "getComputedStyle(document.createElement(\"div\")).display = \"none\";\n",
+    ] {
+        assert!(check(bad).is_err(), "{bad}");
+    }
+}
