@@ -818,6 +818,7 @@ impl InferState {
         // `param_vars[i]` is bound to the callee's i-th parameter
         // type (which may itself contain unresolved variables for a
         // polymorphic callee — those resolve as we check the args).
+        let callee_type = self.fill_optional_params(&callee_type, arguments.len(), span);
         self.unify(span, &callee_type, &expected_func)?;
 
         // Check each argument against its resolved parameter type.
@@ -847,6 +848,13 @@ impl InferState {
                     let elem_resolved = self.zonk_head(&elem);
                     let expected = self.zonk_head(param);
                     self.subsume(*spread_span, &elem_resolved, &expected)?;
+                }
+                Expr::Object { properties, .. } => {
+                    // An object literal fills or leaves out the expected
+                    // record's optional fields for this call only, as a
+                    // call does a function's optional parameters.
+                    let param = self.fill_optional_fields(param, properties, arg.span());
+                    self.check_expr(env, arg, &param)?;
                 }
                 _ => {
                     // `check_expr` resolves what it is checked against.
@@ -1126,6 +1134,146 @@ impl InferState {
         }
 
         Ok(self.zonk_head_into(ret))
+    }
+
+    /// The callee of a call passing `given` arguments, as the call sees
+    /// it: a parameter whose presence isn't decided (one declared
+    /// optional, `b?: T`) is filled (when an argument is passed) or
+    /// skipped, for this call only, rather than decided by it. The call
+    /// leaves the callee's type as it was (as Garrigue's optional
+    /// arguments), so one element's `addEventListener` can be called
+    /// with and without its options. Each such parameter is recorded
+    /// (`pending_optional_params`): if it is decided later, it must
+    /// agree; if it is still undecided where it would be generalised,
+    /// the call decides it as it did before.
+    fn fill_optional_params(&mut self, callee: &Type, given: usize, span: Span) -> Type {
+        use crate::types::{Presence, PropName, CALLABLE_KEY};
+        let head = self.zonk_head(callee);
+        let fill = |state: &mut Self, f: &Type| -> Option<Type> {
+            let Type::Func {
+                this_type,
+                params,
+                ret,
+            } = f
+            else {
+                return None;
+            };
+            let mut changed = false;
+            let params = params
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let presence = state.main_subst.resolve_presence(&p.presence);
+                    let Presence::Var(v) = presence else {
+                        return p.clone();
+                    };
+                    changed = true;
+                    let passed = i < given;
+                    state.pending_optional_params.push((v, passed, span));
+                    let mut p = p.clone();
+                    p.presence = if passed { Presence::Pre } else { Presence::Abs };
+                    p
+                })
+                .collect();
+            changed.then(|| Type::Func {
+                this_type: this_type.clone(),
+                params,
+                ret: ret.clone(),
+            })
+        };
+        match &head {
+            Type::Func { .. } => fill(self, &head).unwrap_or(head),
+            Type::Row(row) => {
+                let key = PropName(CALLABLE_KEY.to_string());
+                let Some(entry) = row.props.get(&key) else {
+                    return head;
+                };
+                let call = self.zonk_head(&entry.ty);
+                let Some(filled) = fill(self, &call) else {
+                    return head;
+                };
+                let mut row = row.clone();
+                let entry = row.props[&key].with_ty(filled);
+                row.props.insert(key, entry);
+                Type::Row(row)
+            }
+            _ => head,
+        }
+    }
+
+    /// `expected` (a record, or a union with records among its arms) as
+    /// an object literal with `properties` sees it: a field of undecided
+    /// presence (declared optional, `x?: T`) is present when the literal
+    /// writes it and absent when it doesn't, for this literal only,
+    /// recorded as [`Self::fill_optional_params`] records a parameter.
+    fn fill_optional_fields(
+        &mut self,
+        expected: &Type,
+        properties: &[crate::ast::PropDef],
+        span: Span,
+    ) -> Type {
+        use crate::types::Presence;
+        let written: std::collections::BTreeSet<String> = properties
+            .iter()
+            .filter_map(|p| match p {
+                crate::ast::PropDef::Property {
+                    key: crate::ast::PropKey::Ident(k) | crate::ast::PropKey::String(k),
+                    ..
+                } => Some(k.clone()),
+                _ => None,
+            })
+            .collect();
+        // A spread or a computed key may write any field: left as it is.
+        if written.len() != properties.len() {
+            return expected.clone();
+        }
+        let fill_row = |state: &mut Self, t: &Type| -> Option<Type> {
+            let t = match state.zonk_head(t) {
+                Type::Named(id, args) if !state.is_nominal_type(id) => {
+                    state.unroll_named(id, &args)?
+                }
+                t => t,
+            };
+            let Type::Row(mut row) = t else {
+                return None;
+            };
+            let mut changed = false;
+            for (k, entry) in row.props.iter_mut() {
+                let Presence::Var(v) = state.main_subst.resolve_presence(&entry.presence) else {
+                    continue;
+                };
+                let present = written.contains(&k.0);
+                state.pending_optional_params.push((v, present, span));
+                entry.presence = if present {
+                    Presence::Pre
+                } else {
+                    Presence::Abs
+                };
+                changed = true;
+            }
+            changed.then_some(Type::Row(row))
+        };
+        match self.zonk_head(expected) {
+            Type::Union(arms) => {
+                let mut changed = false;
+                let arms: Vec<Type> = arms
+                    .iter()
+                    .map(|a| match fill_row(self, a) {
+                        Some(filled) => {
+                            changed = true;
+                            filled
+                        }
+                        None => a.clone(),
+                    })
+                    .collect();
+                if changed {
+                    Type::Union(arms)
+                } else {
+                    expected.clone()
+                }
+            }
+            _ => fill_row(self, expected).unwrap_or_else(|| expected.clone()),
+        }
     }
 
     /// What an `async` body's `return e` gives its promise, for `e` of

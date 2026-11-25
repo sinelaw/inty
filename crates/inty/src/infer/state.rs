@@ -349,6 +349,10 @@ pub struct InferState {
     /// (`settle_async_returns`), at the latest as a value that isn't a
     /// promise.
     pub(crate) pending_async_returns: Vec<(Type, Type, Span)>,
+    /// Parameters with an undecided presence (declared optional) that a
+    /// call filled (`true`) or skipped (`false`) without deciding them
+    /// (`fill_optional_params`): settled by `settle_optional_params`.
+    pub(crate) pending_optional_params: Vec<(crate::types::PVarName, bool, Span)>,
     /// Which declaration each identifier refers to, and which bindings
     /// are never written after their initialiser: the only ones
     /// narrowing refines (see `ast::resolve`).
@@ -584,6 +588,7 @@ impl InferState {
             pending_detached: Vec::new(),
             pending_receivers: Vec::new(),
             pending_async_returns: Vec::new(),
+            pending_optional_params: Vec::new(),
             resolution: Default::default(),
             local_types: HashMap::new(),
             forward_locals: HashMap::new(),
@@ -2335,6 +2340,55 @@ impl InferState {
         decided
     }
 
+    /// Settle the parameters calls filled or skipped without deciding
+    /// them (`pending_optional_params`). One decided since must agree
+    /// with the call: a call can't skip one the function requires, nor
+    /// pass one it doesn't take. One still undecided that the type
+    /// being generalised reaches (`reached`, not fixed by the
+    /// environment) is decided by the call, as calls always did: a
+    /// generalised function's callers would otherwise decide it without
+    /// the call. Otherwise (and at the end, `reached` `None`) it is left
+    /// open: the call was fine either way.
+    pub(crate) fn settle_optional_params(
+        &mut self,
+        reached: Option<&std::collections::HashSet<crate::types::PVarName>>,
+    ) {
+        use crate::types::Presence;
+        let mut keep = Vec::new();
+        for (v, passed, span) in std::mem::take(&mut self.pending_optional_params) {
+            let wanted = if passed { Presence::Pre } else { Presence::Abs };
+            match self.main_subst.resolve_presence(&Presence::Var(v.clone())) {
+                Presence::Var(now) => {
+                    if reached.is_some_and(|r| r.contains(&now)) {
+                        if let Err(e) = self.unify_presence(span, &Presence::Var(now), &wanted) {
+                            self.push_error(e);
+                        }
+                    } else if reached.is_some() {
+                        keep.push((now, passed, span));
+                    }
+                }
+                decided if decided == wanted => {}
+                _ => self.push_error(
+                    crate::error::TypeError::TypeMismatch {
+                        expected: if passed {
+                            "a function that takes this argument".to_string()
+                        } else {
+                            "a function that may be called without this argument".to_string()
+                        },
+                        found: if passed {
+                            "one that takes fewer".to_string()
+                        } else {
+                            "one that requires it".to_string()
+                        },
+                        span,
+                    }
+                    .into(),
+                ),
+            }
+        }
+        self.pending_optional_params.extend(keep);
+    }
+
     /// Whether something reads a field of `this` of type `v` (a waiting
     /// `HasProp` on it): the function it is the `this` of reads `this`.
     fn this_is_read(&mut self, v: &TVarName) -> bool {
@@ -2398,6 +2452,21 @@ impl InferState {
             ty = self.main_subst.flatten(&ty);
         }
         if !self.pending_async_returns.is_empty() && self.settle_async_returns(Some(&fixed_vars)) {
+            ty = self.main_subst.flatten(&ty);
+        }
+        if !self.pending_optional_params.is_empty() {
+            // The presence variables generalising would quantify: the
+            // type's, and those of the constraints it may carry.
+            let mut reached = ty.free_pvars();
+            for c in &self.pending_constraints {
+                let mut r = crate::types::subst::Reach::default();
+                for t in &c.pred.types {
+                    self.main_subst.reach(t, &mut r);
+                }
+                reached.extend(r.pvars);
+            }
+            reached.retain(|p| !fixed_pvars.contains(p));
+            self.settle_optional_params(Some(&reached));
             ty = self.main_subst.flatten(&ty);
         }
         let mut ty_vars = ty.free_vars();

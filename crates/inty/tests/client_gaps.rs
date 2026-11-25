@@ -85,3 +85,19 @@ fn async_return_of_a_promise_is_its_value() {
                export async function outer(p) { if (p) return \"a\"; return inner(); }\n";
     assert!(check(bad).is_err());
 }
+
+/// A call fills or skips a declared optional parameter for itself only,
+/// leaving the function's type as it was: one canvas context's `arc` is
+/// called with and without `ccw`.
+#[test]
+fn optional_parameter_filled_or_skipped_per_call() {
+    let ok = "const c = document.createElement(\"canvas\");\nconst ctx = c.getContext(\"2d\");\n\
+              if (ctx) { ctx.arc(1, 2, 3, 0, 1); ctx.arc(1, 2, 3, 0, 1, true); ctx.arc(0, 0, 1, 0, 2); }\n";
+    assert!(check(ok).is_ok(), "{:?}", check(ok));
+    // A callback the function passes to `map` (which may give it an
+    // index) and calls with one argument: a callback needing the index
+    // is still rejected, as the call decides the parameter where the
+    // function is generalised.
+    let bad = "export function f(cb) { [1].map(cb); cb(1); }\nf((x, i) => i.toFixed());\n";
+    assert!(check(bad).is_err());
+}
