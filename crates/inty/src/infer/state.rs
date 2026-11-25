@@ -1056,6 +1056,43 @@ impl InferState {
         self.main_subst.flattened_size(ty, MAX_GENERALISED + 1) > MAX_GENERALISED
     }
 
+    /// [`Self::too_large_to_generalise`], or a waiting constraint the
+    /// generalisation of `ty` would carry in its scheme (one reaching its
+    /// variables, or those of another it carries) is: `generalize` writes
+    /// those out too.
+    pub(crate) fn scheme_too_large(&self, ty: &Type) -> bool {
+        if self.too_large_to_generalise(ty) {
+            return true;
+        }
+        let mut reach = crate::types::subst::Reach::default();
+        self.main_subst.reach(ty, &mut reach);
+        let mut vars = reach.vars;
+        let mut left: Vec<&PendingConstraint> = self.pending_constraints.iter().collect();
+        loop {
+            let mut rest = Vec::new();
+            let mut took = false;
+            for c in left {
+                let mut r = crate::types::subst::Reach::default();
+                for t in &c.pred.types {
+                    self.main_subst.reach(t, &mut r);
+                }
+                if r.vars.iter().any(|v| v.is_flex() && vars.contains(v)) {
+                    if c.pred.types.iter().any(|t| self.too_large_to_generalise(t)) {
+                        return true;
+                    }
+                    vars.extend(r.vars);
+                    took = true;
+                } else {
+                    rest.push(c);
+                }
+            }
+            left = rest;
+            if !took {
+                return false;
+            }
+        }
+    }
+
     /// How large `ty` is written out (see [`Subst::flattened_size`]),
     /// counted up to a cap well past what a printer shows.
     pub fn flattened_size(&self, ty: &Type) -> usize {
@@ -1734,6 +1771,14 @@ impl InferState {
     fn assert_mirror_consistent(&mut self, var: &TVarName) {
         let TVarName::Flex(_) = var else { return };
         let ty_var = Type::Var(var.clone());
+        // Both sides write the binding out as a tree: one that mentions
+        // large types in many places (elements chained through
+        // `appendChild`) is exponentially larger, and the check alone
+        // would run out of memory. Such a binding isn't probed.
+        const PROBE_CAP: usize = 20_000;
+        if self.main_subst.flattened_size(&ty_var, PROBE_CAP) >= PROBE_CAP {
+            return;
+        }
         let via_subst = self.main_subst.apply(&ty_var);
         let via_zonk = super::zonk::zonk(&mut self.var_table, &self.main_subst, &ty_var);
         // If either side reached a non-Var (a structured type), the

@@ -1374,8 +1374,7 @@ impl InferState {
                 return None;
             }
             let ty = scheme.ty().clone();
-            self.too_large_to_generalise(&ty)
-                .then(|| (name.to_string(), span))
+            self.scheme_too_large(&ty).then(|| (name.to_string(), span))
         });
         if let Some((name, span)) = too_large {
             self.warn(
