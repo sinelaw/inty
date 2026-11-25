@@ -1881,6 +1881,14 @@ impl TypeScheme {
     }
 }
 
+impl Type {
+    /// The key union members are ordered by ([`Type::union`]'s normal
+    /// form): their kind and shape.
+    pub fn union_member_key(&self) -> (u8, String) {
+        union_member_sort_key(self)
+    }
+}
+
 /// Stable sort key for union members so the normal form is deterministic
 /// across runs. Variants are first ordered by a small tag, then by a
 /// content-derived string. The exact ordering is unspecified — we only

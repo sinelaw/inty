@@ -292,10 +292,30 @@ impl InferState {
             // should use join() if it wants subsumption-style behaviour.
             (Type::Union(m1), Type::Union(m2)) => {
                 if m1.len() == m2.len() && m1.iter().all(|t| m2.contains(t)) {
-                    Ok(())
-                } else {
-                    Err(self.unification_error(span, t1, t2))
+                    return Ok(());
                 }
+                // Two unions of the same shape (each member's kind, a
+                // record's field names, … matching one to one, as two
+                // instances of one declared union do) are equal when their
+                // members are: unify them member by member. Members that
+                // could match more than one way (a variable, two of one
+                // kind) leave it to set equality above.
+                let key = Type::union_member_key;
+                let unique = |m: &[Type]| {
+                    let keys: std::collections::BTreeSet<_> = m.iter().map(key).collect();
+                    keys.len() == m.len() && !m.iter().any(|t| matches!(t, Type::Var(_)))
+                };
+                if m1.len() == m2.len()
+                    && unique(m1)
+                    && unique(m2)
+                    && m1.iter().map(key).eq(m2.iter().map(key))
+                {
+                    for (a, b) in m1.iter().zip(m2.iter()) {
+                        self.unify(span, a, b)?;
+                    }
+                    return Ok(());
+                }
+                Err(self.unification_error(span, t1, t2))
             }
 
             // Union ~ T (T not a union) doesn't unify: unification is

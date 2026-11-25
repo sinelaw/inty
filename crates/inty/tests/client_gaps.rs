@@ -131,3 +131,35 @@ fn async_return_waiting_is_not_generalised() {
               cell.push(Promise.resolve(1));\n  const r = f();\n  r.then(x => x + 1);\n}\nouter();\n";
     assert!(check(ok).is_ok(), "{:?}", check(ok));
 }
+
+/// Two instances of one declared union whose record arm has optional
+/// fields (each instance its own presence variables) are the same type:
+/// unified member by member. They were compared as sets of syntactically
+/// equal members, and rejected ("expected 'Boolean | {p?: Boolean}',
+/// found 'Boolean | {p?: Boolean}'").
+#[test]
+fn instances_of_one_union_unify() {
+    let src = "/** function mk() => {o: Boolean | {p?: Boolean, q?: Number}} */\n\
+               function mk() { return {o: true}; }\n\
+               const a = mk(); const b = mk(); const xs = [a, b];\n";
+    let r = check(src);
+    assert!(r.is_ok(), "{:?}", r);
+    // Members of different kinds still don't unify.
+    let bad = "/** function f() => Boolean | {p?: Boolean} */\nfunction f() { return true; }\n\
+               /** function g() => Number | {p?: Boolean} */\nfunction g() { return 1; }\n\
+               const xs = [f(), g()];\n";
+    assert!(check(bad).is_err());
+}
+
+/// An optional parameter a call skipped, on an object a generalised
+/// function reaches, stays open rather than being decided by that call,
+/// so the same object's later calls may pass it.
+#[test]
+fn optional_parameter_reached_by_generalisation_stays_open() {
+    let src = "class P {\n  constructor() { this.a = document.createElement(\"div\"); }\n  \
+               one() { this.a.addEventListener(\"x\", (e) => {}); }\n  \
+               two() { this.a.addEventListener(\"wheel\", (e) => {}, { passive: false }); }\n}\n\
+               export const p = new P();\n";
+    let r = check(src);
+    assert!(r.is_ok(), "{:?}", r);
+}
