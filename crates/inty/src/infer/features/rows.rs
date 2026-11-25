@@ -122,6 +122,30 @@ impl InferState {
         // type variables.
         let shared_this = Type::Row(RowType::empty_open(self.fresh_flex()));
 
+        // The fields written before a method are known when its body is
+        // checked: `this.items` in a class method reads the type the
+        // constructor gave it, not a variable the finished literal binds
+        // later. A test on a value read off it then narrows, as it does on
+        // the same value read off a parameter of known type (narrowing
+        // can't refine a type not known yet). Only a field written once
+        // (a later one would replace it) in a literal without spreads (a
+        // spread may replace it) is told early; the rest join `this` when
+        // the literal is complete, as every field did before.
+        let mut once: BTreeMap<PropName, usize> = BTreeMap::new();
+        let mut has_spread = false;
+        for prop in properties {
+            match prop {
+                PropDef::Property { key, .. }
+                | PropDef::Method { key, .. }
+                | PropDef::Getter { key, .. }
+                | PropDef::Setter { key, .. } => {
+                    *once.entry(self.prop_key_to_name(key)).or_default() += 1;
+                }
+                PropDef::Spread { .. } => has_spread = true,
+            }
+        }
+        let mut told: std::collections::BTreeSet<PropName> = std::collections::BTreeSet::new();
+
         let mut props: BTreeMap<PropName, FieldEntry> = BTreeMap::new();
         let mut row_tail: RowTail = RowTail::Closed;
         // True if any spread was processed — even a closed-row spread
@@ -271,6 +295,15 @@ impl InferState {
                     proto,
                     span: method_span,
                 } => {
+                    if !has_spread {
+                        self.tell_this_fields(
+                            *method_span,
+                            &shared_this,
+                            &props,
+                            &once,
+                            &mut told,
+                        )?;
+                    }
                     let prop_name = self.prop_key_to_name(key);
                     // Infer method with the shared 'this' type. A Python
                     // method's `-> T` return annotation (if any) is checked
@@ -311,6 +344,9 @@ impl InferState {
                     proto,
                     span,
                 } => {
+                    if !has_spread {
+                        self.tell_this_fields(*span, &shared_this, &props, &once, &mut told)?;
+                    }
                     let prop_name = self.prop_key_to_name(key);
                     // Bind `this` in the getter body to the shared
                     // instance row so `this.foo` references see the
@@ -430,6 +466,30 @@ impl InferState {
 
         let _ = had_spread;
         Ok(self.zonk_head_into(obj_type))
+    }
+
+    /// Join to an object literal's `this` the fields in `props` written
+    /// once in it (`once`) and not joined yet (`told`): see
+    /// [`Self::infer_object`].
+    fn tell_this_fields(
+        &mut self,
+        span: Span,
+        this: &Type,
+        props: &BTreeMap<PropName, FieldEntry>,
+        once: &BTreeMap<PropName, usize>,
+        told: &mut std::collections::BTreeSet<PropName>,
+    ) -> InferResult<()> {
+        let fresh: BTreeMap<PropName, FieldEntry> = props
+            .iter()
+            .filter(|(k, _)| once.get(*k) == Some(&1) && !told.contains(*k))
+            .map(|(k, e)| (k.clone(), e.clone()))
+            .collect();
+        if fresh.is_empty() {
+            return Ok(());
+        }
+        told.extend(fresh.keys().cloned());
+        let row = Type::Row(RowType::open_entries(fresh, self.fresh_flex()));
+        self.unify(span, this, &row)
     }
 
     /// The fields written after a spread whose operand isn't known yet,
