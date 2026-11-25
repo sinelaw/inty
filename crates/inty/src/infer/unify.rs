@@ -74,7 +74,10 @@ impl InferState {
         let z2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
         match (&*z1, &*z2) {
             (Type::ArrowThis, Type::ArrowThis) => Ok(()),
-            (Type::ArrowThis, Type::Error) | (Type::Error, Type::ArrowThis) => Ok(()),
+            (Type::ArrowThis, Type::Error) | (Type::Error, Type::ArrowThis) => {
+                self.unify_inexact = true;
+                Ok(())
+            }
             (Type::ArrowThis, Type::NewTarget) | (Type::NewTarget, Type::ArrowThis) => {
                 self.unify_this(span, &z1, &z2)
             }
@@ -131,7 +134,14 @@ impl InferState {
         if self.unify_depth == 0 {
             self.unify_bound_pairs.clear();
             let unified = std::mem::take(&mut self.unified_bound_pairs);
-            if result.is_ok() {
+            // Linking is sound only when unifying showed the two types
+            // equal: an arm that accepts types that differ (an `Error`
+            // absorbing anything, a function that says no `this` against
+            // one that does, an array against `{length}`, a brand against
+            // an open row) would make one variable lose what its type
+            // says. Then nothing is linked.
+            let exact = !std::mem::take(&mut self.unify_inexact);
+            if result.is_ok() && exact {
                 for (a, b) in unified {
                     self.link_bound(a, b);
                 }
@@ -240,6 +250,7 @@ impl InferState {
             // (`c ? errorValue : undefined` is `Undefined | α`, then
             // `x && x.f === 1` made `α` a `Boolean`).
             (Type::Error, t) | (t, Type::Error) => {
+                self.unify_inexact = true;
                 self.absorb_error(span, t);
                 Ok(())
             }
@@ -329,6 +340,7 @@ impl InferState {
                 match (this1, this2) {
                     (None, None) => {} // Both static, nothing to unify
                     (None, Some(_)) | (Some(_), None) => {
+                        self.unify_inexact = true;
                         // One is static - compatible with any this
                     }
                     (Some(t1), Some(t2)) => self.unify_fn_this(span, t1, t2)?,
@@ -388,6 +400,7 @@ impl InferState {
 
             // Array with row type - arrays have structural properties like `length`
             (Type::Array(elem), Type::Row(row)) | (Type::Row(row), Type::Array(elem)) => {
+                self.unify_inexact = true;
                 self.unify_array_with_row(span, elem, row)
             }
 
@@ -491,6 +504,7 @@ impl InferState {
                     // structural duck-typing.
                     if let Type::Row(row) = other {
                         if matches!(row.tail, RowTail::Open(_)) {
+                            self.unify_inexact = true;
                             let assumption =
                                 UnfoldAssumption::NamedRow(*id, args.clone(), other.clone());
                             if self.unfold_assumptions.contains(&assumption) {

@@ -191,12 +191,12 @@ impl Subst {
         self.map.is_empty() && self.presences.is_empty()
     }
 
-    /// Get the type for a variable, if present.
     /// [`Self::get`], sharing the binding.
     pub fn get_shared(&self, var: &TVarName) -> Option<Arc<Type>> {
         self.map.get(var).cloned()
     }
 
+    /// Get the type for a variable, if present.
     pub fn get(&self, var: &TVarName) -> Option<&Type> {
         self.map.get(var).map(|t| &**t)
     }

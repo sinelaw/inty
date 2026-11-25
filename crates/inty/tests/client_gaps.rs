@@ -101,3 +101,33 @@ fn optional_parameter_filled_or_skipped_per_call() {
     let bad = "export function f(cb) { [1].map(cb); cb(1); }\nf((x, i) => i.toFixed());\n";
     assert!(check(bad).is_err());
 }
+
+/// Review of #116: linking two variables unification showed equal must
+/// not link through an arm that accepts types that differ (here a
+/// method, which reads `this`, against `Math.abs`, declared without a
+/// `this`): the method kept in `xs` stays a method.
+#[test]
+fn linking_keeps_a_method_a_method() {
+    let src = "const o = { n: 1, m(x) { return this.n + x; } };\n\
+               const xs = []; xs.push(o.m);\nconst ys = []; ys.push(Math.abs);\n\
+               const zs = [xs, ys];\nconst h = xs[0];\nh(1);\n";
+    assert!(
+        check(src).is_err(),
+        "h is a method: calling it detached is rejected"
+    );
+}
+
+/// Review of #116: what a waiting `return` of an async function gives its
+/// promise isn't generalised before the returned type is known.
+#[test]
+fn async_return_waiting_is_not_generalised() {
+    let src = "function outer() {\n  const cell = [];\n  async function f() { return cell[0]; }\n  \
+               cell.push(Promise.resolve(1));\n  const r = f();\n  r.then(x => x.foo.bar);\n}\nouter();\n";
+    assert!(
+        check(src).is_err(),
+        "the promise holds a Number, which has no `foo`"
+    );
+    let ok = "function outer() {\n  const cell = [];\n  async function f() { return cell[0]; }\n  \
+              cell.push(Promise.resolve(1));\n  const r = f();\n  r.then(x => x + 1);\n}\nouter();\n";
+    assert!(check(ok).is_ok(), "{:?}", check(ok));
+}

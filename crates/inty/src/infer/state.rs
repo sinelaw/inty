@@ -455,6 +455,9 @@ pub struct InferState {
     /// unification under way has unified: linked when it succeeds
     /// (`link_bound`).
     pub(in crate::infer) unified_bound_pairs: Vec<(TVarId, TVarId)>,
+    /// Whether the outermost unification under way went through an arm
+    /// that accepts two types that aren't equal (see `link_bound`).
+    pub(in crate::infer) unify_inexact: bool,
     /// The type of the value each plain `x = e` assigned, by where its
     /// `x` is: what narrowing knows about a binding written once
     /// (`resolve::Resolution::sole_write_at`) after that write.
@@ -615,6 +618,7 @@ impl InferState {
             unify_depth: 0,
             unify_bound_pairs: std::collections::HashSet::new(),
             unified_bound_pairs: Vec::new(),
+            unify_inexact: false,
             assigned_values: HashMap::new(),
         }
     }
@@ -1020,6 +1024,7 @@ impl InferState {
         // A pair unified in what was undone isn't unified any more.
         self.unify_bound_pairs.clear();
         self.unified_bound_pairs.clear();
+        self.unify_inexact = false;
         // Post-restore probe (debug only): the var_table and
         // main_subst should still agree on every key that survives
         // the rollback. Spot-check a handful — full-table sweep
@@ -2472,6 +2477,13 @@ impl InferState {
         }
         if !self.pending_async_returns.is_empty() && self.settle_async_returns(Some(&fixed_vars)) {
             ty = self.main_subst.flatten(&ty);
+        }
+        // What a `return` still waiting gives its promise is decided when
+        // the returned type is: it isn't generalised meanwhile (an
+        // instance would keep a variable the settling never reaches).
+        let mut fixed_vars = fixed_vars;
+        for (_, value, _) in &self.pending_async_returns {
+            fixed_vars.extend(self.main_subst.flatten(value).free_vars());
         }
         if !self.pending_optional_params.is_empty() {
             // The presence variables generalising would quantify: the
