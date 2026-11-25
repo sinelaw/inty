@@ -423,6 +423,19 @@ pub const SPLICE_MAX_ITEMS: usize = 4;
 /// from the caller's `InferState`; unification during the surrounding
 /// call expression binds them.
 pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Option<Type> {
+    // `Array.prototype.flat()`: an array of arrays made one array. Its
+    // receiver says the elements are arrays (`U[][]`), as `this:` would
+    // in a declaration. A depth (`flat(2)`) isn't taken: the result's
+    // type would depend on the number, and a non-array element (which
+    // `flat` keeps) isn't one, so mixed nesting is rejected, never
+    // mistyped.
+    if method == "flat" {
+        let u = state.fresh_type_var();
+        return Some(with_receiver(
+            Type::simple_func(vec![], Type::array(u.clone())),
+            Type::array(Type::array(u)),
+        ));
+    }
     js_array_method_type(state, elem, method).map(|t| with_receiver(t, Type::array(elem.clone())))
 }
 

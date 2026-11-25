@@ -39,3 +39,16 @@ fn destructuring_entries_of_a_map_known_later() {
                  /** const q: [Number, String] */\nconst q = [1, \"a\"];\nexport const r = g(q);\n";
     assert!(check(short).is_err(), "a pair has no third component");
 }
+
+/// `xs.flat()` on an array of arrays is one array of their elements.
+#[test]
+fn array_flat() {
+    let ok = "export const a = [[1], [2, 3]].flat();\nexport const b = a[0] + 1;\n\
+              export function f(xs) { return xs.flat(); }\nexport const r = f([[\"a\"]])[0].length;\n";
+    assert!(check(ok).is_ok(), "{:?}", check(ok));
+    // Not an array of arrays: `flat` would keep the elements as they are,
+    // which the one-level type doesn't say.
+    assert!(check("export const a = [1, 2].flat();\n").is_err());
+    // A depth changes the result's type with the number: not taken.
+    assert!(check("export const a = [[1]].flat(2);\n").is_err());
+}
