@@ -678,6 +678,12 @@ impl InferState {
         if let Some(result) = self.infer_array_from(env, callee, arguments, keywords) {
             return result;
         }
+        if let (Expr::Ident { name, .. }, [value]) = (callee, arguments) {
+            if name == crate::types::ASYNC_RETURN {
+                let ty = self.infer_expr(env, value)?;
+                return Ok(self.async_return(ty, span));
+            }
+        }
         // `then` / `catch` callbacks this call's callee records (see
         // `builtins::promise_method_type`) are settled at its end.
         let promise_mark = self.promise_results.len();
@@ -1120,6 +1126,22 @@ impl InferState {
         }
 
         Ok(self.zonk_head_into(ret))
+    }
+
+    /// What an `async` body's `return e` gives its promise, for `e` of
+    /// type `ty` (see [`crate::types::ASYNC_RETURN`]): a promise's value,
+    /// or `e`'s own, as `then`'s callback does. A type not known yet
+    /// waits (`settle_async_returns`).
+    fn async_return(&mut self, ty: Type, span: Span) -> Type {
+        match self.zonk_head(&ty) {
+            Type::Promise(value) => *value,
+            Type::Var(TVarName::Flex(_)) if !self.is_numeric(&ty) => {
+                let value = self.fresh_type_var();
+                self.pending_async_returns.push((ty, value.clone(), span));
+                value
+            }
+            _ => ty,
+        }
     }
 
     /// A call without a receiver (`f()`, not `o.f()`): the callee gets

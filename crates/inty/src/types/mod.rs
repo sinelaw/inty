@@ -49,6 +49,12 @@ pub fn is_callable_key(name: &PropName) -> bool {
 /// source can't name it.
 pub const ITER_KEY: &str = "\x03iter\x03";
 
+/// The function an `async` body's `return e` is lowered to call
+/// (`return ASYNC_RETURN(e)`): what the returned promise resolves to,
+/// `e`'s value, or the value of the promise `e` is. JavaScript source
+/// can't name it.
+pub const ASYNC_RETURN: &str = "\x04async_return\x04";
+
 /// Prefix for private-field sentinel keys produced by the class-body
 /// lowering of `#name`. Starts with `\x02` so JS source can't tokenise
 /// it; the parser emits these names from `Token::PrivateIdent` only.

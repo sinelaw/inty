@@ -221,6 +221,8 @@ impl InferState {
         self.settle_detached(None);
         // The method calls whose callee's `this` is still unknown.
         self.settle_receivers(None);
+        // The `async` returns whose value's type is still unknown.
+        self.settle_async_returns(None);
         let mut ambient = outer_ambient;
         if let Ok((_, env)) = &result {
             for (name, key) in env.name_keys() {
