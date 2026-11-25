@@ -2786,15 +2786,19 @@ impl InferState {
                 continue;
             };
             let params: HashSet<TVarName> = def.params.iter().cloned().collect();
-            let body = self.main_subst.flatten(&def.body.clone());
-            let body = self.zonk(&body);
+            // What the body reaches through the substitution, found
+            // without writing it out (a body holding element types is
+            // exponentially larger as a tree: see `Subst::reach`).
+            let mut body = crate::types::subst::Reach::default();
+            let def_body = def.body.clone();
+            self.main_subst.reach(&def_body, &mut body);
             let free: Vec<TVarName> = body
-                .free_vars()
+                .vars
                 .into_iter()
                 .filter(|v| !params.contains(v))
                 .collect();
-            let free_pvars = body.free_pvars();
-            let inner: Vec<TypeId> = body.named_ids().into_iter().filter(|n| *n != id).collect();
+            let free_pvars = body.pvars;
+            let inner: Vec<TypeId> = body.named.into_iter().filter(|n| *n != id).collect();
             // Only its parameters, and named types that are closed too: no
             // substitution reaches inside it again.
             if free.is_empty()
