@@ -3541,8 +3541,8 @@ fn multi_error_duplicate_const_no_longer_aborts() {
 /// to drive the limit from inside `infer_program_with_env` without
 /// fighting the parser, which is itself recursive on deep literals.
 fn nested_object_literal_source(depth: usize) -> String {
-    // Annotated: a declaration resolves its annotated type whole (an
-    // inferred result is only resolved at its head).
+    // A spread of it (`{...x}`) resolves the operand's type whole, which
+    // walks it to its depth (most other checks resolve only a head).
     let mut src = String::from("/** var x: ");
     for _ in 0..depth {
         src.push_str("{a: ");
@@ -3559,7 +3559,7 @@ fn nested_object_literal_source(depth: usize) -> String {
     for _ in 0..depth {
         src.push('}');
     }
-    src.push(';');
+    src.push_str(";\nvar y = {...x};");
     src
 }
 
