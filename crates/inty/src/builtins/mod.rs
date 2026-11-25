@@ -1393,7 +1393,7 @@ impl InferState {
         name: &str,
         span: Span,
     ) -> Result<(), IntyError> {
-        match self.apply_subst(receiver) {
+        match self.zonk_head(receiver) {
             Type::Var(TVarName::Flex(_)) => {
                 self.add_constraint(TypePred::field_write(receiver.clone(), name), span);
                 Ok(())
@@ -1409,7 +1409,10 @@ impl InferState {
     /// like the model's `unknown`; a variable nothing pinned down holds no
     /// value, so its tests never run.
     pub(crate) fn resolve_testable(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
-        let ty = self.apply_subst(ty);
+        // Only its head decides (and a row's call signature): resolving
+        // it whole would write out a large type (an element's) as a tree.
+        let original = ty;
+        let ty = self.zonk_head(ty);
         // A row may carry a call signature whose presence isn't decided
         // yet (a spread of an operand not known yet): it waits, as on a
         // variable.
@@ -1418,11 +1421,11 @@ impl InferState {
             Type::Row(row) => row
                 .props
                 .get(&PropName(crate::types::CALLABLE_KEY.to_string()))
-                .map(|entry| entry.presence.clone()),
+                .map(|entry| self.main_subst.resolve_presence(&entry.presence)),
             _ => None,
         };
         if let Some(Presence::Var(_)) = call {
-            self.add_constraint(TypePred::testable(ty.clone()), span);
+            self.add_constraint(TypePred::testable(original.clone()), span);
             return Ok(());
         }
         let why = match &ty {
@@ -1439,7 +1442,7 @@ impl InferState {
         };
         Err(TypeError::ConstraintNotSatisfied {
             class: format!("Testable ({why})"),
-            ty: self.show(&ty),
+            ty: self.show(original),
             span,
         }
         .into())
@@ -1448,7 +1451,7 @@ impl InferState {
     /// A value is tested for truthiness (`Testable`): decided now for a
     /// known type, posed for a variable.
     pub(crate) fn require_testable(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
-        match self.apply_subst(ty) {
+        match self.zonk_head(ty) {
             Type::Var(TVarName::Flex(_)) => {
                 self.add_constraint(TypePred::testable(ty.clone()), span);
                 Ok(())

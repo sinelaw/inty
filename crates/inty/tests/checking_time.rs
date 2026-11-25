@@ -85,6 +85,36 @@ fn records_of_functions_check_quickly() {
 /// counts towards "too large to generalise", as the type does.
 #[test]
 fn nested_elements_in_a_class_check_quickly() {
+    check_quickly(&nested_elements_class());
+}
+
+/// A method of an object literal testing a field that holds an element
+/// tree (`if (this.el)`): the test asks only whether the value may be a
+/// function or a promise, which its head says. Resolving the whole type to
+/// ask wrote the tree out (out of memory on a real client, once fields
+/// were typed before methods made `this.el` known at the test).
+#[test]
+fn testing_an_element_field_checks_quickly() {
+    let mut src = vec!["export function mk(parent) {".to_string()];
+    src.push("  const root = document.createElement('div');".to_string());
+    let mut prev = "root".to_string();
+    for i in 1..5 {
+        src.push(format!(
+            "  const d{i} = document.createElement('span'); d{i}.textContent = 'x'; \
+             {prev}.appendChild(d{i});"
+        ));
+        prev = format!("d{i}");
+    }
+    src.push("  parent.appendChild(root);".to_string());
+    src.push(
+        "  const o = { el: root, parent, m() { if (this.el) { return 1; } \
+         if (this.parent) { return 2; } return 0; } };\n  return o;\n}"
+            .to_string(),
+    );
+    check_quickly(&src.join("\n"));
+}
+
+fn nested_elements_class() -> String {
     let mut src = vec![
         "export class V {".to_string(),
         "  constructor(root) { this.root = root; }".to_string(),
@@ -99,7 +129,11 @@ fn nested_elements_in_a_class_check_quickly() {
         ));
     }
     src.push("    this.root.appendChild(d0);\n  }\n}".to_string());
-    let src = src.join("\n");
+    src.join("\n")
+}
+
+/// Check `src` (it must have no errors) within the time bound.
+fn check_quickly(src: &str) {
     let program = inty::frontends::javascript::parse_source(&src).expect("parses");
     let start = Instant::now();
     let errors = inty::worker::run_with_inference_stack("inty-checking-time", move || {
@@ -115,6 +149,6 @@ fn nested_elements_in_a_class_check_quickly() {
     assert!(errors.is_empty(), "{errors:?}");
     assert!(
         elapsed < Duration::from_secs(10),
-        "checking took {elapsed:?}: a nested element tree is written out in full again"
+        "checking took {elapsed:?}: an element tree is written out in full again"
     );
 }
