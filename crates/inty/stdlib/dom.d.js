@@ -159,6 +159,7 @@
     setStartBefore: (T) => Undefined, setStartAfter: (T) => Undefined,
     setEndBefore: (T) => Undefined, setEndAfter: (T) => Undefined,
     collapse: (Boolean) => Undefined,
+    comparePoint: (T, Number) => Number, isPointInRange: (T, Number) => Boolean,
     selectNode: (T) => Undefined, selectNodeContents: (T) => Undefined,
     cloneRange: () => Range<T>,
     getBoundingClientRect: () => DOMRect,
