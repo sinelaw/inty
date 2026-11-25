@@ -563,8 +563,14 @@ fn load_module(
     // of inference decided, and
     // what reads the environment next (declarations, importers) has no
     // substitution to apply.
+    //
+    // A type too large to write out (one holding element trees, which
+    // mention each other in many places, is exponentially larger as a
+    // tree than the substitution holds it) stays as it is: the importers,
+    // checked with this same state, read it through the substitution, as
+    // they read any type; a printer bounds what it writes.
     let module_env = module_env.map_schemes(|s| {
-        if s.body.ty.free_vars().is_empty() {
+        if s.body.ty.free_vars().is_empty() || state.too_large_to_generalise(&s.body.ty) {
             s.clone()
         } else {
             state.flatten_scheme(s)
