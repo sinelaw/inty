@@ -64,3 +64,24 @@ fn regexp_names_a_type() {
                export function f(re) { return re.test(\"a\"); }\nexport const r = f(\"a\");\n";
     assert!(check(bad).is_err(), "a string isn't a RegExp");
 }
+
+/// `return p` in an `async` function, `p` a promise: the function's
+/// promise resolves to `p`'s value (not to `p`), as `then`'s callback's
+/// does, whether or not `p`'s type is known at the `return`.
+#[test]
+fn async_return_of_a_promise_is_its_value() {
+    let ok = "async function inner(x) { return { path: x }; }\n\
+              export async function outer(p) { if (p === \"\") return { path: \"a\" }; return inner(p); }\n\
+              export async function use() { const r = await outer(\"a\"); return r.path.length; }\n";
+    assert!(check(ok).is_ok(), "{:?}", check(ok));
+    // The method returned is checked after the one returning its promise.
+    let later = "export class S {\n  constructor() { this.buffers = new Map(); }\n  \
+                 async load(abs) { const b = [...this.buffers.values()].find((x) => x.path === abs); \
+                 if (b) return b; return this.adopt({ path: abs }); }\n  \
+                 async adopt(d) { const b = { path: d.path }; this.buffers.set(d.path, b); return b; }\n}\n";
+    assert!(check(later).is_ok(), "{:?}", check(later));
+    // A value and a promise of another type still disagree.
+    let bad = "async function inner() { return 1; }\n\
+               export async function outer(p) { if (p) return \"a\"; return inner(); }\n";
+    assert!(check(bad).is_err());
+}

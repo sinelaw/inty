@@ -1940,7 +1940,10 @@ impl Parser {
         }
     }
 
-    fn wrap_body_in_promise_resolve(body: Box<Stmt>, span: Span) -> Box<Stmt> {
+    fn wrap_body_in_promise_resolve(mut body: Box<Stmt>, span: Span) -> Box<Stmt> {
+        // `return e` gives the promise `e`'s value, or the value of the
+        // promise `e` is (as `then`'s callback does): each is marked.
+        Self::mark_async_returns(&mut body);
         // (() => { ...body... })(): an arrow, so the body keeps the
         // function's own `this` (an async method reads its instance).
         let iife = Expr::Function {
@@ -1979,6 +1982,76 @@ impl Parser {
             }],
             span,
         })
+    }
+
+    /// Rewrite each `return e` of an `async` body (not of a function
+    /// nested in it) to `return ASYNC_RETURN(e)` (see
+    /// [`crate::types::ASYNC_RETURN`]).
+    fn mark_async_returns(stmt: &mut Stmt) {
+        match stmt {
+            Stmt::Return {
+                argument: Some(arg),
+                ..
+            } => {
+                let span = arg.span();
+                let value = std::mem::replace(
+                    arg,
+                    Expr::Lit {
+                        value: Literal::Undefined,
+                        span,
+                    },
+                );
+                *arg = Expr::Call {
+                    callee: Box::new(Expr::Ident {
+                        name: crate::types::ASYNC_RETURN.to_string(),
+                        span,
+                    }),
+                    arguments: vec![value],
+                    keywords: vec![],
+                    span,
+                };
+            }
+            Stmt::Block { body, .. } => body.iter_mut().for_each(Self::mark_async_returns),
+            Stmt::If {
+                consequent,
+                alternate,
+                ..
+            } => {
+                Self::mark_async_returns(consequent);
+                if let Some(alt) = alternate {
+                    Self::mark_async_returns(alt);
+                }
+            }
+            Stmt::While { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::For { body, .. }
+            | Stmt::ForIn { body, .. }
+            | Stmt::ForOf { body, .. }
+            | Stmt::Labeled { body, .. } => Self::mark_async_returns(body),
+            Stmt::Try {
+                block,
+                handler,
+                finalizer,
+                ..
+            } => {
+                Self::mark_async_returns(block);
+                if let Some(h) = handler {
+                    Self::mark_async_returns(&mut h.body);
+                }
+                if let Some(f) = finalizer {
+                    Self::mark_async_returns(f);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    case.consequent
+                        .iter_mut()
+                        .for_each(Self::mark_async_returns);
+                }
+            }
+            // A nested function's `return`s are its own.
+            _ => {}
+        }
     }
 
     fn parse_function_declaration(&mut self) -> Result<Stmt> {

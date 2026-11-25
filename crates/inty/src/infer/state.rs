@@ -344,6 +344,11 @@ pub struct InferState {
     /// when it is (`settle_receivers`), at the latest as a function that
     /// uses no `this`.
     pub(crate) pending_receivers: Vec<(Type, Type, Span)>,
+    /// An `async` body's `return e` whose type wasn't known at the
+    /// `return`, and what it gives the promise: settled when it is
+    /// (`settle_async_returns`), at the latest as a value that isn't a
+    /// promise.
+    pub(crate) pending_async_returns: Vec<(Type, Type, Span)>,
     /// Which declaration each identifier refers to, and which bindings
     /// are never written after their initialiser: the only ones
     /// narrowing refines (see `ast::resolve`).
@@ -578,6 +583,7 @@ impl InferState {
             promise_results: Vec::new(),
             pending_detached: Vec::new(),
             pending_receivers: Vec::new(),
+            pending_async_returns: Vec::new(),
             resolution: Default::default(),
             local_types: HashMap::new(),
             forward_locals: HashMap::new(),
@@ -2299,6 +2305,36 @@ impl InferState {
         pinned
     }
 
+    /// Settle the `return`s of `async` bodies whose value's type wasn't
+    /// known (`pending_async_returns`): a promise gives its value, any
+    /// other type itself. One still unknown stays while the environment
+    /// fixes it (`fixed`), and otherwise (always when `fixed` is `None`)
+    /// is taken to be a value, as before `return`s of promises were
+    /// told apart. Whether anything was decided.
+    pub(crate) fn settle_async_returns(
+        &mut self,
+        fixed: Option<&std::collections::HashSet<TVarName>>,
+    ) -> bool {
+        let mut decided = false;
+        let mut keep = Vec::new();
+        for (ty, value, span) in std::mem::take(&mut self.pending_async_returns) {
+            let result = match self.zonk_head(&ty) {
+                Type::Promise(inner) => self.unify(span, &value, &inner),
+                Type::Var(v) if v.is_flex() && fixed.is_some_and(|f| f.contains(&v)) => {
+                    keep.push((ty, value, span));
+                    continue;
+                }
+                _ => self.unify(span, &value, &ty),
+            };
+            decided = true;
+            if let Err(e) = result {
+                self.push_error(e);
+            }
+        }
+        self.pending_async_returns.extend(keep);
+        decided
+    }
+
     /// Whether something reads a field of `this` of type `v` (a waiting
     /// `HasProp` on it): the function it is the `this` of reads `this`.
     fn this_is_read(&mut self, v: &TVarName) -> bool {
@@ -2359,6 +2395,9 @@ impl InferState {
             ty = self.main_subst.flatten(&ty);
         }
         if !self.pending_receivers.is_empty() && self.settle_receivers(Some(&fixed_vars)) {
+            ty = self.main_subst.flatten(&ty);
+        }
+        if !self.pending_async_returns.is_empty() && self.settle_async_returns(Some(&fixed_vars)) {
             ty = self.main_subst.flatten(&ty);
         }
         let mut ty_vars = ty.free_vars();
