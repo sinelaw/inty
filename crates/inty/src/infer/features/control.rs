@@ -254,7 +254,8 @@ impl InferState {
                 if !scheme.is_mono() {
                     return None;
                 }
-                self.apply_subst(scheme.ty())
+                // Only the head says whether it is a singleton.
+                super::super::narrow::resolve_for_narrowing(self, scheme.ty(), &[])
             }
             _ => return None,
         };
@@ -352,7 +353,7 @@ impl InferState {
     /// What every value the write at `span` assigns is known to be.
     fn sole_write_narrowing(&mut self, span: Span) -> Option<Narrowing> {
         let value = self.assigned_values.get(&(span.start, span.end))?.clone();
-        let value = self.apply_subst(&value);
+        let value = super::super::narrow::resolve_for_narrowing(self, &value, &[]);
         value_narrowing(self, &value, self.language)
     }
 
@@ -520,7 +521,7 @@ impl InferState {
         _discriminant: &Expr,
         disc_type: &Type,
     ) -> Option<Vec<crate::types::LitValue>> {
-        let disc = self.apply_subst(disc_type);
+        let disc = super::super::narrow::resolve_for_narrowing(self, disc_type, &[]);
         literal_set_of_type(&disc)
     }
 
