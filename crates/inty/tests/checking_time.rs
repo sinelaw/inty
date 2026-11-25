@@ -142,6 +142,33 @@ fn narrowing_an_element_binding_checks_quickly() {
     }
 }
 
+/// A class whose constructor builds elements, one field set from a
+/// conditional (`HTMLDivElement | Null`), copied to a `const` and tested,
+/// then `new` of the class (reduced from a real client, which ran out of
+/// memory): `new` asked whether the constructor's result is an object by
+/// resolving the whole instance type.
+#[test]
+fn constructing_a_class_of_elements_checks_quickly() {
+    check_quickly(
+        "class Panel {
+  constructor(place) {
+    this.el = document.createElement(\"div\");
+    this.body = document.createElement(\"div\");
+    this.backdrop = place === \"dialog\" ? document.createElement(\"div\") : null;
+    this.el.appendChild(this.body);
+    const backdrop = this.backdrop;
+    if (backdrop) {
+      backdrop.className = \"backdrop\";
+      backdrop.appendChild(this.el);
+      document.body.appendChild(backdrop);
+    }
+  }
+}
+export const p = new Panel(\"dialog\");
+",
+    );
+}
+
 fn nested_elements_class() -> String {
     let mut src = vec![
         "export class V {".to_string(),

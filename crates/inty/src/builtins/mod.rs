@@ -1111,7 +1111,7 @@ impl InferState {
         // variable, its first use would pin it (`const c = bad[i];
         // c && c.f !== ""` made `c` a `Boolean`).
         if let Some(first) = pred.types.first() {
-            if matches!(self.apply_subst(first), Type::Error) {
+            if matches!(self.zonk_head(first), Type::Error) {
                 for t in &pred.types[1..] {
                     self.absorb_error(span, t);
                 }
@@ -1121,7 +1121,7 @@ impl InferState {
         if pred
             .types
             .iter()
-            .any(|t| matches!(self.apply_subst(t), Type::Error))
+            .any(|t| matches!(self.zonk_head(t), Type::Error))
         {
             return Ok(());
         }
@@ -1305,7 +1305,7 @@ impl InferState {
         container: &Type,
         span: Span,
     ) -> Result<(), IntyError> {
-        match self.apply_subst(container) {
+        match self.zonk_head(container) {
             Type::String | Type::Literal(crate::types::LitValue::String(_)) => {
                 Err(TypeError::ConstraintNotSatisfied {
                     class: "IndexWrite (a string's characters can't be assigned)".to_string(),
@@ -1329,7 +1329,8 @@ impl InferState {
         name: &str,
         span: Span,
     ) -> Result<(), IntyError> {
-        let receiver = self.apply_subst(receiver);
+        // Only its head decides (see `resolve_testable`).
+        let receiver = self.zonk_head(receiver);
         // An array's `length` takes a store (`xs.length = 0` empties it in
         // place); the number stored is checked as the property's type.
         if name == "length" && matches!(receiver, Type::Array(_)) {
@@ -1468,7 +1469,7 @@ impl InferState {
         container: &Type,
         span: Span,
     ) -> Result<(), IntyError> {
-        match self.apply_subst(container) {
+        match self.zonk_head(container) {
             Type::Var(TVarName::Flex(_)) => {
                 self.add_constraint(TypePred::index_write(container.clone()), span);
                 Ok(())
@@ -1485,18 +1486,19 @@ impl InferState {
         element: &Type,
         span: Span,
     ) -> Result<(), IntyError> {
-        let container = self.apply_subst(container);
+        // Its head decides which container it is (see `resolve_testable`).
+        let container = self.zonk_head(container);
         // A literal index (`xs[0]`) carries its singleton type; the
         // container's key type is the base type, as in the eager rule in
         // `infer_computed_member` (which subsumes rather than unifies).
         // The literal itself still selects a record field (`o["x"]`).
-        let literal_key = match self.apply_subst(index) {
+        let literal_key = match self.zonk_head(index) {
             Type::Literal(crate::types::LitValue::String(k)) => Some(k),
             _ => None,
         };
-        let raw_index = self.apply_subst(index);
+        let raw_index = self.zonk_head(index);
         let index = raw_index.widen_fresh_literals();
-        let element = self.apply_subst(element);
+        let element = element.clone();
         // An array or string index is a number (one with a fractional
         // part, or out of range, reads nothing: a fault).
         let int_index = |state: &mut Self| -> Result<(), IntyError> {
