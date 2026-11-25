@@ -744,6 +744,11 @@ impl InferState {
             }
         };
 
+        // A callee of a type not known yet: the call gives it the shape
+        // of a function, with a `this` nothing has said anything about.
+        let callee_unknown =
+            self.head_is(&callee_type, |t| matches!(t, Type::Var(TVarName::Flex(_))));
+
         // Error sentinel propagates through calls. If the callee
         // already failed to infer, every `Error(args)` site
         // re-produces `Error` so a single upstream failure doesn't
@@ -869,7 +874,18 @@ impl InferState {
             self.unify_this(span, &this_type, &this)?;
         } else if let Some(obj_type) = obj_type_for_this {
             let obj_for_this = self.method_receiver(&obj_type);
-            self.unify_this(span, &this_type, &obj_for_this)?;
+            // A callee not known yet (a callback stored in a field) may
+            // use no `this` or read the receiver: the call doesn't decide
+            // which, or a callback stored in a class's field would become
+            // a method of that class. Its `this` waits, as a detached
+            // call's does (`settle_receivers`).
+            match self.zonk_head(&this_type) {
+                Type::Var(v) if v.is_flex() && callee_unknown => {
+                    self.pending_receivers
+                        .push((Type::Var(v), obj_for_this.into_owned(), span))
+                }
+                _ => self.unify_this(span, &this_type, &obj_for_this)?,
+            }
         } else {
             self.detached_this(span, &this_type, Some(callee))?;
         }
