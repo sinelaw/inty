@@ -868,6 +868,14 @@ impl InferState {
                 (self.infer_expr(env, callee)?, None)
             }
         };
+        // A method's callee (`obj.m`) is typed here, not by `infer_expr`:
+        // record it as that would.
+        if let Some(types) = self.expr_types.as_mut() {
+            let callee_span = callee.span();
+            types
+                .entry((callee_span.start, callee_span.end))
+                .or_insert_with(|| callee_type.clone());
+        }
 
         // A callee of a type not known yet: the call gives it the shape
         // of a function, with a `this` nothing has said anything about.
