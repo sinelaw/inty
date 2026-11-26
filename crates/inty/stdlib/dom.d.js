@@ -64,6 +64,8 @@
     screenX: Number, screenY: Number, offsetX: Number, offsetY: Number,
     movementX: Number, movementY: Number, x: Number, y: Number,
     button: Number, buttons: Number, relatedTarget: T | Null,
+    // A click's count (`UIEvent.detail`): 2 for the second of a double click.
+    detail: Number,
     pointerId: Number, pointerType: String, pressure: Number, width: Number, height: Number,
     isPrimary: Boolean,
     deltaX: Number, deltaY: Number, deltaZ: Number, deltaMode: Number,
@@ -234,13 +236,26 @@
     removeChild: (T) => T,
     replaceChild: (T, T) => T,
     insertBefore: (T, T) => T,
-    before: (T) => Undefined, after: (T) => Undefined,
-    append: (T) => Undefined, prepend: (T) => Undefined,
+    // Any number of nodes: inty has no variadic function type, so up to
+    // eight, as `console.log` takes up to five (a spread,
+    // `el.append(...nodes)`, is one argument of the array's element
+    // type). JavaScript also takes strings (as text nodes); a parameter
+    // `T | String` doesn't yet take an element whose type a call hasn't
+    // pinned down, so they are left out.
+    before: (a?: T, b?: T, c?: T, d?: T,
+        e?: T, f?: T, g?: T, h?: T) => Undefined,
+    after: (a?: T, b?: T, c?: T, d?: T,
+        e?: T, f?: T, g?: T, h?: T) => Undefined,
+    append: (a?: T, b?: T, c?: T, d?: T,
+        e?: T, f?: T, g?: T, h?: T) => Undefined,
+    prepend: (a?: T, b?: T, c?: T, d?: T,
+        e?: T, f?: T, g?: T, h?: T) => Undefined,
     remove: () => Undefined, replaceWith: (T) => Undefined,
     getBoundingClientRect: () => DOMRect,
     getClientRects: () => DOMRect[],
     scrollIntoView: () => Undefined,
-    focus: () => Undefined, blur: () => Undefined,
+    focus: (options?: {preventScroll?: Boolean, focusVisible?: Boolean}) => Undefined,
+    blur: () => Undefined,
     click: () => Undefined,
     submit: () => Undefined, requestSubmit: () => Undefined, reset: () => Undefined,
     showModal: () => Undefined, show: () => Undefined, close: () => Undefined,
@@ -250,11 +265,10 @@
     nextSibling: T | Null, previousSibling: T | Null,
     nodeType: Number, nodeValue: String | Null, isConnected: Boolean,
     offsetParent: T | Null,
-    // Called with no children (to clear the element), one, or the new
-    // children spread (`el.replaceChildren(...nodes)`); inty has no
-    // variadic function type, so two or more separate arguments aren't
-    // taken.
-    replaceChildren: (node?: T) => Undefined,
+    // Called with no children (to clear the element), or the new ones,
+    // as `append` (`el.replaceChildren(...nodes)`).
+    replaceChildren: (a?: T, b?: T, c?: T, d?: T,
+        e?: T, f?: T, g?: T, h?: T) => Undefined,
     firstElementChild: T | Null, lastElementChild: T | Null,
     nextElementSibling: T | Null, previousElementSibling: T | Null,
     style: CSSStyleDeclaration,
