@@ -190,6 +190,49 @@ const btn = document.getElementById("go");
 if (btn) btn.addEventListener("click", (e) => e.preventDefault());
 ```
 
+## Starlark
+
+*Experimental.* inty checks Starlark (`.star`, `.bzl`, `.sky`) with the
+Python frontend in a Starlark mode:
+
+```sh
+inty path/to/defs.bzl
+```
+
+Besides types, it checks Starlark's own rules: no recursion, a global is
+bound once, no `if`/`for` at the top level, and no Python-only syntax
+(`class`, `try`, `while`, `import`, f-strings, …) or methods (`str.zfill`,
+`list.sort`, …). A string isn't iterable; use `s.elems()`.
+`load("//pkg:defs.bzl", "name")` reads the loaded file and brings in its
+names with their types. Labels resolve against the workspace root
+(`MODULE.bazel`, `WORKSPACE`, `.buckconfig`, …), and a label in another
+repository (`@repo//…`) binds its names unchecked.
+
+Starlark has no annotation syntax, so types go in comments. A record type
+is `{name: T, …}`, `# type Name = T` names one, and a PEP 484 type comment
+types a variable or a function:
+
+```python
+# type Record = {process: str, pid: int, argv: list[str]}
+
+def describe(record):
+    # type: (Record) -> str
+    name = record.get("process", "").lower()
+    return name + " " + str(record["pid"])
+
+names = []  # type: list[str]
+```
+
+Misspelling a field (`record.get("procss")`), using it as the wrong type, or
+calling a method a `str` doesn't have is reported.
+
+Limits: Bazel's API isn't declared yet, so its globals (`rule`, `attr`,
+`native`, `depset`, …) are accepted without checking. `BUILD` and `BUCK`
+files aren't checked. A dict literal is a record; to use it as a dict,
+annotate it (`# type: dict[str, int]`). See
+[examples/starlark/telemetry.star](examples/starlark/telemetry.star) for a
+fuller example.
+
 ## Type system
 
 The type system features — full inference, parametric and row polymorphism,
