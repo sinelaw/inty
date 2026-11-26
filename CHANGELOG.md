@@ -51,6 +51,17 @@
 
 ### Diagnostics
 
+- An array met by a record of reads (`o.xs.map(f)` while `o` isn't known,
+  later given an array) has every field the record needs, of the type a
+  read of it has: only `length` was known, so any method read failed
+  ("Property 'map' not found on type …[]").
+- A member's flags not agreeing (assigned against read-only, own against
+  on the prototype) is a mismatch in that member: the error named neither
+  member nor types.
+- Writing out a type for a diagnostic stays within its budget: a part
+  written before (memoised) or stored in place was written whole, which
+  for a type sharing its parts (elements chained through `appendChild`)
+  ran out of memory.
 - A failure inside a member of two records (or a class instance and a
   record) that isn't a plain mismatch (a property an array lacks, an
   arity, an infinite type) names the innermost member it is in and shows

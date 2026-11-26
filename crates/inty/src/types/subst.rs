@@ -475,11 +475,29 @@ impl Subst {
                 return Type::Named(super::ty::ELIDED_TYPE_ID, Vec::new());
             }
         }
-        if let Some(done) = state.memo.get(name) {
-            if state.budget.is_some() {
-                state.written += self.flattened_size(done, usize::MAX);
+        // A type written out before, if the budget has room for it: it may
+        // be far larger (a tree of what the substitution shares). Else a
+        // tail, which is written whatever the budget, is written again
+        // within it, and any other type is left out.
+        let memo = match (state.memo.get(name), state.budget) {
+            (Some(done), None) => Some(done.clone()),
+            (Some(done), Some(budget)) => {
+                let left = budget.saturating_sub(state.written);
+                let size = self.flattened_size(done, left.saturating_add(1));
+                if size <= left {
+                    state.written += size;
+                    Some(done.clone())
+                } else if tail {
+                    None
+                } else {
+                    state.written = budget;
+                    return Type::Named(super::ty::ELIDED_TYPE_ID, Vec::new());
+                }
             }
-            return done.clone();
+            (None, _) => None,
+        };
+        if let Some(done) = memo {
+            return done;
         }
         if !state.in_progress.insert(name.clone()) {
             state.cuts += 1;
@@ -487,6 +505,7 @@ impl Subst {
         }
         let cuts_before = state.cuts;
         let bound = bound.clone();
+        state.tail_row = tail;
         let flat = self.flatten_type(&bound, state);
         state.in_progress.remove(name);
         if state.cuts == cuts_before {
@@ -496,6 +515,16 @@ impl Subst {
     }
 
     fn flatten_type(&self, ty: &Type, state: &mut FlattenState) -> Type {
+        // Past the budget, a type is left out whatever it is made of, a
+        // bound variable or a record written in place: a type stored once
+        // may be written many times over (each cycle cut, not memoised).
+        let tail_row = std::mem::take(&mut state.tail_row);
+        if let Some(budget) = state.budget {
+            if state.written >= budget && !tail_row && !matches!(ty, Type::Var(_)) && ty.has_parts()
+            {
+                return Type::Named(super::ty::ELIDED_TYPE_ID, Vec::new());
+            }
+        }
         state.written += 1;
         match ty {
             // Resolve variables at any depth, not just the top level —
@@ -818,6 +847,9 @@ struct FlattenState {
     budget: Option<usize>,
     /// The variable about to be expanded is a row's tail.
     expanding_tail: bool,
+    /// The type about to be written is the row a tail is bound to: written
+    /// whatever the budget (its fields' types aren't).
+    tail_row: bool,
 }
 
 impl IntoIterator for Subst {
@@ -1410,5 +1442,40 @@ mod tests {
         let mut s = Subst::empty();
         s.insert(flex(0), Type::Number);
         assert_eq!(s.resolve(&flex(99)).as_deref().cloned(), None);
+    }
+}
+
+#[cfg(test)]
+mod flatten_budget_tests {
+    use super::*;
+
+    /// A type that shares its parts (`x0 = {a: x1, b: x1}`, `x1 = {a: x2,
+    /// b: x2}`, …) is exponentially large written out as a tree: a bounded
+    /// flattening writes no more than its budget, however it is reached
+    /// (it used to write a memoised part whole, and a record stored in
+    /// place whatever the budget).
+    #[test]
+    fn a_bounded_flattening_stays_within_its_budget() {
+        // (The last one leads back to the first: each expansion cuts the
+        // cycle, so none is memoised.)
+        // Its size as written (variables left as they are).
+        fn nodes(t: &Type) -> usize {
+            match t {
+                Type::Row(r) => 1 + r.props.values().map(|e| nodes(&e.ty)).sum::<usize>(),
+                _ => 1,
+            }
+        }
+        for cyclic in [false, true] {
+            let mut subst = Subst::empty();
+            let depth = 40u32;
+            for i in 0..depth {
+                let next = if cyclic { (i + 1) % depth } else { i + 1 };
+                let next = Type::Var(TVarName::Flex(next));
+                let row = Type::object([("a", next.clone()), ("b", next)]);
+                subst.insert(TVarName::Flex(i), row);
+            }
+            let flat = subst.flatten_bounded(&Type::Var(TVarName::Flex(0)), 4_000);
+            assert!(nodes(&flat) < 20_000, "{}", nodes(&flat));
+        }
     }
 }

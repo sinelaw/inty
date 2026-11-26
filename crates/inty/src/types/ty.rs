@@ -1006,6 +1006,23 @@ impl Type {
 }
 
 impl Type {
+    /// Whether the type is made of other types (a record, a function, an
+    /// array, …), not a primitive, a literal or a variable.
+    pub fn has_parts(&self) -> bool {
+        matches!(
+            self,
+            Type::Row(_)
+                | Type::Func { .. }
+                | Type::Array(_)
+                | Type::Maybe(..)
+                | Type::Promise(_)
+                | Type::Map(_)
+                | Type::Tuple(_)
+                | Type::Union(_)
+                | Type::Named(_, _)
+        )
+    }
+
     /// Call `f` with each named type `self` mentions (a recursive or
     /// nominal type's id and arguments, a recursive row tail's included),
     /// outermost first.

@@ -761,15 +761,42 @@ impl InferState {
     /// Unify an array type with a row type.
     /// Arrays have structural properties like `length: Number`.
     fn unify_array_with_row(&mut self, span: Span, elem: &Type, row: &RowType) -> UnifyResult<()> {
-        // Check each property in the row against array's known properties
+        // Each property the row has is the array's, of the type a read of
+        // it has (`length`, or a method: a row made of reads, `xs.map(f)`
+        // on a value not known to be an array then, is one). A property
+        // the row may lack needn't be there; one arrays don't have, the
+        // row can't have.
         for (prop_name, entry) in &row.props {
-            match prop_name.0.as_str() {
-                "length" => {
-                    // Array.length is Number
-                    self.unify(span, &entry.ty, &Type::Number)?;
+            match self.array_member_type(elem, &prop_name.0) {
+                Some(ty) => {
+                    if self
+                        .unify_presence(span, &entry.presence, &crate::types::Presence::Pre)
+                        .is_err()
+                    {
+                        // Absent from the row: an array has it, though.
+                        return Err(TypeError::FieldPresenceMismatch {
+                            field: prop_name.0.clone(),
+                            with: ShownType::ty(&Type::Array(Box::new(elem.clone()))),
+                            without: ShownType::ty(&Type::Row(row.clone())),
+                            member: None,
+                            span,
+                        }
+                        .into());
+                    }
+                    self.unify_path.push(prop_name.0.clone());
+                    let unified = self.unify(span, &entry.ty, &ty);
+                    self.unify_path.pop();
+                    unified?;
                 }
-                _ => {
-                    // Unknown property - arrays don't have arbitrary properties
+                None if !matches!(
+                    self.main_subst.resolve_presence(&entry.presence),
+                    crate::types::Presence::Pre
+                ) =>
+                {
+                    // A property the row may lack: the array lacks it.
+                    self.unify_presence(span, &entry.presence, &crate::types::Presence::Abs)?;
+                }
+                None => {
                     return Err(TypeError::PropertyNotFound {
                         prop: prop_name.0.clone(),
                         obj_type: format!("{}[]", elem),
@@ -928,9 +955,11 @@ impl InferState {
                     {
                         return Err(self.field_presence_error(span, prop, r1, r2));
                     }
-                    self.unify_field_flags(span, prop, e1, e2)?;
                     self.unify_path.push(prop.0.clone());
-                    let unified = self.unify(span, &e1.ty, &e2.ty);
+                    // (Whether it is assigned or read only is the member's.)
+                    let unified = self
+                        .unify_field_flags(span, prop, e1, e2)
+                        .and_then(|()| self.unify(span, &e1.ty, &e2.ty));
                     let unified = unified.map_err(|e| self.at_member(e, &e1.ty, &e2.ty));
                     self.unify_path.pop();
                     unified?;

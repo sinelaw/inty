@@ -1122,6 +1122,28 @@ impl InferState {
     /// optional-chain handling for each segment, by call-expression
     /// handling to extract the method type without re-inferring the
     /// receiver, and recursively for union elimination.
+    /// The type of the property `property` of an array of `elem`s: its
+    /// `length`, or one of its methods, as the program's language has
+    /// them; `None` for a property arrays don't have.
+    pub(crate) fn array_member_type(&mut self, elem: &Type, property: &str) -> Option<Type> {
+        if property == "length" {
+            return Some(Type::Number);
+        }
+        // The primitive-method surface is language-specific: Python
+        // `list` vs JavaScript `Array` (issue #67). Lua has no
+        // method-call surface on sequences (yet).
+        let method = match self.language {
+            crate::ast::SourceLanguage::Python | crate::ast::SourceLanguage::Starlark => {
+                crate::builtins::python_list_method_type(self, elem, property)
+            }
+            crate::ast::SourceLanguage::JavaScript => {
+                crate::builtins::array_method_type(self, elem, property)
+            }
+            crate::ast::SourceLanguage::Lua => None,
+        }?;
+        Some(self.declared_callbacks_detached(&method))
+    }
+
     pub(crate) fn infer_member_on_type(
         &mut self,
         obj_type: &Type,
@@ -1184,23 +1206,8 @@ impl InferState {
                 }
             }
             Type::Array(elem_ty) => {
-                if property == "length" {
-                    return Ok(Type::Number);
-                }
-                // The primitive-method surface is language-specific: Python
-                // `list` vs JavaScript `Array` (issue #67). Lua has no
-                // method-call surface on sequences (yet).
-                let method = match language {
-                    SourceLanguage::Python | SourceLanguage::Starlark => {
-                        crate::builtins::python_list_method_type(self, elem_ty, property)
-                    }
-                    SourceLanguage::JavaScript => {
-                        crate::builtins::array_method_type(self, elem_ty, property)
-                    }
-                    SourceLanguage::Lua => None,
-                };
-                if let Some(ty) = method {
-                    return Ok(self.declared_callbacks_detached(&ty));
+                if let Some(ty) = self.array_member_type(elem_ty, property) {
+                    return Ok(ty);
                 }
             }
             Type::Number if language == SourceLanguage::JavaScript => {

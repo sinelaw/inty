@@ -6675,3 +6675,54 @@ fn a_failure_inside_a_member_names_the_member() {
         "{err}"
     );
 }
+
+// ---- Arrays against records ---------------------------------------------------
+
+/// A record made of reads (`holder.cursors.map(f)` while `holder` isn't
+/// known) later met by an array: each field it needs is the array's, of
+/// the type a read of it has. Only `length` was known, so any method read
+/// failed ("Property 'map' not found on type …[]").
+#[test]
+fn an_array_has_the_methods_a_record_of_reads_needs() {
+    let module = "let holder;\n\
+                  function attach(h) { holder = h; }\n\
+                  function firsts() { return holder.cursors.map((c) => c.pos).some((p) => p > 0); }";
+    let ok = "attach({ cursors: [{pos: 1}, {pos: 2}] });";
+    let mut state = InferState::new();
+    let program = crate::frontends::javascript::parse_source(module).unwrap();
+    let (_, env) = state
+        .infer_program_with_env(&initial_env(), &program)
+        .unwrap();
+    state.resolve_constraints().unwrap();
+    let program = crate::frontends::javascript::parse_at(ok, module.len() + 1).unwrap();
+    state.infer_program_with_env(&env, &program).unwrap();
+    assert!(state.errors.is_empty(), "{:?}", state.errors);
+    // An element of another type, and a property arrays don't have, fail.
+    for bad in [
+        "attach({ cursors: [{pos: \"x\"}] });",
+        "function sz() { return holder.cursors.size; } attach({ cursors: [1] });",
+    ] {
+        let (err, _) = first_error_across(module, bad);
+        assert!(
+            err.to_string().contains("cursors") || err.to_string().contains("size"),
+            "{bad}: {err}"
+        );
+    }
+}
+
+/// A member's flags (whether it can be assigned, or is the object's own)
+/// failing to agree is a mismatch in that member: the error named neither.
+#[test]
+fn a_flag_mismatch_names_the_member() {
+    let module = "let view;\n\
+                  function attach(v) { view = v; }\n\
+                  function pos() { return view.primary.pos + 1; }";
+    let user = "class View {\n\
+                  constructor() { this.cursors = [{pos: 1}]; }\n\
+                  get primary() { return this.cursors[0]; }\n\
+                }\n\
+                attach(new View());";
+    let (err, _) = first_error_across(module, user);
+    let text = err.to_string();
+    assert!(text.contains("in member `primary`"), "{text}");
+}
