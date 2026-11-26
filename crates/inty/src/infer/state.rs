@@ -1556,6 +1556,12 @@ impl InferState {
         // line.
         let mut err = self.unification_error(span, &sup, &sub);
         if self.quiet == 0 {
+            // Inside two records (an object passed where a class's uses
+            // expect one): the member that doesn't fit, and its types,
+            // rather than the two whole records.
+            if let Some(inner) = self.member_mismatch(span, &sup, &sub) {
+                return Err(inner);
+            }
             let note = match self.row_difference(&sup, &sub) {
                 Some(note) => Some(note),
                 None => self.invariance_note(span, &sub, &sup),
@@ -1567,6 +1573,24 @@ impl InferState {
             }
         }
         Err(err)
+    }
+
+    /// Why `sub` doesn't unify with `sup`, when it is one member of them
+    /// (`unify` names it, see `unify_path`): the error for that member,
+    /// found by unifying again in a snapshot that is then dropped (the
+    /// attempt in `subsume` is quiet, and its error is not rendered).
+    /// None when the mismatch is at the top of the two types.
+    fn member_mismatch(&mut self, span: Span, sup: &Type, sub: &Type) -> Option<IntyError> {
+        let snap = self.snapshot_inference();
+        let result = self.unify(span, sup, sub);
+        self.restore_snapshot(snap);
+        let err = result.err()?;
+        let named = match err.as_type() {
+            Some(crate::error::TypeError::UnificationError { member, .. })
+            | Some(crate::error::TypeError::ThisMismatch { member, .. }) => member.is_some(),
+            _ => false,
+        };
+        named.then_some(err)
     }
 
     /// When `sub` would fit `sup` if arrays and records were covariant,

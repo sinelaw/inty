@@ -43,6 +43,14 @@ pub enum TypeOrigin {
     },
 }
 
+/// Where a mismatch is, in the larger types compared: " in member `m`"
+/// (nothing at their top).
+fn in_member(member: Option<&str>) -> String {
+    member
+        .map(|m| format!(" in member `{m}`"))
+        .unwrap_or_default()
+}
+
 /// The text of [`TypeError::ThisMismatch`].
 fn this_mismatch_message(
     member: Option<&str>,
@@ -372,10 +380,15 @@ impl ParseError {
 /// Type checking errors.
 #[derive(Debug, Clone, Error)]
 pub enum TypeError {
-    #[error("Cannot unify types: expected {expected}, found {found}")]
+    /// Two types that don't unify. `member`: the property path
+    /// (`editor.ask`) of the larger types being compared where they are,
+    /// when the mismatch is inside them (`expected` and `found` are then
+    /// that member's types).
+    #[error("Cannot unify types{}: expected {expected}, found {found}", in_member(member.as_deref()))]
     UnificationError {
         expected: String,
         found: String,
+        member: Option<String>,
         span: Span,
         context: Option<String>,
         expected_origin: Option<TypeOrigin>,

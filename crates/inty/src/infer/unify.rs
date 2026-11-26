@@ -1203,6 +1203,7 @@ impl InferState {
             return TypeError::UnificationError {
                 expected: String::new(),
                 found: String::new(),
+                member: None,
                 span,
                 context: None,
                 expected_origin: None,
@@ -1233,6 +1234,7 @@ impl InferState {
         TypeError::UnificationError {
             expected,
             found,
+            member: self.member_path(),
             span,
             context,
             expected_origin,

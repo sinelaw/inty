@@ -236,6 +236,7 @@ fn write_error_with<W: Write>(
     if let Some(TypeError::UnificationError {
         expected,
         found,
+        member,
         span,
         context,
         expected_origin,
@@ -247,8 +248,12 @@ fn write_error_with<W: Write>(
         let found_color = colors.next();
         let error_color = Color::Red;
 
+        let at = member
+            .as_ref()
+            .map(|m| format!(" in member `{m}`"))
+            .unwrap_or_default();
         let msg = format!(
-            "Type mismatch: {} '{}', {} '{}'",
+            "Type mismatch{at}: {} '{}', {} '{}'",
             tint("expected", expected_color),
             expected,
             tint("found", found_color),
@@ -721,6 +726,7 @@ mod tests {
         let error = IntyError::from(TypeError::UnificationError {
             expected: "String".to_string(),
             found: "Number".to_string(),
+            member: None,
             span,
             context: None,
             expected_origin: None,
