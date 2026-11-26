@@ -20,6 +20,35 @@ pub fn print_stmt(stmt: &Stmt) -> String {
 
 /// Pretty print a program to JavaScript source.
 pub fn print_program(program: &Program) -> String {
+    print_program_with(program, std::collections::HashMap::new())
+}
+
+thread_local! {
+    /// Text printed for a declaration in place of its AST, keyed by its
+    /// span: a class as written (a `class` is lowered to a function).
+    static AS_WRITTEN: std::cell::RefCell<std::collections::HashMap<Span, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The declaration at `span` as written, when it is to be printed so.
+fn as_written(span: Span) -> Option<String> {
+    AS_WRITTEN.with(|m| m.borrow().get(&span).cloned())
+}
+
+/// [`print_program`], printing each declaration whose span `as_written`
+/// has as the text it gives (each class as written, from
+/// [`crate::infer::decorate_with_classes`]).
+pub fn print_program_with(
+    program: &Program,
+    as_written: std::collections::HashMap<Span, String>,
+) -> String {
+    let previous = AS_WRITTEN.with(|m| m.replace(as_written));
+    let out = print_statements(program);
+    AS_WRITTEN.with(|m| m.replace(previous));
+    out
+}
+
+fn print_statements(program: &Program) -> String {
     let mut out = String::new();
     for stmt in &program.statements {
         write_stmt(&mut out, stmt, 0).unwrap();
@@ -690,8 +719,11 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                     params,
                     body,
                     type_annotation,
-                    ..
+                    span,
                 } => {
+                    if let Some(text) = as_written(*span) {
+                        return write!(w, "export {}", text);
+                    }
                     if let Some(ann) = type_annotation {
                         writeln!(w, "/** export function {}{} */", name, ann.content)?;
                         write!(w, "{}", ind)?;
@@ -707,6 +739,12 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                     write_stmt(w, body, indent)
                 }
                 ExportDecl::Default { value, .. } => {
+                    if let Some(text) = match value {
+                        Expr::Function { span, .. } => as_written(*span),
+                        _ => None,
+                    } {
+                        return write!(w, "export default {}", text);
+                    }
                     write!(w, "export default ")?;
                     write_expr(w, value, false)?;
                     write!(w, ";")
@@ -961,8 +999,12 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             params,
             body,
             type_annotation,
+            span,
             ..
         } => {
+            if let Some(text) = as_written(*span) {
+                return write!(w, "{}", text);
+            }
             if let Some(ann) = type_annotation {
                 // `(…) => R`, or a type the name can't run into
                 // (`new (…) => R`, `this: T => (…) => R`).

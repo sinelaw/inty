@@ -8,13 +8,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-use inty::ast::pretty::print_program;
+use inty::ast::pretty::print_program_with;
 use inty::diagnostics::{print_error, print_error_in, print_error_plain, print_warning_in};
 use inty::error::{IntyError, LocatedError};
 use inty::frontends::javascript::lexer::{Scanner, Token};
 use inty::frontends::javascript::parser::Parser;
 use inty::frontends::Language;
-use inty::infer::{decorate_with_types, InferState, TypeEnv};
+use inty::infer::{decorate_with_classes, InferState, TypeEnv};
 use inty::stdlib::{initial_env_with_stdlib, load_lib};
 /// Counters reported after a successful run — surfaced in the summary
 /// line so the user gets a confirming signal that scales with the work
@@ -1131,8 +1131,9 @@ fn run_inference(
             // only makes sense for the JavaScript frontend. For other
             // languages the summary line is the only success output.
             if lang == Language::JavaScript {
-                let decorated = decorate_with_types(&program, &final_env, state);
-                print!("{}", print_program(&decorated));
+                let (decorated, classes) =
+                    decorate_with_classes(&program, &final_env, state, source);
+                print!("{}", print_program_with(&decorated, classes));
             }
 
             let symbols = final_env

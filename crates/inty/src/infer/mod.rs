@@ -24,7 +24,7 @@ mod zonk;
 #[cfg(test)]
 mod tests;
 
-pub use decorate::decorate_with_types;
+pub use decorate::{decorate_with_classes, decorate_with_types};
 pub use env::{EnvFree, TypeEnv};
 pub use narrow::{apply_narrowing, Narrowing, Path};
 pub use state::{DeclTiming, InferConfig, InferState, InferWarning, PendingConstraint, TypeClass};

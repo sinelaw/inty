@@ -18,16 +18,30 @@ use super::state::InferState;
 /// fresh [`PrettyContext`].
 pub struct Decorator<'a> {
     state: &'a InferState,
+    /// The program's source, when its classes are to be shown as written
+    /// (see [`decorate_with_classes`]).
+    source: Option<&'a str>,
+    /// Each class's text, keyed by its declaration's span: its source with
+    /// an annotation above each method.
+    classes: std::collections::HashMap<Span, String>,
+    /// The spans of the program's class declarations.
+    class_decls: std::collections::HashSet<Span>,
 }
 
 impl<'a> Decorator<'a> {
     pub fn new(state: &'a InferState) -> Self {
-        Self { state }
+        Self {
+            state,
+            source: None,
+            classes: std::collections::HashMap::new(),
+            class_decls: std::collections::HashSet::new(),
+        }
     }
 
     /// Decorate a program with inferred types.
     /// Returns a new program with type annotations added.
     pub fn decorate_program(&mut self, program: &Program, env: &TypeEnv) -> Program {
+        self.class_decls = program.class_decls.iter().copied().collect();
         let mut current_env = env.clone();
         let mut decorated_stmts = Vec::new();
 
@@ -116,6 +130,7 @@ impl<'a> Decorator<'a> {
                         .map(|scheme| self.scheme_to_annotation(scheme, *span))
                 };
 
+                self.note_class(name, body, *span, *name_span, env);
                 let (decorated_body, _) = self.decorate_stmt(body, env);
 
                 let new_env = if let Some(scheme) = env.lookup(name) {
@@ -428,9 +443,30 @@ impl<'a> Decorator<'a> {
                 env.clone(),
             ),
             Stmt::Export { declaration, span } => (
-                Stmt::Export {
-                    declaration: declaration.clone(),
-                    span: *span,
+                {
+                    match declaration {
+                        ExportDecl::Function {
+                            name,
+                            body,
+                            span: decl_span,
+                            ..
+                        } => self.note_class(name, body, *decl_span, None, env),
+                        ExportDecl::Default {
+                            value:
+                                Expr::Function {
+                                    name: Some(name),
+                                    body,
+                                    span: decl_span,
+                                    ..
+                                },
+                            ..
+                        } => self.note_class(name, body, *decl_span, None, env),
+                        _ => {}
+                    }
+                    Stmt::Export {
+                        declaration: declaration.clone(),
+                        span: *span,
+                    }
                 },
                 env.clone(),
             ),
@@ -718,6 +754,322 @@ impl<'a> Decorator<'a> {
             content_start: None,
         }
     }
+}
+
+impl Decorator<'_> {
+    /// When the function declared at `span` is a class's (lowered from
+    /// `class NAME { … }`), its text as written, with an annotation above
+    /// each method that has none (`/** function m(x: T) => R */`, which
+    /// the checker reads back), kept for the printer.
+    fn note_class(
+        &mut self,
+        name: &str,
+        body: &Stmt,
+        span: Span,
+        name_span: Option<Span>,
+        env: &TypeEnv,
+    ) {
+        let Some(source) = self.source else {
+            return;
+        };
+        if !self.class_decls.contains(&span) || span.end > source.len() {
+            return;
+        }
+        let scheme = self
+            .state
+            .get_decl_scheme(crate::ast::function_name_span(name_span, span, name))
+            .or_else(|| env.lookup(name));
+        let mut inserts: Vec<(usize, String)> = Vec::new();
+        if let Some(scheme) = scheme {
+            for (method, params, at) in class_methods(body) {
+                if let Some(text) = self.method_annotation(scheme, method, params) {
+                    inserts.push((at, text));
+                }
+            }
+        }
+        // Each annotation on a line of its own above its method, indented
+        // as it is (or, after something else on the method's line, just
+        // before it).
+        let mut text = source[span.start..span.end].to_string();
+        inserts.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        for (at, annotation) in inserts {
+            if at < span.start || at > span.end {
+                continue;
+            }
+            let line_start = source[..at].rfind('\n').map_or(0, |i| i + 1);
+            let before = &source[line_start..at];
+            let rel = at - span.start;
+            if line_start >= span.start && before.chars().all(char::is_whitespace) {
+                text.insert_str(rel, &format!("/** {annotation} */\n{before}"));
+            } else {
+                text.insert_str(rel, &format!("/** {annotation} */ "));
+            }
+        }
+        self.classes.insert(span, text);
+    }
+
+    /// `function NAME(…) => R` for the method `name` of the class whose
+    /// constructor has `scheme`: the method's type in the class's
+    /// instance, with the class's type variables it mentions (and their
+    /// constraints) quantified, and `this` left out when it is the
+    /// instance (an annotated method's `this` is). `None` when the type
+    /// isn't known or is too large to show.
+    fn method_annotation(
+        &self,
+        scheme: &TypeScheme,
+        name: &str,
+        params: &[Param],
+    ) -> Option<String> {
+        let ctor = self.state.flatten_type(&scheme.body.ty);
+        let (_, _, ret) = super::features::functions::extract_callable(&ctor)?;
+        // The instance: the class's type, or a row that is only it.
+        let (class_id, args) = match &ret {
+            Type::Named(id, args) => (id, args),
+            Type::Row(row) if row.props.is_empty() => match &row.tail {
+                crate::types::RowTail::Recursive(id, args) => (id, args),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let Type::Row(instance) = self.state.unroll_named(*class_id, args)? else {
+            return None;
+        };
+        let entry = instance
+            .props
+            .get(&crate::types::PropName::from(name.to_string()))?;
+        let method = self.state.flatten_type(&entry.ty);
+        let (this_type, method_params, ret) =
+            super::features::functions::extract_callable(&method)?;
+        // The instance, as the class's type (`Counter`, printed by name):
+        // the class's type itself, or a record of the instance's fields
+        // (an argument of the class), which a method's `this` and a
+        // `return this` are. As the language server shows a record of an
+        // object's own fields as `Self`, it is told by its fields' names.
+        let class = Type::Named(*class_id, args.clone());
+        let fields: Option<Vec<&crate::types::PropName>> =
+            match self.field_row_param(*class_id).and_then(|i| args.get(i)) {
+                Some(Type::Row(r)) if !r.props.is_empty() => Some(r.props.keys().collect()),
+                _ => None,
+            };
+        let is_instance = |t: &Type| match t {
+            Type::Named(id, _) => id == class_id,
+            Type::Row(r) if r.props.is_empty() => {
+                matches!(&r.tail, crate::types::RowTail::Recursive(id, _) if id == class_id)
+            }
+            Type::Row(r) => fields.as_ref() == Some(&r.props.keys().collect()),
+            _ => false,
+        };
+        let this_type = match &this_type {
+            None | Some(Type::ArrowThis | Type::NewTarget | Type::Var(_)) => None,
+            Some(t) if is_instance(t) => None,
+            Some(t) => Some(Box::new(naming_instance(t, &is_instance, &class))),
+        };
+        // A method whose type mentions its own class (a `return this`)
+        // has none written: the class's type takes its own field record as
+        // an argument, which can't be written out.
+        let mentions_class = |t: &Type| naming_instance(t, &is_instance, &Type::Error) != *t;
+        if mentions_class(&ret) || method_params.iter().any(|p| mentions_class(&p.ty)) {
+            return None;
+        }
+        let ret = Box::new(naming_instance(&ret, &is_instance, &class));
+        let method_params = method_params
+            .into_iter()
+            .map(|mut p| {
+                p.ty = naming_instance(&p.ty, &is_instance, &class);
+                p
+            })
+            .collect::<Vec<_>>();
+        let method_params: Vec<crate::types::FuncParam> = method_params
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut p)| {
+                if p.name.is_none() {
+                    p.name = params.get(i).map(|p| p.name.clone());
+                }
+                p
+            })
+            .collect();
+        let ty = Type::Func {
+            this_type,
+            params: method_params,
+            ret,
+        };
+        if self.state.flattened_size(&ty) > MAX_SHOWN_TYPE {
+            return None;
+        }
+        // The class's variables the method mentions, and the constraints
+        // on them (with the variables those mention).
+        let mut vars = ty.free_vars();
+        let mut preds = Vec::new();
+        let mut taken = vec![false; scheme.body.preds.len()];
+        loop {
+            let mut grew = false;
+            for (i, p) in scheme.body.preds.iter().enumerate() {
+                if taken[i] {
+                    continue;
+                }
+                let pred_vars: std::collections::HashSet<_> = p
+                    .types
+                    .iter()
+                    .flat_map(|t| self.state.flatten_type(t).free_vars())
+                    .collect();
+                if pred_vars.iter().any(|v| vars.contains(v)) {
+                    taken[i] = true;
+                    preds.push(p.clone());
+                    vars.extend(pred_vars);
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        // Every variable, which an annotation declares: the class's, in
+        // its order, then any other.
+        let mut quantified: Vec<_> = scheme
+            .vars
+            .iter()
+            .filter(|v| vars.contains(v))
+            .cloned()
+            .collect();
+        let mut rest: Vec<_> = vars
+            .into_iter()
+            .filter(|v| !quantified.contains(v))
+            .collect();
+        rest.sort_by_key(|v| v.id());
+        quantified.extend(rest);
+        let method_scheme = TypeScheme {
+            vars: quantified,
+            pvars: scheme.pvars.clone(),
+            body: crate::types::QualType::with_preds(preds, ty),
+        };
+        let displayed = self.state.display_scheme(&method_scheme);
+        let mut ctx =
+            PrettyContext::with_nominal_names(self.state.nominal_names()).showing_param_names();
+        let content = ctx.format_scheme(&displayed);
+        // Shown only if it reads back: each name a type in scope, with
+        // its arguments.
+        crate::infer::type_parser::parse_type_annotation_with_aliases(
+            &content,
+            Span::default(),
+            0,
+            &self.state.type_aliases,
+        )
+        .ok()?;
+        let gap = if content.starts_with(['(', '<']) {
+            ""
+        } else {
+            " "
+        };
+        Some(format!("function {name}{gap}{content}"))
+    }
+}
+
+impl Decorator<'_> {
+    /// Which of the class `class_id`'s parameters is its instance's field
+    /// row: the one its methods take `this` as (`{ | ρ}`).
+    fn field_row_param(&self, class_id: crate::types::TypeId) -> Option<usize> {
+        let def = self.state.get_named_type(class_id)?;
+        let Type::Row(body) = &def.body else {
+            return None;
+        };
+        body.props.values().find_map(|entry| {
+            let (this, _, _) = super::features::functions::extract_callable(&entry.ty)?;
+            match this? {
+                Type::Row(r) if r.props.is_empty() => match &r.tail {
+                    crate::types::RowTail::Open(v) => def.params.iter().position(|p| p == v),
+                    _ => None,
+                },
+                _ => None,
+            }
+        })
+    }
+}
+
+/// `ty` with each type `is_instance` holds of replaced by `class`.
+fn naming_instance(ty: &Type, is_instance: &dyn Fn(&Type) -> bool, class: &Type) -> Type {
+    if is_instance(ty) {
+        return class.clone();
+    }
+    let go = |t: &Type| naming_instance(t, is_instance, class);
+    match ty {
+        Type::Func {
+            this_type,
+            params,
+            ret,
+        } => Type::Func {
+            this_type: this_type.as_ref().map(|t| Box::new(go(t))),
+            params: params
+                .iter()
+                .map(|p| {
+                    let mut p = p.clone();
+                    p.ty = go(&p.ty);
+                    p
+                })
+                .collect(),
+            ret: Box::new(go(ret)),
+        },
+        Type::Row(row) => {
+            let mut row = row.clone();
+            for entry in row.props.values_mut() {
+                entry.ty = go(&entry.ty);
+            }
+            Type::Row(row)
+        }
+        Type::Array(t) => Type::Array(Box::new(go(t))),
+        Type::Map(t) => Type::Map(Box::new(go(t))),
+        Type::Promise(t) => Type::Promise(Box::new(go(t))),
+        Type::Tuple(ts) => Type::Tuple(ts.iter().map(go).collect()),
+        Type::Union(ts) => Type::Union(ts.iter().map(go).collect()),
+        Type::Named(id, args) => Type::Named(*id, args.iter().map(go).collect()),
+        Type::Maybe(n, t) => Type::Maybe(n.clone(), Box::new(go(t))),
+        other => other.clone(),
+    }
+}
+
+/// The methods (on the prototype, without an annotation of their own) of
+/// the class lowered to a function whose body is `body`: each one's name,
+/// parameters and where it starts.
+fn class_methods(body: &Stmt) -> Vec<(&str, &[Param], usize)> {
+    let Stmt::Block { body, .. } = body else {
+        return Vec::new();
+    };
+    let Some(Stmt::Return {
+        argument: Some(Expr::Object { properties, .. }),
+        ..
+    }) = body.last()
+    else {
+        return Vec::new();
+    };
+    properties
+        .iter()
+        .filter_map(|p| match p {
+            PropDef::Method {
+                key: PropKey::Ident(name),
+                params,
+                type_annotation: None,
+                proto: true,
+                span,
+                ..
+            } => Some((name.as_str(), params.as_slice(), span.start)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Decorate a program with inferred types, and give each of its classes'
+/// text as written in `source`, with an annotation above each method,
+/// keyed by the class's span (for [`crate::ast::pretty::print_program_with`]).
+pub fn decorate_with_classes(
+    program: &Program,
+    env: &TypeEnv,
+    state: &InferState,
+    source: &str,
+) -> (Program, std::collections::HashMap<Span, String>) {
+    let mut decorator = Decorator::new(state);
+    decorator.source = Some(source);
+    let decorated = decorator.decorate_program(program, env);
+    (decorated, decorator.classes)
 }
 
 /// Convenience function to decorate a program with inferred types.
