@@ -271,6 +271,14 @@ unterminated-comment error.
   a program's environment (prelude, imports, Starlark `load`s) with
   `frontends::program_env`; the language server now starts Python and Lua
   from the same stdlib as the CLI, and Python from stdin sees its prelude.
+- `inty.json` `"libs"`: declaration files every module under the config
+  is checked with, as `--lib` loads them, found from the file checked (the
+  nearest `inty.json` above it). The language server, which takes no
+  `--lib`, checked a project whose types live in a shared `.d.js` without
+  them: every annotation naming one of its types failed, and was ignored.
+  An entry's project libs are loaded once per run, a lib's errors are
+  reported against it, and a config or lib that doesn't read against the
+  entry.
 - An import that fails (a path that doesn't resolve, a cycle, a name the
   module doesn't export) is reported, and its names are `Error`; the
   importer is still checked. It used to stop the importer.

@@ -493,6 +493,105 @@ fn load_imported(
     Ok(checked)
 }
 
+/// Register `path`'s `source` (its spans get a range of their own, so
+/// diagnostics say which file they are in) and attribute errors to it
+/// from now on. Returns where its spans start and the source errors were
+/// attributed to before, for the caller to restore.
+fn enter_source(
+    state: &mut InferState,
+    path: &Path,
+    source: &str,
+) -> (usize, Option<crate::error::SourceFile>) {
+    // Shown relative to the working directory, like the entry file.
+    let display = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(cwd).ok())
+        .unwrap_or(path)
+        .display()
+        .to_string();
+    let base = state.sources.add(display.clone(), source.to_string());
+    let prev = state.set_current_source(Some(crate::error::SourceFile {
+        path: display,
+        text: source.to_string(),
+    }));
+    (base, prev)
+}
+
+/// `env` with the declaration files the nearest `inty.json` above `path`
+/// lists under `"libs"` loaded, in order, as `--lib` loads them: their
+/// declarations are globals. The CLI and the language server check an
+/// entry file in this environment (its imports inherit it), so a project
+/// whose types live in a shared `.d.js` checks the same way in both.
+///
+/// A project's libs are loaded once per run, onto the run's one base
+/// environment (`InferState::project_libs`): every entry under the same
+/// `inty.json` sees the same declarations, the same named types. A config
+/// that doesn't parse, or a lib that doesn't read, is reported against
+/// the entry; a lib's type errors against the lib, keeping what of it
+/// checks, as with an import.
+pub fn with_project_libs(state: &mut InferState, env: TypeEnv, path: &Path) -> TypeEnv {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let config = match find_inty_config(dir) {
+        Ok(Some(config)) if !config.libs.is_empty() => config,
+        Ok(_) => return env,
+        Err(message) => {
+            state.push_error(config_error(message));
+            return env;
+        }
+    };
+    let file = config.config_dir.join("inty.json");
+    let key = file.canonicalize().unwrap_or(file);
+    if let Some(env) = state.project_libs.get(&key) {
+        return env.clone();
+    }
+    let mut env = env;
+    for lib in &config.libs {
+        let path = anchor_under_config(&config, lib);
+        match std::fs::read_to_string(&path) {
+            Ok(source) => env = load_lib(state, env, &path, &source),
+            Err(e) => state.push_error(config_error(format!(
+                "cannot read lib {} listed in {}: {}",
+                path.display(),
+                key.display(),
+                e
+            ))),
+        }
+    }
+    state.project_libs.insert(key, env.clone());
+    env
+}
+
+/// A problem with the project's configuration, reported at the start of
+/// the file being checked.
+fn config_error(message: String) -> IntyError {
+    IntyError::from(crate::error::TypeError::Module {
+        message,
+        span: crate::span::Span::new(0, 0),
+    })
+}
+
+/// Check the declaration file at `path` in `env`, returning `env` with
+/// what it declares. Its errors are reported against it; a statement that
+/// fails binds what it declares to `Error`.
+fn load_lib(state: &mut InferState, env: TypeEnv, path: &Path, source: &str) -> TypeEnv {
+    let (base, prev_source) = enter_source(state, path, source);
+    let loaded = match crate::frontends::javascript::parse_at(source, base) {
+        Ok(program) => match state.infer_program_with_env(&env, &program) {
+            Ok((_ty, loaded)) => loaded,
+            Err(e) => state.take_env_after_errors().unwrap_or_else(|| {
+                state.push_error(e);
+                env
+            }),
+        },
+        Err(e) => {
+            state.push_error(e);
+            env
+        }
+    };
+    state.set_current_source(prev_source);
+    loaded
+}
+
 /// Parse and infer a single module file, returning the inferred env and
 /// the module's effective export table (with re-exports resolved).
 ///
@@ -525,18 +624,7 @@ fn load_module(
     // file they are in. While it is checked, errors are attributed to it;
     // on failure the attribution is left in place for the caller that
     // reports the propagated error.
-    // Shown relative to the working directory, like the entry file.
-    let display = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| path.strip_prefix(cwd).ok())
-        .unwrap_or(path)
-        .display()
-        .to_string();
-    let base = state.sources.add(display.clone(), source.clone());
-    let prev_source = state.set_current_source(Some(crate::error::SourceFile {
-        path: display,
-        text: source.clone(),
-    }));
+    let (base, prev_source) = enter_source(state, path, &source);
     let program = crate::frontends::javascript::parse_at(&source, base)?;
 
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -547,8 +635,14 @@ fn load_module(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    // Resolve imports, then infer, then resolve re-exports. The cycle set
-    // is shared with both passes.
+    // An entry module is checked with its project's libs (an imported one
+    // has them from its importer). Then resolve imports, infer, and
+    // resolve re-exports. The cycle set is shared with both passes.
+    let starting_env = if imported {
+        starting_env
+    } else {
+        with_project_libs(state, starting_env, path)
+    };
     let env_with_imports =
         resolve_imports(state, starting_env.clone(), &program, &base_dir, visiting);
     let started = std::time::Instant::now();
@@ -615,6 +709,9 @@ fn load_module(
 /// paths in the config; `paths` maps module-spec patterns to one or
 /// more candidate file paths.
 ///
+/// `libs` lists declaration files every module under the config is
+/// checked with, as `--lib` loads them (see [`with_project_libs`]).
+///
 /// Example:
 /// ```json
 /// {
@@ -622,7 +719,8 @@ fn load_module(
 ///   "paths": {
 ///     "@hotwired/stimulus": ["./inty-stubs/@hotwired/stimulus.d.js"],
 ///     "controllers/*": ["./controllers/*"]
-///   }
+///   },
+///   "libs": ["./types/app.d.js"]
 /// }
 /// ```
 #[derive(Debug, Default, serde::Deserialize)]
@@ -631,6 +729,10 @@ struct IntyConfig {
     base_url: Option<String>,
     #[serde(default)]
     paths: std::collections::HashMap<String, Vec<String>>,
+    /// Declaration files, relative to the config's directory, in the
+    /// order they're loaded.
+    #[serde(default)]
+    libs: Vec<String>,
     /// Path on disk to the directory that contained `inty.json`.
     /// Filled in after parse so the path entries can be anchored
     /// correctly.
@@ -1630,6 +1732,124 @@ export function f(i, name) {
              const x = xs[view.count];",
         );
         check(dir.path(), "main.js").expect("start and count are Numbers");
+    }
+
+    /// A project with an `inty.json` listing `types/app.d.js` as a lib.
+    fn project_with_lib(lib: &str) -> TempDir {
+        let dir = tempdir();
+        std::fs::create_dir_all(dir.path().join("types")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src/deep")).unwrap();
+        write_file(dir.path(), "types/app.d.js", lib);
+        write_file(
+            dir.path(),
+            "inty.json",
+            r#"{ "libs": ["./types/app.d.js"] }"#,
+        );
+        dir
+    }
+
+    const ITEM_LIB: &str = "/** type Item = {label: String} */\n\
+                            /** const none: Item[] */ const none;\n";
+
+    /// Check the entry at `path` as `inty FILE` and the language server
+    /// do: the environment from `program_env`, then the program.
+    fn check_entry_file(path: &Path) -> Vec<String> {
+        let source = std::fs::read_to_string(path).unwrap();
+        let lang = crate::frontends::Language::JavaScript;
+        let program = crate::frontends::parse(lang, &source).unwrap();
+        let mut state = InferState::new();
+        let base = crate::builtins::initial_env();
+        let env =
+            crate::frontends::program_env(&mut state, base, &program, lang, Some(path)).unwrap();
+        let _ = state.infer_program_with_env(&env, &program);
+        state.take_errors().iter().map(|e| e.to_string()).collect()
+    }
+
+    #[test]
+    fn inty_json_libs_declare_the_project_s_types_and_globals() {
+        let dir = project_with_lib(ITEM_LIB);
+        // The nearest inty.json above the file, however deep.
+        let main = write_file(
+            dir.path(),
+            "src/deep/main.js",
+            "/** function first(xs: Item[]) => String */\n\
+             function first(xs) { return xs[0].label; }\n\
+             const s = first(none);\n",
+        );
+        assert_eq!(check_entry_file(&main), Vec::<String>::new());
+
+        // Without the config the names are unknown.
+        std::fs::remove_file(dir.path().join("inty.json")).unwrap();
+        let errors = check_entry_file(&main);
+        assert!(
+            errors.iter().any(|e| e.contains("Item")),
+            "an unknown Item is reported: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn entries_of_one_project_load_its_libs_once() {
+        let dir = project_with_lib(ITEM_LIB);
+        let a = write_file(dir.path(), "src/a.js", "const a = none;\n");
+        let b = write_file(dir.path(), "src/deep/b.js", "const b = none;\n");
+        let mut state = InferState::new();
+        let base = crate::builtins::initial_env();
+        for entry in [&a, &b] {
+            check_entry(&mut state, base.clone(), entry).unwrap();
+        }
+        assert!(state.take_errors().is_empty());
+        assert_eq!(state.project_libs.len(), 1);
+        // One load: the lib's text is registered once.
+        let loads = state
+            .sources
+            .files()
+            .filter(|(path, _)| path.ends_with("app.d.js"))
+            .count();
+        assert_eq!(loads, 1);
+    }
+
+    #[test]
+    fn a_lib_s_errors_are_its_own_and_the_rest_of_it_is_kept() {
+        let dir = project_with_lib(
+            "/** type Item = {label: String} */\n\
+             /** const none: Item[] */ const none;\n\
+             const broken = 1 - {};\n",
+        );
+        let main = write_file(dir.path(), "main.js", "const n = none;\n");
+        let mut state = InferState::new();
+        let source = std::fs::read_to_string(&main).unwrap();
+        let program = parse(&source).unwrap();
+        let env = crate::frontends::program_env(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            crate::frontends::Language::JavaScript,
+            Some(&main),
+        )
+        .unwrap();
+        assert!(
+            env.lookup("none").is_some(),
+            "what of the lib checks is kept"
+        );
+        let located = state.take_located_errors();
+        assert_eq!(located.len(), 1, "{located:?}");
+        let source = located[0]
+            .source
+            .as_ref()
+            .expect("reported against the lib");
+        assert!(source.path.ends_with("app.d.js"), "{}", source.path);
+    }
+
+    #[test]
+    fn a_lib_that_does_not_read_is_reported_against_the_entry() {
+        let dir = tempdir();
+        write_file(dir.path(), "inty.json", r#"{ "libs": ["./missing.d.js"] }"#);
+        let main = write_file(dir.path(), "main.js", "const n = 1;\n");
+        let errors = check_entry_file(&main);
+        assert!(
+            errors.len() == 1 && errors[0].contains("cannot read lib"),
+            "{errors:?}"
+        );
     }
 
     fn tempdir() -> TempDir {

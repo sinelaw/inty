@@ -63,8 +63,9 @@ pub fn parse(language: Language, source: &str) -> Result<Program> {
 }
 
 /// The environment `program` is checked in: `base` (the built-ins and
-/// any libraries) with its language's prelude, and what it imports
-/// resolved from the file at `path`. Without a path (source from stdin,
+/// any libraries) with its language's prelude, a JavaScript project's
+/// libs (`inty.json` `"libs"`), and what it imports resolved from the
+/// file at `path`. Without a path (source from stdin,
 /// an editor buffer not yet saved) imports are left unresolved, and a
 /// Starlark program's `load`ed names are bound unchecked.
 ///
@@ -85,7 +86,8 @@ pub fn program_env(
     let mut visiting = std::collections::HashSet::new();
     match language {
         Language::JavaScript => Ok(match path {
-            Some(_) => {
+            Some(path) => {
+                let base = crate::modules::with_project_libs(state, base, path);
                 crate::modules::resolve_imports(state, base, program, &base_dir(), &mut visiting)
             }
             None => base,

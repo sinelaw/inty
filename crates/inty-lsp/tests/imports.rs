@@ -96,3 +96,21 @@ fn a_document_with_no_file_leaves_its_imports_unresolved() {
     let analysis = Analysis::check_document(main, Language::JavaScript, None);
     assert_eq!(hover(&analysis, main, "n ="), "Number");
 }
+
+#[test]
+fn the_project_s_libs_declare_what_annotations_name() {
+    let project = Project::new(&[
+        (
+            "app.d.js",
+            "/** type Item = {label: String} */\n/** const none: Item[] */ const none;\n",
+        ),
+        ("inty.json", r#"{ "libs": ["./app.d.js"] }"#),
+    ]);
+    let main = "/** function matching(items: Item[], q: String) => Item[] */\n\
+                function matching(items, q) { return items.filter(it => it.label === q); }\n\
+                const hits = matching(none, \"x\");\n";
+    let analysis = check(main, &project.path("main.js"));
+    assert!(errors(&analysis).is_empty(), "{:?}", errors(&analysis));
+    assert_eq!(hover(&analysis, main, "q) {"), "String");
+    assert_eq!(hover(&analysis, main, "hits ="), "{label: String}[]");
+}

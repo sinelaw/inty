@@ -263,6 +263,18 @@ which needs them — see [docs/design-notes.md](docs/design-notes.md).
 
 ## Using inty on a real project
 
+Declarations a project's modules share (its own types, a library's API)
+go in a `.d.js` file, listed in an `inty.json` at the project's root:
+
+```json
+{ "libs": ["./types/app.d.js"] }
+```
+
+`inty FILE` and the language server load the libs of the nearest
+`inty.json` above the file, so the editor checks what the command line
+does. (`inty --lib PATH` loads one for a single run.) `inty.json` also maps
+import specifiers to files (`"paths"`, `"baseUrl"`, as in `tsconfig.json`).
+
 [docs/patterns.md](docs/patterns.md) collects the patterns a real ~6k-line
 vanilla-JS application (Rosaclef) settled on — typed FFI boundaries, brand
 newtypes, dictionaries — and which workarounds are no longer needed.

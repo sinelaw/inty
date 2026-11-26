@@ -928,7 +928,10 @@ DESCRIPTION:
     By default, inty auto-loads the embedded core and DOM declarations
     (stdlib/core.d.js and stdlib/dom.d.js). Pass --no-stdlib to disable
     them, or --lib <path> to load additional user-supplied declarations
-    (e.g. for a third-party library).
+    (e.g. for a third-party library). A project lists the declaration
+    files its modules share in an inty.json at its root,
+    `{{ "libs": ["./types/app.d.js"] }}`: every file under it is checked
+    with them, by `inty FILE` and the language server alike.
 
 EXAMPLES:
     inty example.js                         Check example.js
