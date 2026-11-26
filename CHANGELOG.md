@@ -219,11 +219,14 @@ unterminated-comment error.
 
 - Checking is faster where many functions are generalised with inferred
   recursive types around (an object whose methods take it as `this`):
-  Fresh's web client took 303 s, now under a minute. Generalising went
-  through each such type's body on a walk of its own, every body again
-  reaching what they share; they are now one walk. And binding a variable
-  to a row copied all of the row's fields first, to check whether it ends
-  in that variable, which it rarely does.
+  Fresh's web client took 303 s, now 45 s. To find what the environment
+  fixes, generalising walked through the substitution from each of the
+  environment's variables and each such type's body on a walk of its own,
+  every walk again going through what they share; they are now one walk.
+  Each waiting constraint's reach is found once per generalisation, not
+  once per round of taking constraints into the scheme. And binding a
+  variable to a row no longer copies the row's fields first to check
+  whether it ends in that variable, which it rarely does.
 - A method call on a value an importing module decides
   (`editor.say("hi")` on a `let editor` an importer sets) takes a
   function that uses no `this` as well as a method of the receiver, as

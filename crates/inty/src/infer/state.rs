@@ -1401,15 +1401,22 @@ impl InferState {
         let mut reach = crate::types::subst::Reach::default();
         self.main_subst.reach(ty, &mut reach);
         let mut vars = reach.vars;
-        let mut left: Vec<&PendingConstraint> = self.pending_constraints.iter().collect();
-        loop {
-            let mut rest = Vec::new();
-            let mut took = false;
-            for c in left {
+        // Each constraint's reach, found once.
+        let mut left: Vec<(&PendingConstraint, crate::types::subst::Reach)> = self
+            .pending_constraints
+            .iter()
+            .map(|c| {
                 let mut r = crate::types::subst::Reach::default();
                 for t in &c.pred.types {
                     self.main_subst.reach(t, &mut r);
                 }
+                (c, r)
+            })
+            .collect();
+        loop {
+            let mut rest = Vec::new();
+            let mut took = false;
+            for (c, r) in left {
                 if r.vars.iter().any(|v| v.is_flex() && vars.contains(v)) {
                     if c.pred.types.iter().any(|t| self.too_large_to_generalise(t)) {
                         return true;
@@ -1417,7 +1424,7 @@ impl InferState {
                     vars.extend(r.vars);
                     took = true;
                 } else {
-                    rest.push(c);
+                    rest.push((c, r));
                 }
             }
             left = rest;
@@ -2946,24 +2953,26 @@ impl InferState {
             let mut gen_pvar_set: std::collections::HashSet<_> =
                 gen_pvars.iter().cloned().collect();
             let mut scheme_preds = Vec::new();
-            let mut remaining: Vec<PendingConstraint> =
-                std::mem::take(&mut self.pending_constraints);
             // Each constraint's variables through the substitution
-            // (`reach`: a flattened copy can be far larger).
-            let reach_of = |s: &Self, c: &PendingConstraint| {
-                let mut r = crate::types::subst::Reach::default();
-                for t in &c.pred.types {
-                    s.main_subst.reach(t, &mut r);
-                }
-                r
-            };
+            // (`reach`: a flattened copy can be far larger), found once:
+            // the substitution doesn't change while constraints are taken.
+            let mut remaining: Vec<(PendingConstraint, crate::types::subst::Reach)> =
+                std::mem::take(&mut self.pending_constraints)
+                    .into_iter()
+                    .map(|c| {
+                        let mut r = crate::types::subst::Reach::default();
+                        for t in &c.pred.types {
+                            self.main_subst.reach(t, &mut r);
+                        }
+                        (c, r)
+                    })
+                    .collect();
             loop {
                 let mut rest = Vec::new();
                 let mut took = false;
-                for constraint in remaining {
+                for (constraint, reach) in remaining {
                     // Whether it mentions a generalised variable, found
                     // without building its flattened types.
-                    let reach = reach_of(self, &constraint);
                     if reach.vars.iter().any(|v| gen_var_set.contains(v)) {
                         let mut pred = self.apply_subst_pred(&constraint.pred);
                         // Flattened, as the type is: a row's bound tail (a
@@ -2995,7 +3004,7 @@ impl InferState {
                         scheme_preds.push(pred);
                         took = true;
                     } else {
-                        rest.push(constraint);
+                        rest.push((constraint, reach));
                     }
                 }
                 remaining = rest;
@@ -3003,7 +3012,7 @@ impl InferState {
                     break;
                 }
             }
-            self.pending_constraints = remaining;
+            self.pending_constraints = remaining.into_iter().map(|(c, _)| c).collect();
             // A write constraint, or a `Testable`, whose type is already
             // known is decided here, not carried in the scheme to be found
             // out at each use (lean/ROADMAP.md, phase 1). On a variable it
@@ -3063,7 +3072,11 @@ impl InferState {
                         .subject_positions(pred.types.len())
                         .iter()
                         .any(|&k| match &pred.types[k] {
-                            Type::Var(v) if v.is_flex() => reached.contains(v),
+                            // A bound one (where `flatten` cut a cycle of
+                            // bindings) is known too.
+                            Type::Var(v) if v.is_flex() => {
+                                reached.contains(v) || self.main_subst.contains(v)
+                            }
                             // A known subject decides the constraint (or
                             // fails it at an instance): it isn't vacuous.
                             _ => true,
@@ -3164,10 +3177,17 @@ impl InferState {
         // What the environment's variables reach through the
         // substitution (without building their flattened types, which can
         // be far larger than the substitution: see `Subst::reach`).
+        // One walk for them all: they share most of what they reach (a
+        // module's bindings, its imports), and only the union is wanted.
+        // In order of id, as where a shared walk cuts a cycle of bindings
+        // depends on the order.
+        env_vars.sort_by_key(|v| (v.is_flex(), v.id()));
         let mut reach = crate::types::subst::Reach::default();
+        let mut walk = crate::types::subst::ReachWalk::default();
         for v in &env_vars {
             vars.insert(v.clone());
-            self.main_subst.reach(&Type::Var(v.clone()), &mut reach);
+            self.main_subst
+                .reach_in(&Type::Var(v.clone()), &mut reach, &mut walk);
         }
         // Presence variables bound in the substitution resolve too.
         let bound_pvars: Vec<crate::types::PVarName> = pvars.iter().cloned().collect();
@@ -3183,11 +3203,28 @@ impl InferState {
         // variables of: one that also sits in a shared body would then
         // come apart from it in each instance).
         named.extend(ty.named_ids());
-        for c in &self.pending_constraints {
-            for t in &c.pred.types {
-                let mut r = crate::types::subst::Reach::default();
-                self.main_subst.reach(t, &mut r);
-                named.extend(r.named);
+        // Each pending constraint's types' reaches, found once (for
+        // these named types and for the functional dependencies below).
+        let preds: Vec<(ClassName, Vec<crate::types::subst::Reach>)> = self
+            .pending_constraints
+            .iter()
+            .map(|c| {
+                let reaches = c
+                    .pred
+                    .types
+                    .iter()
+                    .map(|t| {
+                        let mut r = crate::types::subst::Reach::default();
+                        self.main_subst.reach(t, &mut r);
+                        r
+                    })
+                    .collect();
+                (c.pred.class, reaches)
+            })
+            .collect();
+        for (_, reaches) in &preds {
+            for r in reaches {
+                named.extend(r.named.iter().copied());
             }
         }
         vars.extend(reach.vars);
@@ -3199,7 +3236,8 @@ impl InferState {
         // object), and only the union of what they reach is wanted. A
         // walk per body went through the shared part once per body, at
         // every generalisation.
-        let mut walk = crate::types::subst::ReachWalk::default();
+        // (The environment's walk goes on: the bodies mostly reach what
+        // the environment does.)
         // In order of id: where a shared walk cuts a cycle of bindings
         // depends on the order the bodies are gone through, and the
         // result must not depend on hashing.
@@ -3217,15 +3255,14 @@ impl InferState {
             // without writing it out (a body holding element types is
             // exponentially larger as a tree: see `Subst::reach`).
             let mut body = crate::types::subst::Reach::default();
-            let def_body = def.body.clone();
             // A body with parameters has a walk of its own: what it
             // reaches is less its parameters, so what it shares with
             // another body can't be left to that one's walk.
             let complete = if params.is_empty() {
-                self.main_subst.reach_in(&def_body, &mut body, &mut walk);
+                self.main_subst.reach_in(&def.body, &mut body, &mut walk);
                 !walk.skipped
             } else {
-                self.main_subst.reach(&def_body, &mut body);
+                self.main_subst.reach(&def.body, &mut body);
                 true
             };
             let free: Vec<TVarName> = body
@@ -3252,23 +3289,6 @@ impl InferState {
         // Close over the pending constraints' functional dependencies:
         // each type's free variables through the substitution (`reach`,
         // not a flattened copy of it).
-        let preds: Vec<(ClassName, Vec<crate::types::subst::Reach>)> = self
-            .pending_constraints
-            .iter()
-            .map(|c| {
-                let reaches = c
-                    .pred
-                    .types
-                    .iter()
-                    .map(|t| {
-                        let mut r = crate::types::subst::Reach::default();
-                        self.main_subst.reach(t, &mut r);
-                        r
-                    })
-                    .collect();
-                (c.pred.class, reaches)
-            })
-            .collect();
         loop {
             let mut changed = false;
             for (class, types) in &preds {
