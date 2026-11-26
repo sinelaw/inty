@@ -244,6 +244,20 @@ unterminated-comment error.
 - Hover on a member's property (`s.startsWith`, `o.a.b`) shows its type.
   It showed nothing: hover knew only names, and a method call's callee
   (`obj.m`) wasn't among the expression types inference records.
+- Hover shows what inference recorded for the word under the cursor: a
+  name's declared type, or else the type of the innermost expression the
+  word begins or ends (or the literal it is in) — `this`, a literal, a
+  global, `new Map()`, each link of `o?.a.b`. It computed types of its own
+  for a few cases and showed nothing for the rest. A test now walks every
+  expression of the example programs and requires a recorded type for
+  each, so a path that types an expression without recording it fails it:
+  `check_expr` records in one place, as `infer_expr` does, and an optional
+  chain records each link.
+- A type error inside a function's body, a block, or a class's method no
+  longer stops the rest of it being checked: a statement list collects what
+  fails and goes on, at every depth, not only a program's top level. One
+  error early in a class used to leave every method after it unchecked
+  (no types, no hover).
 - `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
   string literal type (`"a, b"`) or after an arrow inside type arguments
   (`Pair<() => A, B>`).

@@ -6410,3 +6410,21 @@ fn a_row_with_fields_ending_in_itself_has_them() {
     let other = Type::object_open([("b", Type::Number)], rest);
     state.unify(span, &row, &other).unwrap();
 }
+
+/// An error inside a function's body is collected, and the function
+/// still gets the type its body has: the statements after the failing
+/// one are checked, and so is everything after the function.
+#[test]
+fn an_error_in_a_body_does_not_stop_its_function() {
+    let program = crate::frontends::javascript::parse(
+        "function f() { const bad = 1 - {}; return 1; }\nconst n = f();\n",
+    )
+    .unwrap();
+    let mut state = InferState::new();
+    let result = state.infer_program_with_env(&initial_env(), &program);
+    assert!(result.is_err(), "the error fails the program");
+    assert_eq!(state.errors.len(), 1, "{:?}", state.errors);
+    let env = state.take_env_after_errors().expect("the env recovered");
+    let n = env.lookup("n").unwrap();
+    assert_eq!(state.apply_subst(&n.body.ty), Type::Number);
+}

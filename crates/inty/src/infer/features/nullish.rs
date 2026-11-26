@@ -116,6 +116,18 @@ impl InferState {
                 }
             }
 
+            // The chain so far (`o?.a` in `o?.a.b`) is an expression
+            // too: record its type, as `infer_expr` records the whole
+            // chain's (which, recorded last, keeps the whole span).
+            if let Some(types) = self.expr_types.as_mut() {
+                let seg_span = match seg {
+                    ChainSegment::Member { span, .. }
+                    | ChainSegment::Computed { span, .. }
+                    | ChainSegment::Call { span, .. } => span,
+                };
+                types.insert((head.span().start, seg_span.end), current.clone());
+            }
+
             // The next segment sees the result of this step. It is
             // nullable iff this step itself produced a nullable
             // carrier (e.g. an `Array.prototype.find` call returning
