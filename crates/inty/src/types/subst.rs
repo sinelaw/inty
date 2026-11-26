@@ -506,6 +506,10 @@ impl Subst {
         let cuts_before = state.cuts;
         let bound = bound.clone();
         state.tail_row = tail;
+        // (A tail bound to another variable: that one is the tail now.)
+        if tail && matches!(bound, Type::Var(_)) {
+            state.expanding_tail = true;
+        }
         let flat = self.flatten_type(&bound, state);
         state.in_progress.remove(name);
         if state.cuts == cuts_before {
@@ -520,7 +524,10 @@ impl Subst {
         // may be written many times over (each cycle cut, not memoised).
         let tail_row = std::mem::take(&mut state.tail_row);
         if let Some(budget) = state.budget {
-            if state.written >= budget && !tail_row && !matches!(ty, Type::Var(_)) && ty.has_parts()
+            if state.written >= budget && !tail_row && !matches!(ty, Type::Var(_))
+                && ty.has_parts()
+                // (A name alone, `Pane`, is as short as what replaces it.)
+                && !matches!(ty, Type::Named(_, args) if args.is_empty())
             {
                 return Type::Named(super::ty::ELIDED_TYPE_ID, Vec::new());
             }

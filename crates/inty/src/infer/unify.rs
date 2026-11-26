@@ -761,6 +761,18 @@ impl InferState {
     /// Unify an array type with a row type.
     /// Arrays have structural properties like `length: Number`.
     fn unify_array_with_row(&mut self, span: Span, elem: &Type, row: &RowType) -> UnifyResult<()> {
+        // A closed row is a record: a value with just these fields (an
+        // object literal's, an annotation's), never an array, whatever its
+        // fields are (`{}`, `{length: 3}`, `{verbose?: Boolean}` would
+        // otherwise pass where an array is expected, and the other way).
+        // Only an open row, the fields a value's uses need, may be one.
+        if !matches!(row.tail, RowTail::Open(_)) {
+            return Err(self.unification_error(
+                span,
+                &Type::Array(Box::new(elem.clone())),
+                &Type::Row(row.clone()),
+            ));
+        }
         // Each property the row has is the array's, of the type a read of
         // it has (`length`, or a method: a row made of reads, `xs.map(f)`
         // on a value not known to be an array then, is one). A property
@@ -1418,20 +1430,20 @@ impl InferState {
             Some(TypeError::FieldPresenceMismatch { member, .. }) if member.is_none() => {
                 *member = here
             }
-            // Any other failure inside the member (a property its value
-            // lacks, an arity, an infinite type): a mismatch in it, with
-            // its two types, and the failure as the reason. Without the
-            // member the error says only that the two whole types differ.
+            // Any other failure inside the member that compares its types
+            // (a property its value lacks, an arity): a mismatch in it,
+            // with its two types, and the failure as the reason. Without
+            // the member the error says only that the two whole types
+            // differ. (An infinite type, or a method called detached, says
+            // more as it is.)
             Some(
-                inner @ (TypeError::OccursCheck { .. }
-                | TypeError::PropertyNotFound { .. }
+                inner @ (TypeError::PropertyNotFound { .. }
                 | TypeError::PropertyOfNullable { .. }
                 | TypeError::PresenceMismatch { .. }
                 | TypeError::NotAFunction { .. }
                 | TypeError::ArityMismatch { .. }
                 | TypeError::ConstraintNotSatisfied { .. }
                 | TypeError::TypeMismatch { .. }
-                | TypeError::DetachedThis { .. }
                 | TypeError::BranchMismatch { .. }
                 | TypeError::ArrayElementMismatch { .. }),
             ) => {
@@ -2296,11 +2308,17 @@ mod tests {
         let mut state = InferState::new();
         let span = Span::new(0, 0);
 
-        // Array<Number> should unify with {length: Number}
+        // A closed row is a record, a value with just these fields, never
+        // an array (`cur = {length: 3}` where `cur` is a `Number[]` was
+        // accepted, and `cur.push(3)` threw).
         let arr = Type::array(Type::Number);
         let row = Type::object([("length", Type::Number)]);
+        assert!(state.unify(span, &arr, &row).is_err());
 
-        assert!(state.unify(span, &arr, &row).is_ok());
+        // An open one, the fields a value's uses need, may be an array.
+        let tail = state.fresh_flex();
+        let open = Type::object_open([("length", Type::Number)], tail);
+        assert!(state.unify(span, &arr, &open).is_ok());
     }
 
     #[test]

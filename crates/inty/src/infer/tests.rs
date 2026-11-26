@@ -6648,9 +6648,17 @@ fn expansive_recursive_aliases_are_rejected() {
          /** type B<X> = {a: A<X[]>} */\n\
          /** function f(a: A<Number>) => Number */\n\
          function f(a) { return 1; }",
+        // Through a nominal alias of the group.
+        "/** nominal type M<X> = {m: P<{w: X}>} */\n\
+         /** type P<A> = {self: P<A> | Null, n: M<A>} */\n\
+         /** function f(p: P<Number>) => Number */\n\
+         function f(p) { return 1; }",
     ] {
         let err = check_program(src, &[]).unwrap_err();
-        assert!(err.contains("built from its own parameter"), "{src}: {err}");
+        assert!(
+            err.contains("an argument built from its parameter"),
+            "{src}: {err}"
+        );
     }
 }
 
@@ -6725,4 +6733,35 @@ fn a_flag_mismatch_names_the_member() {
     let (err, _) = first_error_across(module, user);
     let text = err.to_string();
     assert!(text.contains("in member `primary`"), "{text}");
+}
+
+/// An expansive alias is reported, and the rest of the program is still
+/// checked (the alias is an error type, which nothing unrolls).
+#[test]
+fn an_expansive_alias_does_not_stop_the_check() {
+    let src = "/** type Nest<A> = {v: A, next: Nest<{w: A}>} */\n\
+               const later = \"s\" * 2;";
+    let program = crate::frontends::javascript::parse_source(src).unwrap();
+    let mut state = InferState::new();
+    let _ = state.infer_program_with_env(&initial_env(), &program);
+    let text: Vec<String> = state.errors.iter().map(|e| e.to_string()).collect();
+    assert!(text.iter().any(|t| t.contains("Nest")), "{text:?}");
+    assert!(text.len() >= 2, "the later error is reported too: {text:?}");
+}
+
+/// A record whose fields arrays have, or may lack, is no array: a closed
+/// row is a value with just those fields.
+#[test]
+fn a_record_is_no_array() {
+    for src in [
+        "/** function first(xs: Number[]) => Number */\n\
+         function first(xs) { return xs.map((x) => x + 1)[0]; }\n\
+         /** function opts() => {verbose?: Boolean} */\n\
+         function opts() { return {}; }\n\
+         first(opts());",
+        "let cur = [1, 2];\ncur = {};\ncur.push(3);",
+        "let cur = [1, 2];\ncur = { length: 3 };\ncur.push(3);",
+    ] {
+        assert!(check_program(src, &[]).is_err(), "{src}");
+    }
 }

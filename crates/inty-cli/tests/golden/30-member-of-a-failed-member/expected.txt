@@ -6,8 +6,6 @@ Error: Type mismatch in member `rows`: expected '{size: Number}', found 'Number[
    │      ──┬─  
    │        ╰─── Type mismatch in member `rows`: expected '{size: Number}', found 'Number[]'
    │ 
-   │ Help: in `rows`: Property 'size' not found on type Number[]
-   │ 
    │ Note: `rows` is a member of the types compared: expected '{rows: {size: Number}, title: String}', found 'Pane'
 ───╯
 
@@ -18,8 +16,6 @@ Error: Type mismatch in member `view.pane.rows`: expected '{size: Number}', foun
  17 │ draw(w);
     │      ┬  
     │      ╰── Type mismatch in member `view.pane.rows`: expected '{size: Number}', found 'Number[]'
-    │ 
-    │ Help: in `view.pane.rows`: Property 'size' not found on type Number[]
     │ 
     │ Note: `view.pane.rows` is a member of the types compared: expected '{view: {name: String, pane: {rows: {size: Number}, title: String}}}', found '{view: View}'
 ────╯
