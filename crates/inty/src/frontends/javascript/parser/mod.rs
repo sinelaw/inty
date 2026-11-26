@@ -1590,6 +1590,9 @@ impl Parser {
             } else {
                 self.try_get_type_annotation(self.current_span(), &key_name)
             };
+            if let Some(ann) = &method_annotation {
+                check_method_annotation(ann, &key_name)?;
+            }
             self.expect(&Token::LParen)?;
             // Default and destructuring parameters, as a plain function
             // takes them: unpacked at the top of the body.
@@ -3657,6 +3660,9 @@ impl Parser {
                 }
                 (None, _) => None,
             };
+            if let (Some(ann), PropKey::Ident(name)) = (&type_annotation, &key) {
+                check_method_annotation(ann, name)?;
+            }
             self.expect(&Token::LParen)?;
             let (params, prefix) = self.parse_parameters_with_prefix()?;
             self.expect(&Token::RParen)?;
@@ -4297,6 +4303,38 @@ impl Parser {
         }
         None
     }
+}
+
+/// A method's annotation states its parameters and result, which hold for
+/// every call. It can't have type parameters (`<a>`): a method is a member
+/// of its instance, whose type is the same at every use, so `<a>` would
+/// not be checked as "for every `a`", as on a function. Nor can it say
+/// `this:`: a method's `this` is the object it is on.
+fn check_method_annotation(ann: &TypeAnnotation, method: &str) -> Result<()> {
+    let content = ann.content.trim_start();
+    let says_this = content.strip_prefix('(').is_some_and(|rest| {
+        rest.trim_start()
+            .strip_prefix("this")
+            .is_some_and(|r| r.trim_start().starts_with(':'))
+    });
+    let feature = if content.starts_with('<') {
+        format!(
+            "type parameters (`<…>`) in the annotation of the method `{method}`: a \
+             method's type is the same at every call (write the types it has)"
+        )
+    } else if says_this {
+        format!(
+            "`this:` in the annotation of the method `{method}`: its `this` is the \
+             object it is on (leave `this:` out)"
+        )
+    } else {
+        return Ok(());
+    };
+    Err(ParseError::Unsupported {
+        feature,
+        span: ann.span,
+    }
+    .into())
 }
 
 /// Parse source code into an AST

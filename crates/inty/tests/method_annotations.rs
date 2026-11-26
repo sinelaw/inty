@@ -1,7 +1,9 @@
 //! An annotation written above a method (`/** function m(x: T) => R */`)
 //! types it, as one above a function declaration does: the body is
 //! checked against it and callers see its type. Its `this` is the one
-//! the class or object gives the method, unless it says (`this: T`).
+//! the class or object gives the method; it can't say `this:`, nor have
+//! type parameters, which a method's type (the same at every call) can't
+//! honour.
 
 use inty::frontends::javascript::parse;
 use inty::stdlib::initial_env_with_stdlib;
@@ -98,4 +100,33 @@ fn an_annotation_goes_to_the_method_it_names() {
          new P().open(1);\n",
     );
     assert!(r.is_ok(), "{:?}", r);
+}
+
+#[test]
+fn a_method_annotation_cannot_have_type_parameters() {
+    // On a function, `<a>` means "for every `a`", and `return 1` is
+    // rejected. A method's type is the same at every call, so it can't
+    // honour that: the annotation is rejected rather than read as "some
+    // type".
+    for src in [
+        "class P {\n  /** function id<a>(x: a) => a */\n  id(x) { return 1; }\n}\n",
+        "const o = {\n  /** function id<a>(x: a) => a */\n  id(x) { return x; },\n};\n",
+    ] {
+        let r = check(src);
+        assert!(
+            r.as_ref().is_err_and(|e| e.contains("type parameters")),
+            "{:?}",
+            r
+        );
+    }
+}
+
+#[test]
+fn a_method_annotation_cannot_say_this() {
+    let r = check(
+        "class P {\n  constructor() { this.k = 1; }\n  \
+         /** function open(this: {k: Number}, x: String) => Number */\n  \
+         open(x) { return x.length + this.k; }\n}\n",
+    );
+    assert!(r.as_ref().is_err_and(|e| e.contains("this:")), "{:?}", r);
 }

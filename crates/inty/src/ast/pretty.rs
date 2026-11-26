@@ -42,10 +42,17 @@ pub fn print_program_with(
     program: &Program,
     as_written: std::collections::HashMap<Span, String>,
 ) -> String {
-    let previous = AS_WRITTEN.with(|m| m.replace(as_written));
-    let out = print_statements(program);
-    AS_WRITTEN.with(|m| m.replace(previous));
-    out
+    /// Puts back the texts in place before, however printing ends.
+    struct Restore(Option<std::collections::HashMap<Span, String>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                AS_WRITTEN.with(|m| m.replace(previous));
+            }
+        }
+    }
+    let _restore = Restore(Some(AS_WRITTEN.with(|m| m.replace(as_written))));
+    print_statements(program)
 }
 
 fn print_statements(program: &Program) -> String {
@@ -586,8 +593,21 @@ fn write_prop_def(w: &mut impl Write, prop: &PropDef) -> fmt::Result {
             write_stmt(w, body, 0)
         }
         PropDef::Method {
-            key, params, body, ..
+            key,
+            params,
+            body,
+            type_annotation,
+            ..
         } => {
+            // Its annotation, as written: `/** function m(…) => R */`, or
+            // `/** @type {T} */` for one that names its type.
+            if let (Some(ann), PropKey::Ident(name)) = (type_annotation, key) {
+                if ann.content.trim_start().starts_with('(') {
+                    write!(w, "/** function {}{} */ ", name, ann.content.trim())?;
+                } else {
+                    write!(w, "/** @type {{{}}} */ ", ann.content.trim())?;
+                }
+            }
             let (is_async, body) = async_body(body);
             if is_async {
                 write!(w, "async ")?;
@@ -1089,38 +1109,62 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
 
 /// An `async` function's body, as written, when `body` is the one the
 /// parser lowers it to (`{ return Promise.resolve((() => { … })()); }`),
-/// with `true`; else `body`, with `false`.
+/// with `true`; else `body`, with `false`. The lowering gives each of
+/// those nodes the same span (the function's), which no source text does
+/// (in `return Promise.resolve(…)` written out, `Promise` spans less than
+/// the call), so a body written that way is printed as written.
 fn async_body(body: &Stmt) -> (bool, &Stmt) {
     if let Stmt::Block { body: stmts, .. } = body {
         if let [Stmt::Return {
-            argument: Some(Expr::Call {
-                callee, arguments, ..
-            }),
-            ..
+            argument:
+                Some(Expr::Call {
+                    callee,
+                    arguments,
+                    span: call_span,
+                    ..
+                }),
+            span: return_span,
         }] = stmts.as_slice()
         {
             if let (
                 Expr::Member {
-                    object, property, ..
+                    object,
+                    property,
+                    span: member_span,
                 },
                 [Expr::Call {
                     callee: iife,
                     arguments: none,
+                    span: iife_call_span,
                     ..
                 }],
             ) = (&**callee, arguments.as_slice())
             {
                 if let (
-                    Expr::Ident { name, .. },
+                    Expr::Ident {
+                        name,
+                        span: promise_span,
+                    },
                     Expr::Function {
                         params,
                         body: inner,
                         arrow: true,
+                        span: iife_span,
                         ..
                     },
                 ) = (&**object, &**iife)
                 {
-                    if name == "Promise"
+                    let one_span = [
+                        call_span,
+                        member_span,
+                        promise_span,
+                        iife_call_span,
+                        iife_span,
+                    ]
+                    .iter()
+                    .all(|s| *s == return_span);
+                    if one_span
+                        && name == "Promise"
                         && property == "resolve"
                         && none.is_empty()
                         && params.is_empty()

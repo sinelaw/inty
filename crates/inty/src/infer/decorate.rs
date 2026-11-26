@@ -5,7 +5,7 @@
 
 use crate::ast::*;
 use crate::span::Span;
-use crate::types::{PrettyContext, Type, TypeScheme};
+use crate::types::{PrettyContext, Type, TypePred, TypeScheme};
 
 use super::env::TypeEnv;
 use super::state::InferState;
@@ -730,8 +730,14 @@ impl<'a> Decorator<'a> {
     /// optional, so a type that can't be written (one too large to show,
     /// or one only the checker can name) is left out rather than printed
     /// in a form the checker would reject.
-    fn readable(&self, content: String, ty: &Type, span: Span) -> Option<TypeAnnotation> {
-        if !self.reads_back(&content, ty) {
+    fn readable(
+        &self,
+        content: String,
+        ty: &Type,
+        preds: Option<&[TypePred]>,
+        span: Span,
+    ) -> Option<TypeAnnotation> {
+        if !self.reads_back(&content, ty, preds) {
             return None;
         }
         Some(TypeAnnotation {
@@ -746,10 +752,17 @@ impl<'a> Decorator<'a> {
     /// Whether the annotation text `content`, written for `ty` (a
     /// displayed type, or a scheme's body), reads back as `ty`: it parses,
     /// each name in it is a type in scope taking the arguments it is
-    /// given, and the type it parses to prints as `ty` does. (Some types
-    /// print in a form that parses to another: an open record's tail,
-    /// `{x: T | a}`, reads as a field of type `T | a`.)
-    fn reads_back(&self, content: &str, ty: &Type) -> bool {
+    /// given, and it parses to `ty`, up to the names of its variables.
+    /// (Some types print in a form that parses to another: an open
+    /// record's tail, `{x: T | a}`, reads as a field of type `T | a`, and a
+    /// function's `this`, when it isn't known, isn't printed, so it reads
+    /// as a function that uses none.)
+    ///
+    /// `preds` are the constraints of the scheme `ty` is the body of: a
+    /// scheme's `this` that is a variable nothing else mentions (of a
+    /// function that doesn't use `this`) is one it reads back as. A mere
+    /// type's `this` variable may be constrained by what isn't shown.
+    fn reads_back(&self, content: &str, ty: &Type, preds: Option<&[TypePred]>) -> bool {
         let Ok((parsed, _)) = crate::infer::type_parser::parse_type_annotation_with_aliases(
             content,
             Span::default(),
@@ -758,14 +771,17 @@ impl<'a> Decorator<'a> {
         ) else {
             return false;
         };
-        let print = |t: &Type| {
-            let t = crate::types::TidyEnv::new().tidy_type(t);
-            self.pretty().format_type(&t)
+        // A function annotation is of a function that uses no `this`,
+        // unless it says.
+        let canonical = |t: &Type| {
+            let t = crate::infer::lower::annotation_this(&as_function(t), &Type::ArrowThis);
+            crate::types::TidyEnv::new().tidy_type(&t)
         };
-        // A function annotation is of a function that uses no `this`.
-        let ty = crate::infer::lower::annotation_this(ty, &Type::ArrowThis);
-        let parsed = crate::infer::lower::annotation_this(&parsed, &Type::ArrowThis);
-        print(&parsed) == print(&ty)
+        let ty = match preds {
+            Some(preds) => unused_this_dropped(ty, preds),
+            None => ty.clone(),
+        };
+        canonical(&parsed) == canonical(&ty)
     }
 
     /// Types printed with each class's instance by the class's name.
@@ -788,7 +804,12 @@ impl<'a> Decorator<'a> {
         }
         let displayed = self.state.display_scheme(scheme);
         let content = self.pretty().format_scheme(&displayed);
-        self.readable(content, &displayed.body.ty, span)
+        self.readable(
+            content,
+            &displayed.body.ty,
+            Some(&displayed.body.preds),
+            span,
+        )
     }
 
     fn type_to_annotation(&mut self, ty: &Type, span: Span) -> Option<TypeAnnotation> {
@@ -797,7 +818,7 @@ impl<'a> Decorator<'a> {
         }
         let displayed = self.state.display_type(ty);
         let content = self.pretty().format_type(&displayed);
-        self.readable(content, &displayed, span)
+        self.readable(content, &displayed, None, span)
     }
 }
 
@@ -845,7 +866,13 @@ impl Decorator<'_> {
             let before = &source[line_start..at];
             let rel = at - span.start;
             if line_start >= span.start && before.chars().all(char::is_whitespace) {
-                text.insert_str(rel, &format!("/** {annotation} */\n{before}"));
+                // The source's own line ending, as the line before ends.
+                let newline = if source[..line_start].ends_with("\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                };
+                text.insert_str(rel, &format!("/** {annotation} */{newline}{before}"));
             } else {
                 text.insert_str(rel, &format!("/** {annotation} */ "));
             }
@@ -854,11 +881,11 @@ impl Decorator<'_> {
     }
 
     /// `function NAME(…) => R` for the method `name` of the class whose
-    /// constructor has `scheme`: the method's type in the class's
-    /// instance, with the class's type variables it mentions (and their
-    /// constraints) quantified, and `this` left out when it is the
-    /// instance (an annotated method's `this` is). `None` when the type
-    /// isn't known or is too large to show.
+    /// constructor has `scheme`: the method's type in the class's instance,
+    /// without its `this` (which an annotated method's is). `None` when
+    /// the type isn't known, has type variables (a method's annotation
+    /// can't: they would be the class's, the same at every call on an
+    /// instance, not "for every type"), or doesn't read back.
     fn method_annotation(
         &self,
         scheme: &TypeScheme,
@@ -866,65 +893,32 @@ impl Decorator<'_> {
         params: &[Param],
     ) -> Option<String> {
         let ctor = self.state.flatten_type(&scheme.body.ty);
-        let (_, _, ret) = super::features::functions::extract_callable(&ctor)?;
-        // The instance: the class's type, or a row that is only it.
-        let (class_id, args) = match &ret {
-            Type::Named(id, args) => (id, args),
+        let (_, _, instance) = super::features::functions::extract_callable(&ctor)?;
+        // The instance's members: the class's type's (or a row's that is
+        // only it), or, for a class not typed nominally (`export default
+        // class { … }`), the instance's own record's.
+        let named = match &instance {
+            Type::Named(id, args) => Some((id, args)),
             Type::Row(row) if row.props.is_empty() => match &row.tail {
-                crate::types::RowTail::Recursive(id, args) => (id, args),
+                crate::types::RowTail::Recursive(id, args) => Some((id, args)),
                 _ => return None,
             },
+            Type::Row(_) => None,
             _ => return None,
         };
-        let Type::Row(instance) = self.state.unroll_named(*class_id, args)? else {
+        let members = match named {
+            Some((id, args)) => self.state.unroll_named(*id, args)?,
+            None => instance,
+        };
+        let Type::Row(members) = members else {
             return None;
         };
-        let entry = instance
+        let entry = members
             .props
             .get(&crate::types::PropName::from(name.to_string()))?;
         let method = self.state.flatten_type(&entry.ty);
-        let (this_type, method_params, ret) =
-            super::features::functions::extract_callable(&method)?;
-        // The instance, as the class's type (`Counter`, printed by name):
-        // the class's type itself, or a record of the instance's fields
-        // (an argument of the class), which a method's `this` and a
-        // `return this` are. As the language server shows a record of an
-        // object's own fields as `Self`, it is told by its fields' names.
-        let class = Type::Named(*class_id, args.clone());
-        let fields: Option<Vec<&crate::types::PropName>> =
-            match self.field_row_param(*class_id).and_then(|i| args.get(i)) {
-                Some(Type::Row(r)) if !r.props.is_empty() => Some(r.props.keys().collect()),
-                _ => None,
-            };
-        let is_instance = |t: &Type| match t {
-            Type::Named(id, _) => id == class_id,
-            Type::Row(r) if r.props.is_empty() => {
-                matches!(&r.tail, crate::types::RowTail::Recursive(id, _) if id == class_id)
-            }
-            Type::Row(r) => fields.as_ref() == Some(&r.props.keys().collect()),
-            _ => false,
-        };
-        let this_type = match &this_type {
-            None | Some(Type::ArrowThis | Type::NewTarget | Type::Var(_)) => None,
-            Some(t) if is_instance(t) => None,
-            Some(t) => Some(Box::new(naming_instance(t, &is_instance, &class))),
-        };
-        // A method whose type mentions its own class (a `return this`)
-        // has none written: the class's type takes its own field record as
-        // an argument, which can't be written out.
-        let mentions_class = |t: &Type| naming_instance(t, &is_instance, &Type::Error) != *t;
-        if mentions_class(&ret) || method_params.iter().any(|p| mentions_class(&p.ty)) {
-            return None;
-        }
-        let ret = Box::new(naming_instance(&ret, &is_instance, &class));
+        let (_, method_params, ret) = super::features::functions::extract_callable(&method)?;
         let method_params = method_params
-            .into_iter()
-            .map(|mut p| {
-                p.ty = naming_instance(&p.ty, &is_instance, &class);
-                p
-            })
-            .collect::<Vec<_>>();
-        let method_params: Vec<crate::types::FuncParam> = method_params
             .into_iter()
             .enumerate()
             .map(|(i, mut p)| {
@@ -935,110 +929,88 @@ impl Decorator<'_> {
             })
             .collect();
         let ty = Type::Func {
-            this_type,
+            this_type: None,
             params: method_params,
+            ret: Box::new(ret),
+        };
+        if self.state.flattened_size(&ty) > MAX_SHOWN_TYPE || !ty.free_vars().is_empty() {
+            return None;
+        }
+        let displayed = self.state.display_type(&ty);
+        let content = self.pretty().showing_param_names().format_type(&displayed);
+        if !self.reads_back(&content, &displayed, None) {
+            return None;
+        }
+        Some(format!("function {name}{content}"))
+    }
+}
+
+/// `ty` with each function's `this` left out where it is a variable
+/// that occurs nowhere else in `ty` or `preds` (a function's that doesn't
+/// use `this`, which an annotation doesn't write).
+fn unused_this_dropped(ty: &Type, preds: &[TypePred]) -> Type {
+    let mut counts: std::collections::HashMap<crate::types::TVarName, usize> =
+        std::collections::HashMap::new();
+    count_vars(ty, &mut counts);
+    for p in preds {
+        for t in &p.types {
+            count_vars(t, &mut counts);
+        }
+    }
+    drop_this(ty, &counts)
+}
+
+/// How many times each variable occurs in `ty`.
+fn count_vars(ty: &Type, counts: &mut std::collections::HashMap<crate::types::TVarName, usize>) {
+    match ty {
+        Type::Var(v) => *counts.entry(v.clone()).or_default() += 1,
+        Type::Func {
+            this_type,
+            params,
             ret,
-        };
-        if self.state.flattened_size(&ty) > MAX_SHOWN_TYPE {
-            return None;
-        }
-        // The class's variables the method mentions, and the constraints
-        // on them (with the variables those mention).
-        let mut vars = ty.free_vars();
-        let mut preds = Vec::new();
-        let mut taken = vec![false; scheme.body.preds.len()];
-        loop {
-            let mut grew = false;
-            for (i, p) in scheme.body.preds.iter().enumerate() {
-                if taken[i] {
-                    continue;
-                }
-                let pred_vars: std::collections::HashSet<_> = p
-                    .types
-                    .iter()
-                    .flat_map(|t| self.state.flatten_type(t).free_vars())
-                    .collect();
-                if pred_vars.iter().any(|v| vars.contains(v)) {
-                    taken[i] = true;
-                    preds.push(p.clone());
-                    vars.extend(pred_vars);
-                    grew = true;
-                }
+        } => {
+            if let Some(t) = this_type {
+                count_vars(t, counts);
             }
-            if !grew {
-                break;
+            for p in params {
+                count_vars(&p.ty, counts);
+            }
+            count_vars(ret, counts);
+        }
+        Type::Row(row) => {
+            for e in row.props.values() {
+                count_vars(&e.ty, counts);
+            }
+            match &row.tail {
+                crate::types::RowTail::Open(v) => *counts.entry(v.clone()).or_default() += 1,
+                crate::types::RowTail::Recursive(_, args) => {
+                    args.iter().for_each(|a| count_vars(a, counts))
+                }
+                crate::types::RowTail::Closed => {}
             }
         }
-        // Every variable, which an annotation declares: the class's, in
-        // its order, then any other.
-        let mut quantified: Vec<_> = scheme
-            .vars
-            .iter()
-            .filter(|v| vars.contains(v))
-            .cloned()
-            .collect();
-        let mut rest: Vec<_> = vars
-            .into_iter()
-            .filter(|v| !quantified.contains(v))
-            .collect();
-        rest.sort_by_key(|v| v.id());
-        quantified.extend(rest);
-        let method_scheme = TypeScheme {
-            vars: quantified,
-            pvars: scheme.pvars.clone(),
-            body: crate::types::QualType::with_preds(preds, ty),
-        };
-        let displayed = self.state.display_scheme(&method_scheme);
-        let mut ctx =
-            PrettyContext::with_nominal_names(self.state.nominal_names()).showing_param_names();
-        let content = ctx.format_scheme(&displayed);
-        // Shown only if it reads back as the method's type.
-        if !self.reads_back(&content, &displayed.body.ty) {
-            return None;
+        Type::Array(t) | Type::Map(t) | Type::Promise(t) | Type::Maybe(_, t) => {
+            count_vars(t, counts)
         }
-        let gap = if content.starts_with(['(', '<']) {
-            ""
-        } else {
-            " "
-        };
-        Some(format!("function {name}{gap}{content}"))
+        Type::Tuple(ts) | Type::Union(ts) | Type::Named(_, ts) => {
+            ts.iter().for_each(|t| count_vars(t, counts))
+        }
+        _ => {}
     }
 }
 
-impl Decorator<'_> {
-    /// Which of the class `class_id`'s parameters is its instance's field
-    /// row: the one its methods take `this` as (`{ | ρ}`).
-    fn field_row_param(&self, class_id: crate::types::TypeId) -> Option<usize> {
-        let def = self.state.get_named_type(class_id)?;
-        let Type::Row(body) = &def.body else {
-            return None;
-        };
-        body.props.values().find_map(|entry| {
-            let (this, _, _) = super::features::functions::extract_callable(&entry.ty)?;
-            match this? {
-                Type::Row(r) if r.props.is_empty() => match &r.tail {
-                    crate::types::RowTail::Open(v) => def.params.iter().position(|p| p == v),
-                    _ => None,
-                },
-                _ => None,
-            }
-        })
-    }
-}
-
-/// `ty` with each type `is_instance` holds of replaced by `class`.
-fn naming_instance(ty: &Type, is_instance: &dyn Fn(&Type) -> bool, class: &Type) -> Type {
-    if is_instance(ty) {
-        return class.clone();
-    }
-    let go = |t: &Type| naming_instance(t, is_instance, class);
+fn drop_this(ty: &Type, counts: &std::collections::HashMap<crate::types::TVarName, usize>) -> Type {
+    let go = |t: &Type| drop_this(t, counts);
     match ty {
         Type::Func {
             this_type,
             params,
             ret,
         } => Type::Func {
-            this_type: this_type.as_ref().map(|t| Box::new(go(t))),
+            this_type: match this_type.as_deref() {
+                Some(Type::Var(v)) if counts.get(v) == Some(&1) => None,
+                other => other.map(|t| Box::new(go(t))),
+            },
             params: params
                 .iter()
                 .map(|p| {
@@ -1051,23 +1023,37 @@ fn naming_instance(ty: &Type, is_instance: &dyn Fn(&Type) -> bool, class: &Type)
         },
         Type::Row(row) => {
             let mut row = row.clone();
-            for entry in row.props.values_mut() {
-                entry.ty = go(&entry.ty);
+            for e in row.props.values_mut() {
+                e.ty = go(&e.ty);
             }
             Type::Row(row)
         }
         Type::Array(t) => Type::Array(Box::new(go(t))),
         Type::Map(t) => Type::Map(Box::new(go(t))),
         Type::Promise(t) => Type::Promise(Box::new(go(t))),
+        Type::Maybe(n, t) => Type::Maybe(*n, Box::new(go(t))),
         Type::Tuple(ts) => Type::Tuple(ts.iter().map(go).collect()),
         Type::Union(ts) => Type::Union(ts.iter().map(go).collect()),
-        Type::Named(id, args) => Type::Named(*id, args.iter().map(go).collect()),
-        Type::Maybe(n, t) => Type::Maybe(*n, Box::new(go(t))),
+        Type::Named(id, ts) => Type::Named(*id, ts.iter().map(go).collect()),
         other => other.clone(),
     }
 }
 
-/// The methods (on the prototype, without an annotation of their own) of
+/// A callable record of only a call signature, as its function type.
+fn as_function(ty: &Type) -> Type {
+    if let Type::Row(row) = ty {
+        let key = crate::types::PropName(crate::types::CALLABLE_KEY.to_string());
+        if let (Some(entry), 1, crate::types::RowTail::Closed) =
+            (row.props.get(&key), row.props.len(), &row.tail)
+        {
+            return entry.ty.clone();
+        }
+    }
+    ty.clone()
+}
+
+/// The methods (on the prototype, not private, without an annotation of
+/// their own) of
 /// the class lowered to a function whose body is `body`: each one's name,
 /// parameters and where it starts.
 fn class_methods(body: &Stmt) -> Vec<(&str, &[Param], usize)> {
@@ -1091,7 +1077,12 @@ fn class_methods(body: &Stmt) -> Vec<(&str, &[Param], usize)> {
                 proto: true,
                 span,
                 ..
-            } => Some((name.as_str(), params.as_slice(), span.start)),
+            } if crate::types::private_key_display(&crate::types::PropName(name.clone()))
+                .is_none() =>
+            {
+                // (A private method, `#m() {}`, takes no annotation.)
+                Some((name.as_str(), params.as_slice(), span.start))
+            }
             _ => None,
         })
         .collect()

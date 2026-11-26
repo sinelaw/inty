@@ -27,8 +27,9 @@ fn checks(src: &str) -> bool {
 
 const MENU: &str = "class Menu {
     constructor(el) { this.el = el; this.items = []; this.sel = 0; }
-    /** Build the rows for `items`. */
     setItems(items) { this.items = items; return this.items.length; }
+    /** Move the selection. */
+    select(n) { this.sel = n; return n + 1; }
     highlight(i, pointer) { if (pointer) { this.sel = i; } }
     current() { return this.items[this.sel]; }
     chain() { return this; }
@@ -40,18 +41,19 @@ const MENU: &str = "class Menu {
 fn a_class_is_printed_as_written_with_its_methods_annotated() {
     let out = print(MENU);
     assert!(out.starts_with("class Menu {\n"), "{out}");
+    // Above its documentation comment's method, after the comment.
     assert!(
         out.contains(
-            "    /** Build the rows for `items`. */\n    \
-             /** function setItems<a>(items: a[]) => Number */\n    setItems(items) {"
+            "    /** Move the selection. */\n    \
+             /** function select(n: Number) => Number */\n    select(n) {"
         ),
         "{out}"
     );
-    assert!(
-        out.contains("/** function highlight<a>(i: Number, pointer: a) => Undefined */"),
-        "{out}"
-    );
-    assert!(out.contains("/** function current<a>() => a */"), "{out}");
+    // Methods whose types have type variables (the class's, the same at
+    // every call on an instance) have none: a method's annotation can't.
+    assert!(!out.contains("function setItems"), "{out}");
+    assert!(!out.contains("function highlight"), "{out}");
+    assert!(!out.contains("function current"), "{out}");
     assert!(
         out.contains("/** function fetchAll(url: Number, opt: Number) => Promise<Number[]> */"),
         "{out}"
@@ -140,4 +142,59 @@ fn a_type_that_would_read_back_as_another_is_left_out() {
          each(f) { this.items.forEach(f); }\n}\n",
     );
     assert!(!out.contains("function each"), "{out}");
+}
+
+#[test]
+fn a_function_reading_this_reads_back() {
+    // Its `this` (`{x: …}`, or a variable constrained to have `x`) can't
+    // be written in its annotation, which would then say it uses none.
+    reads_back("const f = function () { return this.x + 1; };\nconst o = {x: 1, f: f};\no.f();\n");
+    reads_back("function getX() { return this.x; }\nconst o = {x: 1, getX: getX};\no.getX();\n");
+}
+
+#[test]
+fn an_object_literal_methods_annotation_is_printed() {
+    let out = reads_back(
+        "function mk() {\n  return {\n    /** function open(x: String) => Number | String */\n    \
+         open(x) { return x.length; },\n  };\n}\n",
+    );
+    assert!(
+        out.contains("/** function open(x: String) => Number | String */ open(x)"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_promise_written_out_is_not_printed_as_async() {
+    let out = reads_back(
+        "function sync() { return Promise.resolve((() => { throw new Error(\"x\"); })()); }\n",
+    );
+    assert!(!out.contains("async"), "{out}");
+}
+
+#[test]
+fn a_private_method_has_no_annotation() {
+    let out = reads_back(
+        "class P {\n  #twice(x) { return x * 2; }\n  go() { return this.#twice(1); }\n}\n",
+    );
+    assert_eq!(out.matches("/** function").count(), 1, "{out}");
+    assert!(out.contains("/** function go() => Number */"), "{out}");
+}
+
+#[test]
+fn a_default_exported_class_has_its_methods_annotated() {
+    let out = reads_back("export default class {\n  a(x) { return x + 1; }\n}\n");
+    assert!(
+        out.contains("/** function a(x: Number) => Number */"),
+        "{out}"
+    );
+}
+
+#[test]
+fn annotations_keep_the_sources_line_endings() {
+    let out = print("class P {\r\n  a(x) { return x + 1; }\r\n}\r\n");
+    assert!(
+        out.contains("  /** function a(x: Number) => Number */\r\n  a(x)"),
+        "{out:?}"
+    );
 }
