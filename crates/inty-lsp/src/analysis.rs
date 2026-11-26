@@ -161,10 +161,14 @@ impl Analysis {
                 // `_first` is the head of `collected`; use the
                 // accumulated list as-is to avoid duplicating it.
                 errors.extend(collected);
+                // Recovery still typed every statement that didn't
+                // fail: keep that env so hover, completion, and
+                // signature help work in a file with a type error.
+                let final_env = state.take_env_after_errors();
                 Analysis {
                     errors,
                     program: Some(program),
-                    final_env: None,
+                    final_env,
                     state: Some(state),
                     resolution,
                 }
@@ -1247,6 +1251,39 @@ const func = function() { return {id: '123', name: 'hello'}; };";
             undef_count,
             analysis.errors
         );
+    }
+
+    /// A type error in one statement must not blind the editor to the
+    /// rest of the file: inference recovers past it, so hover,
+    /// completion details, and member completion still answer for the
+    /// bindings that typed fine — before and after the error.
+    #[test]
+    fn queries_answer_in_a_file_with_a_type_error() {
+        let src = "const n = 1;\nconst bad = n + 'a' - {};\nconst o = {x: 1, y: 'two'};\n";
+        let analysis = Analysis::check(src);
+        assert!(!analysis.errors.is_empty(), "expected the type error");
+
+        let hover = analysis
+            .hover_at(src.find("n =").unwrap())
+            .expect("hover on `n`");
+        assert_eq!(
+            (hover.name.as_str(), hover.type_str.as_str()),
+            ("n", "Number")
+        );
+        let hover = analysis
+            .hover_at(src.find("o =").unwrap())
+            .expect("hover on `o`");
+        assert_eq!(hover.name, "o");
+
+        assert_eq!(analysis.type_of_name("n").as_deref(), Some("Number"));
+
+        let text = format!("{src}o.");
+        let items = analysis
+            .member_completions_before_with(&text, text.len())
+            .expect("member completions on `o.`");
+        let mut labels: Vec<_> = items.iter().map(|i| i.label.as_str()).collect();
+        labels.sort();
+        assert_eq!(labels, ["x", "y"]);
     }
 
     /// `check_lang` routes to the right frontend: a Lua document parses

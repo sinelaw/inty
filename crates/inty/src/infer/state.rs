@@ -273,6 +273,14 @@ pub struct InferState {
     /// after the call completes.
     pub errors: Vec<IntyError>,
 
+    /// The environment a program left behind when its inference
+    /// collected errors: `infer_program*` then returns the first error
+    /// and drops the env, though recovery (failed bindings bound to
+    /// `Type::Error`) built one for every statement. Set by
+    /// `infer_program_with_env` on that path; read it with
+    /// [`InferState::take_env_after_errors`].
+    pub(in crate::infer) env_after_errors: Option<crate::infer::TypeEnv>,
+
     /// Parallel to `errors`: the source file each error's span indexes
     /// into, or `None` for the entry source. Kept in lockstep with
     /// `errors` through `push_error` / `take_errors`, so a diagnostic
@@ -613,6 +621,7 @@ impl InferState {
             literal_fields: HashMap::new(),
             warnings: Vec::new(),
             errors: Vec::new(),
+            env_after_errors: None,
             error_sources: Vec::new(),
             current_source: None,
             sources: Default::default(),
@@ -693,6 +702,16 @@ impl InferState {
         }
         self.errors.push(err);
         self.error_sources.push(self.current_source.clone());
+    }
+
+    /// After an `infer_program*` call returned an error, the environment
+    /// the program would otherwise have returned: every top-level
+    /// binding with its inferred type, the ones whose statements failed
+    /// bound to `Type::Error`. Lets an editor keep answering hover and
+    /// completion queries in a file that has a type error somewhere.
+    /// `None` when the last program inferred cleanly.
+    pub fn take_env_after_errors(&mut self) -> Option<crate::infer::TypeEnv> {
+        self.env_after_errors.take()
     }
 
     /// Drain accumulated errors, leaving the state empty. The CLI calls

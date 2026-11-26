@@ -203,6 +203,9 @@ unterminated-comment error.
   type looks like by then; together with the pairs of bound variables
   already compared once, unification visits finitely many pairs of nodes
   (Huet's unification of rational trees).
+- The language server answers hover, completion, and signature help in a
+  file with a type error. A single error anywhere used to turn them off for
+  the whole file, though inference had typed every other statement.
 - `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
   string literal type (`"a, b"`) or after an arrow inside type arguments
   (`Pair<() => A, B>`).

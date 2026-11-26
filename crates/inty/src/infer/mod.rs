@@ -168,6 +168,8 @@ impl InferState {
         // prior overflow elsewhere would otherwise contaminate this
         // run's diagnostics.
         let _ = crate::types::subst::take_apply_subst_overflow();
+        // Likewise a recovered env left from a previous program.
+        self.env_after_errors = None;
 
         // Record the source language for the few frontend-specific
         // inference rules (unit type, primitive-method surface).
@@ -222,6 +224,8 @@ impl InferState {
             .cloned()
             .collect();
         let result = self.infer_stmt_list(&env, &program.statements);
+        // (A module imported mid-way leaves its own here: take ours now.)
+        let env_after_errors = self.env_after_errors.take();
         // The method calls whose callee's `this` is still unknown, then
         // the detached ones (see `generalize_seeded`).
         self.settle_receivers(None);
@@ -240,6 +244,10 @@ impl InferState {
         }
         self.ambient = ambient;
         let result = result.map(|(ty, env)| (ty, env.without_narrowings().globalized()));
+        self.env_after_errors = match &result {
+            Ok(_) => None,
+            Err(_) => env_after_errors.map(|env| env.without_narrowings().globalized()),
+        };
         self.stmt_list_depth = depth;
         // Every binding read before its declaration must have met it
         // since: one that didn't means a declaration was bound under a
@@ -1183,6 +1191,11 @@ impl InferState {
         // error drain `state.errors` after the top-level inference
         // completes.
         if self.errors.len() > errors_at_entry {
+            // A program's top level: keep the recovered env for
+            // `infer_program_with_env` to hand out.
+            if self.stmt_list_depth == 1 {
+                self.env_after_errors = Some(current_env);
+            }
             return Err(self.errors[errors_at_entry].clone());
         }
         Ok((result, current_env))
