@@ -1337,6 +1337,27 @@ impl InferState {
         self.resolve_iterable(container, element, span)
     }
 
+    /// Whether the record `container` takes a `[Symbol.iterator]: element`
+    /// field, as a read of it would add (see `resolve_iterable`): if it
+    /// does, it now has it; if not, nothing changed.
+    fn iterate_as_read(&mut self, container: &Type, element: &Type, span: Span) -> bool {
+        let entry = self.read_entry(element.clone());
+        let tail = self.fresh_flex();
+        let read = Type::Row(RowType::open_entries(
+            std::collections::BTreeMap::from([(
+                PropName(crate::types::ITER_KEY.to_string()),
+                entry,
+            )]),
+            tail,
+        ));
+        let snap = self.snapshot_inference();
+        if self.quietly(|s| s.unify(span, &read, container)).is_ok() {
+            return true;
+        }
+        self.restore_snapshot(snap);
+        false
+    }
+
     /// Resolve `Iterable c e` (see [`ClassName::Iterable`]).
     pub(crate) fn resolve_iterable(
         &mut self,
@@ -1392,6 +1413,14 @@ impl InferState {
                 Some(entry) if self.main_subst.resolve_presence(&entry.presence).is_pre() => {
                     self.unify(span, element, &entry.ty)
                 }
+                // A record of the fields a value's uses read (an object
+                // not known yet, `xs.find(…)` on a value of unknown type):
+                // iterating it reads its `[Symbol.iterator]`, as a read of
+                // `find` does. Whether the value has one is decided where
+                // its type is (an array has; a record that may not, or a
+                // closed one without it, can't take it, and isn't
+                // iterable).
+                _ if self.iterate_as_read(container, element, span) => Ok(()),
                 _ if self.row_field_entry(container, "length").is_some() => not_iterable(
                     self,
                     "an array-like object (`{length: n}`) isn't iterable; \

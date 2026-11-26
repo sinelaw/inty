@@ -1157,6 +1157,11 @@ impl InferState {
         if property == "length" {
             return Some(Type::Number);
         }
+        // What iterating it gives (a record of reads iterated, which an
+        // array may turn out to be: see `resolve_iterable`).
+        if property == crate::types::ITER_KEY {
+            return Some(elem.clone());
+        }
         // The primitive-method surface is language-specific: Python
         // `list` vs JavaScript `Array` (issue #67). Lua has no
         // method-call surface on sequences (yet).
