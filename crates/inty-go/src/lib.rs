@@ -73,16 +73,14 @@ pub fn compile(source: &str) -> std::result::Result<GoOutput, Vec<IntyError>> {
         // emitter lowers their uses to Go. Anything else is reported by
         // the emitter as unsupported.
         let mut visiting = std::collections::HashSet::new();
-        let env = match inty::modules::resolve_imports(
+        // (An import that fails is collected, with the program's errors.)
+        let env = inty::modules::resolve_imports(
             &mut state,
             env,
             &program,
             std::path::Path::new("."),
             &mut visiting,
-        ) {
-            Ok(env) => env,
-            Err(e) => return Err(vec![e]),
-        };
+        );
         // Record only for the user program, not the stdlib and built-ins
         // loaded above.
         state.expr_types = Some(HashMap::new());

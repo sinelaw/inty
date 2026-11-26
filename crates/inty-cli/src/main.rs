@@ -945,20 +945,6 @@ AUTHOR:
     );
 }
 
-/// Search roots for Python's absolute imports (stubs / site-packages),
-/// read from the `INTY_PYTHONPATH` environment variable. Entries are
-/// separated by the platform path separator (`:` on Unix, `;` on
-/// Windows). Empty / unset → no extra roots (the importing file's own
-/// directory is always searched).
-fn python_search_paths() -> Vec<std::path::PathBuf> {
-    match std::env::var_os("INTY_PYTHONPATH") {
-        Some(val) => std::env::split_paths(&val)
-            .filter(|p| !p.as_os_str().is_empty())
-            .collect(),
-        None => Vec::new(),
-    }
-}
-
 fn run_inference(
     state: &mut InferState,
     env: TypeEnv,
@@ -1004,90 +990,20 @@ fn check_source(
         }
     };
 
-    // Resolve imports relative to the file's parent directory before
-    // inferring the program itself. JavaScript uses ESM `import … from
-    // "./foo.js"`; Python resolves dotted/relative module specs against
-    // the file's directory plus the `INTY_PYTHONPATH` search roots (the
-    // typeshed / site-packages stand-in). stdin (no path) skips both.
-    let env = if lang == Language::Starlark {
-        // Starlark starts from its own prelude (not the JavaScript
-        // stdlib). `load` labels resolve against the file's workspace;
-        // from stdin there is no path, so loaded names are bound opaquely.
-        use inty::frontends::starlark;
-        let path = std::path::Path::new(filename);
-        let bazel = filename == "<stdin>" || starlark::is_bazel_file(path);
-        let loaded =
-            starlark::prelude::load(state, inty::builtins::initial_env(), bazel).and_then(|base| {
-                if filename == "<stdin>" {
-                    starlark::bind_loads_opaquely(state, base, &program)
-                } else {
-                    let mut loader = starlark::Loader::new();
-                    starlark::resolve_loads(state, base, &program, path, &mut loader)
-                }
+    // The prelude and what the program imports, resolved relative to the
+    // file (stdin has no path: its imports are left unresolved).
+    let path = (filename != "<stdin>").then(|| std::path::Path::new(filename));
+    let env = match inty::frontends::program_env(state, env, &program, lang, path) {
+        Ok(env) => env,
+        Err(e) => {
+            // Report the propagated error against the module whose
+            // loading failed (`current_source`).
+            errors.push(LocatedError {
+                error: e,
+                source: state.current_source(),
             });
-        match loaded {
-            Ok(e) => e,
-            Err(e) => {
-                // As for Python: report the propagated error against the
-                // module whose load failed.
-                errors.push(LocatedError {
-                    error: e,
-                    source: state.current_source(),
-                });
-                return Err(errors);
-            }
+            return Err(errors);
         }
-    } else if filename == "<stdin>" {
-        env
-    } else if lang == Language::JavaScript {
-        let base_dir = std::path::Path::new(filename)
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let mut visiting = std::collections::HashSet::new();
-        match inty::modules::resolve_imports(state, env, &program, &base_dir, &mut visiting) {
-            Ok(e) => e,
-            Err(e) => {
-                // A hard error aborting resolution is both returned here and
-                // (for inference failures) already in `state.errors`; report
-                // only the propagated one, located against the module whose
-                // resolution failed (`current_source`), to avoid duplicates.
-                errors.push(LocatedError {
-                    error: e,
-                    source: state.current_source(),
-                });
-                return Err(errors);
-            }
-        }
-    } else if lang == Language::Python {
-        let base_dir = std::path::Path::new(filename)
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let search_paths = python_search_paths();
-        let mut visiting = std::collections::HashSet::new();
-        match inty::frontends::python::modules::resolve_python_imports(
-            state,
-            env,
-            &program,
-            &base_dir,
-            &search_paths,
-            &mut visiting,
-        ) {
-            Ok(e) => e,
-            Err(e) => {
-                // See the JavaScript arm: report only the propagated error,
-                // located against the failing module, to avoid duplicating an
-                // inference error that is also sitting in `state.errors`.
-                errors.push(LocatedError {
-                    error: e,
-                    source: state.current_source(),
-                });
-                return Err(errors);
-            }
-        }
-    } else {
-        env
     };
 
     // Snapshot the names already in scope before checking the program

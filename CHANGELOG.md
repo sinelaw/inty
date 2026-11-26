@@ -229,6 +229,18 @@ unterminated-comment error.
   types, and it was an error type wherever it was used.
 - Hover off any name (in a function's body, or a declaration's initialiser)
   shows nothing. It used to show the enclosing function or variable.
+- The language server resolves a saved file's imports, relative to it, as
+  the CLI does: an imported name has its type, where it used to be an
+  undefined variable. Only the open file's own errors are shown. Both build
+  a program's environment (prelude, imports, Starlark `load`s) with
+  `frontends::program_env`; the language server now starts Python and Lua
+  from the same stdlib as the CLI, and Python from stdin sees its prelude.
+- An import that fails (a path that doesn't resolve, a cycle, a name the
+  module doesn't export) is reported, and its names are `Error`; the
+  importer is still checked. It used to stop the importer.
+- A module with type errors is reported against itself, and its importers
+  see what it typed. It used to fail whole, every name imported from it
+  `Error`.
 - `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
   string literal type (`"a, b"`) or after an arrow inside type arguments
   (`Pair<() => A, B>`).

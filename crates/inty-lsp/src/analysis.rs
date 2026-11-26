@@ -32,6 +32,15 @@ impl Analysis {
 
     /// Like [`Analysis::check`], but for an explicit frontend.
     pub fn check_lang(text: &str, lang: Language) -> Self {
+        Self::check_document(text, lang, None)
+    }
+
+    /// Check `text`, the contents of the document at `path` (`None` for
+    /// one with no file), as the CLI checks that file: with its
+    /// language's prelude and what it imports (read from disk, relative
+    /// to `path`). Only this document's own errors and warnings are
+    /// kept; an imported module's are its own document's.
+    pub fn check_document(text: &str, lang: Language, path: Option<&std::path::Path>) -> Self {
         let mut errors = Vec::new();
 
         // Parse through the same entry point as the CLI, so the editor
@@ -52,40 +61,13 @@ impl Analysis {
         // the file) would find no scope.
         let resolution = Resolution::build_with_len(&program, text.len());
 
-        // Build the initial env with the embedded stdlib. If the stdlib
-        // itself fails to load (shouldn't happen — it's tested), we
-        // surface the error and bail out of inference. For non-JS
-        // frontends we layer their own prelude on top of an empty env
-        // instead — the JS stdlib bindings would just be noise.
-        let env_state = match lang {
-            Language::JavaScript => initial_env_with_stdlib(),
-            Language::Python => {
-                let mut state = inty::infer::InferState::new();
-                state.set_language(inty::ast::SourceLanguage::Python);
-                inty::frontends::python::prelude::load(&mut state, inty::builtins::initial_env())
-                    .map(|env| (env, state))
-            }
-            Language::Starlark => {
-                // No file path here to resolve `load` labels against, so
-                // loaded names are bound opaquely; Bazel's globals are
-                // included, as most Starlark is `.bzl`.
-                let mut state = inty::infer::InferState::new();
-                inty::frontends::starlark::prelude::load(
-                    &mut state,
-                    inty::builtins::initial_env(),
-                    true,
-                )
-                .and_then(|env| {
-                    inty::frontends::starlark::bind_loads_opaquely(&mut state, env, &program)
-                })
-                .map(|env| (env, state))
-            }
-            Language::Lua => Ok((inty::builtins::initial_env(), {
-                let mut state = inty::infer::InferState::new();
-                state.set_language(inty::ast::SourceLanguage::Lua);
-                state
-            })),
-        };
+        // The environment the CLI checks the file in: the embedded
+        // stdlib, the language's prelude, and the file's imports.
+        let env_state = initial_env_with_stdlib().and_then(|(base, mut state)| {
+            let env = inty::frontends::program_env(&mut state, base, &program, lang, path)
+                .map_err(|e| this_document(e, state.current_source()))?;
+            Ok((env, state))
+        });
         let (env, mut state) = match env_state {
             Ok(r) => r,
             Err(e) => {
@@ -107,7 +89,12 @@ impl Analysis {
         // accumulated list so every diagnostic surfaces as an LSP
         // squiggly, not just the first.
         let infer_result = state.infer_program_with_env(&env, &program);
-        let collected = state.take_errors();
+        let collected: Vec<IntyError> = state
+            .take_located_errors()
+            .into_iter()
+            .filter(|e| e.source.is_none())
+            .map(|e| e.error)
+            .collect();
         match infer_result {
             Ok((_ty, final_env)) => {
                 if let Err(e) = state.resolve_constraints() {
@@ -144,10 +131,15 @@ impl Analysis {
     /// Non-fatal warnings collected during inference (e.g. unreachable
     /// narrowing branches). Empty if inference didn't run or didn't emit
     /// any.
-    pub fn warnings(&self) -> &[InferWarning] {
+    pub fn warnings(&self) -> Vec<&InferWarning> {
         match self.state.as_ref() {
-            Some(s) => &s.warnings,
-            None => &[],
+            // An imported module's spans are its own file's.
+            Some(s) => s
+                .warnings
+                .iter()
+                .filter(|w| s.sources.locate(w.span).is_none())
+                .collect(),
+            None => Vec::new(),
         }
     }
 
@@ -952,6 +944,20 @@ fn active_arg_index(text: &str, start: usize, cursor: usize, max: usize) -> usiz
 
 /// Walk the program looking for the smallest `Expr::Ident` whose span
 /// contains `offset`. Returns the identifier name and its span.
+/// An error for this document: as it is when raised here (`source`
+/// `None`); raised in another file (an imported module that couldn't be
+/// loaded), named with that file and placed at the document's start.
+fn this_document(error: IntyError, source: Option<inty::error::SourceFile>) -> IntyError {
+    match source {
+        None => error,
+        Some(file) => inty::error::TypeError::Module {
+            message: format!("in {}: {}", file.path, error),
+            span: Span::new(0, 0),
+        }
+        .into(),
+    }
+}
+
 fn find_identifier(program: &Program, offset: usize) -> Option<(String, Span)> {
     let mut best: Option<(String, Span)> = None;
     for stmt in &program.statements {

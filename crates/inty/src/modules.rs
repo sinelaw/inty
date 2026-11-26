@@ -302,13 +302,19 @@ fn compute_export_table(
 /// every module checked by this call. `visiting` is the set of canonicalised
 /// paths currently being resolved, used for cycle detection; top-level
 /// callers pass an empty set.
+///
+/// An import that fails (a path that doesn't resolve, a cycle, a module
+/// that doesn't check, a name it doesn't export) is reported in
+/// `state.errors`, and what it would have bound is typed `Error`, which
+/// propagates silently: the importer is still checked, as a statement
+/// that fails doesn't stop the statements after it.
 pub fn resolve_imports(
     state: &mut InferState,
     env: TypeEnv,
     program: &Program,
     base_dir: &Path,
     visiting: &mut HashSet<PathBuf>,
-) -> Result<TypeEnv, IntyError> {
+) -> TypeEnv {
     let mut env = env;
     for stmt in &program.statements {
         if let Stmt::Import {
@@ -317,51 +323,51 @@ pub fn resolve_imports(
             span,
         } = stmt
         {
-            let resolved_path = resolve_path(base_dir, source).map_err(|msg| {
+            let module_error = |message: String| {
                 IntyError::from(crate::error::TypeError::Module {
-                    message: format!("cannot resolve import {:?}: {}", source, msg),
+                    message,
                     span: *span,
                 })
-            })?;
-
-            if visiting.contains(&resolved_path) {
-                return Err(IntyError::from(crate::error::TypeError::Module {
-                    message: format!("circular import involving {}", resolved_path.display()),
-                    span: *span,
-                }));
-            }
-
-            // A module that failed is reported once, where it failed, and
-            // checked once: its importers (this one and later ones) go on
-            // with what it would have bound typed `Error`, which
-            // propagates silently, rather than failing with it — or each
-            // checking it again.
-            let loaded = if state.failed_modules.contains(&resolved_path) {
-                None
-            } else {
-                let importer = state.current_source();
-                match load_imported(state, env.clone(), &resolved_path, visiting) {
-                    Ok(checked) => Some(checked),
-                    Err(e) => {
-                        state.push_error(e);
-                        state.set_current_source(importer);
-                        visiting.remove(&resolved_path);
-                        state.failed_modules.insert(resolved_path.clone());
-                        None
+            };
+            let loaded = match resolve_path(base_dir, source) {
+                Err(msg) => Err(module_error(format!(
+                    "cannot resolve import {:?}: {}",
+                    source, msg
+                ))),
+                Ok(path) if visiting.contains(&path) => Err(module_error(format!(
+                    "circular import involving {}",
+                    path.display()
+                ))),
+                // A module that failed is reported once, where it failed,
+                // and checked once: its importers (this one and later
+                // ones) go on without it, rather than each checking it
+                // again.
+                Ok(path) if state.failed_modules.contains(&path) => Ok(None),
+                Ok(path) => {
+                    let importer = state.current_source();
+                    match load_imported(state, env.clone(), &path, visiting) {
+                        Ok((module_env, exports)) => Ok(Some((path, module_env, exports))),
+                        Err(e) => {
+                            state.push_error(e);
+                            state.set_current_source(importer);
+                            visiting.remove(&path);
+                            state.failed_modules.insert(path);
+                            Ok(None)
+                        }
                     }
                 }
             };
-            let Some((module_env, exports)) = loaded else {
-                let error = TypeScheme::mono(Type::Error);
-                for spec in specifiers {
-                    let local = match spec {
-                        ImportSpecifier::Named { local, .. }
-                        | ImportSpecifier::Default { local, .. }
-                        | ImportSpecifier::Namespace { local, .. } => local,
-                    };
-                    env = env.extend(local.clone(), error.clone());
+            let (resolved_path, module_env, exports) = match loaded {
+                Ok(Some(module)) => module,
+                failed => {
+                    if let Err(e) = failed {
+                        state.push_error(e);
+                    }
+                    for spec in specifiers {
+                        env = env.extend(spec_local(spec).clone(), error_scheme());
+                    }
+                    continue;
                 }
-                continue;
             };
 
             let lookup_export_scheme = |name: &str| -> Option<TypeScheme> {
@@ -379,48 +385,55 @@ pub fn resolve_imports(
                         env = env.extend(entry.exported.clone(), scheme);
                     }
                 }
-            } else {
-                for spec in specifiers {
-                    match spec {
-                        ImportSpecifier::Named {
-                            imported, local, ..
-                        } => {
-                            let scheme = lookup_export_scheme(imported).ok_or_else(|| {
-                                IntyError::from(crate::error::TypeError::Module {
-                                    message: format!(
-                                        "module {:?} has no export named {:?}",
-                                        source, imported
-                                    ),
-                                    span: *span,
-                                })
-                            })?;
-                            env = env.extend(local.clone(), scheme);
-                        }
-                        ImportSpecifier::Default { local, span } => {
-                            let scheme = lookup_export_scheme("default").ok_or_else(|| {
-                                IntyError::from(crate::error::TypeError::Module {
-                                    message: format!("module {:?} has no default export", source),
-                                    span: *span,
-                                })
-                            })?;
-                            env = env.extend(local.clone(), scheme);
-                        }
-                        ImportSpecifier::Namespace { local, span } => {
-                            let module_ty = build_namespace_type(
-                                resolved_path.to_string_lossy().into_owned(),
-                                &module_env,
-                                &exports,
-                                *span,
-                                source,
-                            )?;
-                            env = env.extend(local.clone(), TypeScheme::mono(module_ty));
-                        }
-                    }
-                }
+            }
+            for spec in specifiers {
+                let bound = match spec {
+                    ImportSpecifier::Named { imported, .. } => lookup_export_scheme(imported)
+                        .ok_or_else(|| {
+                            module_error(format!(
+                                "module {:?} has no export named {:?}",
+                                source, imported
+                            ))
+                        }),
+                    ImportSpecifier::Default { span, .. } => lookup_export_scheme("default")
+                        .ok_or_else(|| {
+                            IntyError::from(crate::error::TypeError::Module {
+                                message: format!("module {:?} has no default export", source),
+                                span: *span,
+                            })
+                        }),
+                    ImportSpecifier::Namespace { span, .. } => build_namespace_type(
+                        resolved_path.to_string_lossy().into_owned(),
+                        &module_env,
+                        &exports,
+                        *span,
+                        source,
+                    )
+                    .map(TypeScheme::mono),
+                };
+                let scheme = bound.unwrap_or_else(|e| {
+                    state.push_error(e);
+                    error_scheme()
+                });
+                env = env.extend(spec_local(spec).clone(), scheme);
             }
         }
     }
-    Ok(env)
+    env
+}
+
+/// The local name an import specifier binds.
+fn spec_local(spec: &ImportSpecifier) -> &String {
+    match spec {
+        ImportSpecifier::Named { local, .. }
+        | ImportSpecifier::Default { local, .. }
+        | ImportSpecifier::Namespace { local, .. } => local,
+    }
+}
+
+/// What a failed import binds: `Error`, which propagates silently.
+fn error_scheme() -> TypeScheme {
+    TypeScheme::mono(Type::Error)
 }
 
 /// Parse and type-check a single module file from disk, returning the
@@ -537,12 +550,18 @@ fn load_module(
     // Resolve imports, then infer, then resolve re-exports. The cycle set
     // is shared with both passes.
     let env_with_imports =
-        resolve_imports(state, starting_env.clone(), &program, &base_dir, visiting)?;
+        resolve_imports(state, starting_env.clone(), &program, &base_dir, visiting);
     let started = std::time::Instant::now();
     let depth = std::mem::replace(&mut state.module_depth, usize::from(imported));
     let inferred = state.infer_program_with_env(&env_with_imports, &program);
     state.module_depth = depth;
-    let (_ty, module_env) = inferred?;
+    // A module with type errors is reported against itself (they are
+    // collected), and its importers go on with what its inference
+    // recovered: each binding typed, the ones that failed `Error`.
+    let module_env = match inferred {
+        Ok((_ty, module_env)) => module_env,
+        Err(e) => state.take_env_after_errors().ok_or(e)?,
+    };
     // The module is complete: what its checking left pending is decided
     // now, while it is the module being checked (errors point into it),
     // rather than carried into every importer (where each
@@ -553,7 +572,9 @@ fn load_module(
     } else {
         Default::default()
     };
-    state.resolve_constraints_keeping(&keep)?;
+    if let Err(e) = state.resolve_constraints_keeping(&keep) {
+        state.push_error(e);
+    }
     if state.timings.is_some() {
         state
             .module_timings
@@ -889,7 +910,7 @@ mod tests {
             &program,
             main_path.parent().unwrap(),
             &mut visiting,
-        )?;
+        );
         // A module that failed is reported, and its importer goes on.
         match state.take_errors().into_iter().next() {
             Some(e) => Err(e),
@@ -909,7 +930,7 @@ mod tests {
             &program,
             main_path.parent().unwrap(),
             &mut visiting,
-        )?;
+        );
         state.infer_program_with_env(&env, &program)?;
         match state.take_errors().into_iter().next() {
             Some(e) => Err(e),
@@ -1557,7 +1578,7 @@ export function f(i, name) {
         let src = std::fs::read_to_string(dir.path().join("main.js")).unwrap();
         let program = parse(&src).unwrap();
         let mut state = InferState::new();
-        let env = resolve_imports(
+        resolve_imports(
             &mut state,
             crate::builtins::initial_env(),
             &program,
@@ -1565,7 +1586,7 @@ export function f(i, name) {
             &mut HashSet::new(),
         );
         assert!(
-            env.is_err() || !state.errors.is_empty(),
+            !state.errors.is_empty(),
             "String and Int pushed onto the same shared array must conflict"
         );
         // Agreeing importers: each module is checked once.
@@ -1581,8 +1602,7 @@ export function f(i, name) {
             &program,
             dir.path(),
             &mut HashSet::new(),
-        )
-        .expect("the importers agree");
+        );
         assert!(state.errors.is_empty());
         assert_eq!(
             state.module_cache.len(),
@@ -1641,6 +1661,38 @@ export function f(i, name) {
         }
     }
 
+    /// An import that fails (a path that doesn't resolve, a name the
+    /// module doesn't export) is reported, binds its names to `Error`,
+    /// and the importer is still checked: its own error is reported too.
+    #[test]
+    fn a_failed_import_does_not_stop_the_importer() {
+        let dir = tempdir();
+        write_file(dir.path(), "lib.js", "export const one = 1;");
+        let src = "import { a } from \"./missing.js\";\n\
+                   import { nope, one } from \"./lib.js\";\n\
+                   const n = one + 1;\n\
+                   const bad = n - {};\n";
+        let program = parse(src).unwrap();
+        let mut state = InferState::new();
+        let env = resolve_imports(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            dir.path(),
+            &mut HashSet::new(),
+        );
+        assert_eq!(
+            state.apply_subst(&env.lookup("one").unwrap().body.ty),
+            Type::Number
+        );
+        let _ = state.infer_program_with_env(&env, &program);
+        let shown: Vec<String> = state.take_errors().iter().map(|e| e.to_string()).collect();
+        assert_eq!(shown.len(), 3, "{shown:?}");
+        assert!(shown[0].contains("cannot resolve import"), "{shown:?}");
+        assert!(shown[1].contains("no export named \"nope\""), "{shown:?}");
+        assert!(shown[2].contains("Cannot unify"), "{shown:?}");
+    }
+
     /// Type-check `src` as a program's main module, like the CLI does
     /// (imports, inference with recovered errors counted, constraints).
     fn check_main(src: &str) -> Result<(), String> {
@@ -1654,8 +1706,7 @@ export function f(i, name) {
             &program,
             dir.path(),
             &mut HashSet::new(),
-        )
-        .map_err(|e| e.to_string())?;
+        );
         state
             .infer_program_with_env(&env, &program)
             .map_err(|e| e.to_string())?;

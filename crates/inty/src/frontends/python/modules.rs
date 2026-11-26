@@ -37,6 +37,19 @@ type Exports = Vec<(String, TypeScheme)>;
 /// imported bindings. `search_paths` are the absolute roots to search for
 /// absolute (non-relative) imports; `base_dir` is the importing file's
 /// directory, used for relative imports and as a final search fallback.
+/// Search roots for absolute imports (stubs, site-packages), from the
+/// `INTY_PYTHONPATH` environment variable: paths separated by the
+/// platform's separator (`:` on Unix, `;` on Windows). Unset or empty,
+/// none: the importing file's own directory is always searched.
+pub fn search_paths() -> Vec<PathBuf> {
+    match std::env::var_os("INTY_PYTHONPATH") {
+        Some(val) => std::env::split_paths(&val)
+            .filter(|p| !p.as_os_str().is_empty())
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 pub fn resolve_python_imports(
     state: &mut InferState,
     env: TypeEnv,
