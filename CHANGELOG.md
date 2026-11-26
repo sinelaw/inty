@@ -51,6 +51,15 @@
 
 ### Diagnostics
 
+- A failure inside a member of two records (or a class instance and a
+  record) that isn't a plain mismatch (a property an array lacks, an
+  arity, an infinite type) names the innermost member it is in and shows
+  that member's two types, with the failure as the reason: ``Type mismatch
+  in member `view.pane.rows`: expected '{size: Number}', found
+  'Number[]'`` (help: `Property 'size' not found on type Number[]`). It
+  used to show the two whole types only. Unrolling a recursive or nominal
+  type keeps the two sides' order, so such a member's expected and found
+  aren't swapped.
 - A function that doesn't use `this` met by one that reads it, deep in two
   types compared as a whole (a class's instance against what its uses
   expect), names the member they are (`editor.say`) and shows both

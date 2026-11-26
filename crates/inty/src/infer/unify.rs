@@ -132,6 +132,24 @@ impl InferState {
         self.unify_resolved_pair(span, t1, t2, pair)
     }
 
+    /// Unify `unrolled`, the unrolling of whichever of `t1` and `t2` is a
+    /// named type, with `other`, the other one, keeping their sides: an
+    /// error's expected and found (and the side a member's type is on)
+    /// stay those of `t1` and `t2`.
+    fn unify_in_order(
+        &mut self,
+        span: Span,
+        t1: &Type,
+        unrolled: &Type,
+        other: &Type,
+    ) -> UnifyResult<()> {
+        if matches!(t1, Type::Named(..)) {
+            self.unify(span, unrolled, other)
+        } else {
+            self.unify(span, other, unrolled)
+        }
+    }
+
     /// The goal of a recursive type met by a variable bound to a type
     /// (see [`UnfoldAssumption::VarNamed`]).
     fn var_named_goal(&mut self, t1: &Type, t2: &Type) -> Option<UnfoldAssumption> {
@@ -614,7 +632,7 @@ impl InferState {
                             }
                             if let Some(unrolled) = self.unroll_named(*id, args) {
                                 self.unfold_assumptions.push(assumption);
-                                let r = self.unify(span, &unrolled, other);
+                                let r = self.unify_in_order(span, t1, &unrolled, other);
                                 self.unfold_assumptions.pop();
                                 return r;
                             }
@@ -630,7 +648,7 @@ impl InferState {
                         return Ok(());
                     }
                     self.unfold_assumptions.push(assumption);
-                    let r = self.unify(span, &unrolled, other);
+                    let r = self.unify_in_order(span, t1, &unrolled, other);
                     self.unfold_assumptions.pop();
                     r
                 } else {
@@ -1370,6 +1388,37 @@ impl InferState {
             }
             Some(TypeError::FieldPresenceMismatch { member, .. }) if member.is_none() => {
                 *member = here
+            }
+            // Any other failure inside the member (a property its value
+            // lacks, an arity, an infinite type): a mismatch in it, with
+            // its two types, and the failure as the reason. Without the
+            // member the error says only that the two whole types differ.
+            Some(
+                inner @ (TypeError::OccursCheck { .. }
+                | TypeError::PropertyNotFound { .. }
+                | TypeError::PropertyOfNullable { .. }
+                | TypeError::PresenceMismatch { .. }
+                | TypeError::NotAFunction { .. }
+                | TypeError::ArityMismatch { .. }
+                | TypeError::ConstraintNotSatisfied { .. }
+                | TypeError::TypeMismatch { .. }
+                | TypeError::DetachedThis { .. }
+                | TypeError::BranchMismatch { .. }
+                | TypeError::ArrayElementMismatch { .. }),
+            ) => {
+                let reason = format!("in `{}`: {inner}", here.as_deref().unwrap_or_default());
+                let span = inner.span();
+                return TypeError::UnificationError {
+                    expected: ShownType::ty(t1),
+                    found: ShownType::ty(t2),
+                    member: here,
+                    whole: None,
+                    span,
+                    context: Some(reason),
+                    expected_origin: None,
+                    found_origin: None,
+                }
+                .into();
             }
             _ => {}
         }

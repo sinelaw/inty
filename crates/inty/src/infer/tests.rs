@@ -6653,3 +6653,25 @@ fn expansive_recursive_aliases_are_rejected() {
         assert!(err.contains("built from its own parameter"), "{src}: {err}");
     }
 }
+
+/// A failure inside a member of two records that isn't a plain mismatch
+/// (an array lacks a property the other side reads) is a mismatch in that
+/// member, the innermost one, with its two types: the error used to show
+/// the two whole records only.
+#[test]
+fn a_failure_inside_a_member_names_the_member() {
+    let src = "/** type Pane = {title: String, rows: Number[]} */\n\
+               /** function show(p: {view: {title: String, rows: {size: Number}}}) => Number */\n\
+               function show(p) { return p.view.rows.size; }\n\
+               /** const pane: Pane */\n\
+               const pane = {title: \"a\", rows: [1, 2]};\n\
+               /** const w: {view: Pane} */\n\
+               const w = {view: pane};\n\
+               show(w);";
+    let err = check_program(src, &[]).unwrap_err();
+    assert!(err.contains("in member `view.rows`"), "{err}");
+    assert!(
+        err.contains("expected {size: Number}, found Number[]"),
+        "{err}"
+    );
+}
