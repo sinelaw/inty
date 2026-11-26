@@ -6868,3 +6868,36 @@ fn a_function_value_with_fewer_parameters_fits_its_slot() {
         assert!(check_program(&src, &[]).is_err(), "{bad} is accepted");
     }
 }
+
+/// The fields a spread's operand gives the object are fitted to the
+/// expected record before the members written after the spread are
+/// checked against their slots: the operand says what the slots' type
+/// variables are (`T` from `items` here), as `items` written out would.
+#[test]
+fn a_spread_fixes_the_slots_of_the_fields_after_it() {
+    let head = "/** type It = {kind: \"a\", x: Number} | {kind: \"b\", y: String} */\n\
+                /** type P<T> = {items: T[], on: (T) => Undefined} */\n\
+                /** function props<T>(items: T[]) => P<T> */\n\
+                function props(items) { return { items, on: (_it) => {} }; }\n\
+                /** function list<T>(p: P<T>) => Undefined */\n\
+                function list(p) { p.items.forEach((x) => p.on(x)); }\n\
+                /** function mk() => It[] */\n\
+                function mk() { return [{ kind: \"a\", x: 1 }]; }\n\
+                const items = mk();\n";
+    let ok = "list({ ...props(items), on: (it) => { if (it.kind === \"b\") it.y.length; } });";
+    let src = format!("{head}{ok}");
+    assert!(
+        check_program(&src, &[]).is_ok(),
+        "{:?}",
+        check_program(&src, &[])
+    );
+    for bad in [
+        "list({ ...props(items), on: (it) => { it.z.length; } });",
+        "list({ ...props(items), on: (it) => { if (it.kind === \"b\") it.x + 1; } });",
+        "list({ ...{ items: [\"s\"] }, on: (it) => { it.kind; } });",
+        "list({ ...props([1, 2]), on: (it) => { it.kind; } });",
+    ] {
+        let src = format!("{head}{bad}");
+        assert!(check_program(&src, &[]).is_err(), "{bad} is accepted");
+    }
+}

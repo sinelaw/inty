@@ -344,6 +344,14 @@ impl InferState {
                         spread_of_error = true;
                         continue;
                     }
+                    if let Some(expected) = expected {
+                        self.fit_spread_fields(
+                            *spread_span,
+                            &arg_ty,
+                            expected,
+                            &properties[i + 1..],
+                        )?;
+                    }
                     if let Some(base) = waiting_spread.take() {
                         (props, row_tail) = self.merge_written_fields(*spread_span, base, props)?;
                     }
@@ -705,6 +713,64 @@ impl InferState {
             props: so_far.props,
             tail,
         })
+    }
+
+    /// The fields of a spread's operand (`arg`) that the object keeps
+    /// (no member written after it, `after`, replaces them) fitted to the
+    /// expected record's now, before the members written after the spread
+    /// are checked against their slots: the operand often says what the
+    /// slots' type variables are (`{ ...listProps(items), onActivate:
+    /// (it) => … }`, where `items` says what `it` is). The object as a
+    /// whole is fitted to the expected type afterwards anyway, so this
+    /// only moves that earlier. After another spread it waits (a later
+    /// spread may replace them).
+    fn fit_spread_fields(
+        &mut self,
+        span: Span,
+        arg: &Type,
+        expected: &RowType,
+        after: &[PropDef],
+    ) -> InferResult<()> {
+        if after.iter().any(|p| matches!(p, PropDef::Spread { .. })) {
+            return Ok(());
+        }
+        let written: std::collections::BTreeSet<PropName> = after
+            .iter()
+            .filter_map(|p| match p {
+                PropDef::Property { key, .. }
+                | PropDef::Method { key, .. }
+                | PropDef::Getter { key, .. }
+                | PropDef::Setter { key, .. } => Some(self.prop_key_to_name(key)),
+                PropDef::Spread { .. } => None,
+            })
+            .collect();
+        let mut operand = self.zonk_head(arg);
+        if let Type::Named(id, args) = &operand {
+            if !self.is_nominal_type(*id) {
+                if let Some(unrolled) = self.unroll_named(*id, args) {
+                    operand = unrolled;
+                }
+            }
+        }
+        if !matches!(operand, Type::Row(_)) {
+            return Ok(());
+        }
+        for (name, slot) in &expected.props {
+            if written.contains(name) || name.0 == crate::types::CALLABLE_KEY {
+                continue;
+            }
+            let Some(entry) = self.row_field_entry(&operand, &name.0) else {
+                continue;
+            };
+            // Only a field the spread copies for sure: present, an own one.
+            if !self.main_subst.resolve_presence(&entry.presence).is_pre()
+                || !self.main_subst.resolve_presence(&entry.own).is_pre()
+            {
+                continue;
+            }
+            self.subsume(span, &entry.ty, &slot.ty)?;
+        }
+        Ok(())
     }
 
     /// `row`, its open tail extended with those of `labels` it doesn't

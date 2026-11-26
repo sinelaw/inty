@@ -231,6 +231,12 @@ unterminated-comment error.
   copied whole at each binding read and each unification. And binding a
   variable to a row no longer copies the row's fields first to check
   whether it ends in that variable, which it rarely does.
+- The fields a spread gives an object literal are fitted to the expected
+  record before the members written after it are checked: in
+  `list({ ...listProps(items), onActivate: (it) => … })` the spread's
+  `items` says what `it` is, as `items` written out does, so `it.kind ===
+  "ws"` narrows a union of records rather than fixing an unknown `kind`
+  to `"ws"` ("expected '"header"', found '"ws"'").
 - A method call on a value an importing module decides
   (`editor.say("hi")` on a `let editor` an importer sets) takes a
   function that uses no `this` as well as a method of the receiver, as
