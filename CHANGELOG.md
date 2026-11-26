@@ -264,9 +264,16 @@ unterminated-comment error.
   it.label.startsWith(t[0])`) left a copy of its own constraints in the
   enclosing function's scheme (`y1 has {label: v1}, v1 has {toLowerCase:
   …}, …`), over variables no caller sees; so did a discarded function's
-  parameter. Generalisation now drops any constraint whose subject (a
-  receiver, a container) nothing reaches, as it already did for an
-  `Iterable` a call left out: such a variable can be whatever meets it.
+  parameter. Of the constraints a scheme takes, it now keeps only those
+  whose subject (a receiver, a container) its type reaches: in every
+  instance the others are on a fresh variable that can be whatever meets
+  them. What stays pending is unchanged.
+- Iterating a value an enclosing function returns, decided later as one
+  that isn't iterable, is an error:
+  `if (c) { const t = JSON.parse(s); for (const x of t) {} return t; }`
+  then a generic local `const` and `return id(0)`. Generalising the local
+  `const` deleted the pending `Iterable`, judging it unused, though the
+  `return` would decide its container.
 - `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
   string literal type (`"a, b"`) or after an arrow inside type arguments
   (`Pair<() => A, B>`).

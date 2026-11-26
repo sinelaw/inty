@@ -6490,3 +6490,69 @@ fn a_scheme_has_no_constraint_on_an_unreachable_variable() {
         assert!(vacuous.is_empty(), "{src}\nunreachable: {vacuous:?}");
     }
 }
+
+/// Generalising an inner binding leaves pending what its scheme doesn't
+/// take: a constraint on a value still in flight — an enclosing
+/// function's collected `return`, a branch of a conditional, an element
+/// or field of a literal still being built — is checked when that value
+/// is decided, here as a `Number` it can't be. (Each was accepted when a
+/// generalisation deleted the constraints it judged unreachable.)
+#[test]
+fn a_constraint_on_a_value_in_flight_survives_an_inner_generalisation() {
+    for src in [
+        // An enclosing arrow function's `return`.
+        "const f = (c, s) => {\n\
+           if (c) { const t = JSON.parse(s); t.name.toUpperCase(); return t; }\n\
+           const id = (x) => x;\n\
+           return id(0);\n\
+         };",
+        // A function declaration's, from an indexed read.
+        "function f(c) {\n\
+           if (c) { const t = [][0]; t.name.toUpperCase(); return t; }\n\
+           const id = (x) => x;\n\
+           return id(0);\n\
+         }",
+        // Decided only at a caller, through the scheme.
+        "function f(c, s) {\n\
+           if (c) { const t = JSON.parse(s); t.name.toUpperCase(); return t; }\n\
+           const id = (x) => x;\n\
+           return id(JSON.parse(s));\n\
+         }\n\
+         const n = f(true, \"1\") * 2;",
+        // A conditional's branches.
+        "function f(c, s) {\n\
+           return c\n\
+             ? ((t) => { t.name.toUpperCase(); return t; })(JSON.parse(s))\n\
+             : (() => { const id = (x) => x; return id(0); })();\n\
+         }",
+        // An array literal's elements.
+        "function f(s) {\n\
+           return [((t) => { t.name.toUpperCase(); return t; })(JSON.parse(s)),\n\
+                   (() => { const id = (x) => x; return id(0); })()];\n\
+         }",
+        // An object literal's fields.
+        "function f(s) {\n\
+           return {\n\
+             a: ((t) => { t.name.toUpperCase(); return t; })(JSON.parse(s)),\n\
+             m() { const id = (x) => x; return id(1); },\n\
+           };\n\
+         }\n\
+         const n = f(\"1\").a * 2;",
+        // A callback's `return`.
+        "function f(items) {\n\
+           return items.map((it) => {\n\
+             if (it.ok) { const t = JSON.parse(it.raw); t.name.toUpperCase(); return t; }\n\
+             const id = (x) => x;\n\
+             return id(0);\n\
+           });\n\
+         }",
+        // An `Iterable` (iterating what is a `Number`).
+        "function f(c, s) {\n\
+           if (c) { const t = JSON.parse(s); for (const x of t) {} return t; }\n\
+           const id = (x) => x;\n\
+           return id(0);\n\
+         }",
+    ] {
+        assert!(check_with_stdlib(src, &[]).is_err(), "accepted:\n{src}");
+    }
+}
