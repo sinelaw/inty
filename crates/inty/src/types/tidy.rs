@@ -30,7 +30,7 @@ use super::ty::{
 /// up with the same canonical ID — and therefore the same letter
 /// once printed. Tidying values in unrelated scopes uses a fresh
 /// env each.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TidyEnv {
     // Key on the full `TVarName` so a Flex and a Skolem that happen
     // to share an integer ID (in principle — inty's counter is

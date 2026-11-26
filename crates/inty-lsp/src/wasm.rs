@@ -67,7 +67,7 @@ impl Analysis {
     /// (already prefixed with `: ` or `-> `).
     pub fn inlay_hints(&self, start: usize, end: usize) -> Vec<JsValue> {
         self.inner
-            .inlay_hints_in(start, end, &self.source)
+            .inlay_hints_in(start, end)
             .into_iter()
             .map(inlay_to_js)
             .collect()

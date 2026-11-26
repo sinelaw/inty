@@ -25,6 +25,9 @@ pub struct Analysis {
     final_env: Option<TypeEnv>,
     state: Option<InferState>,
     pub resolution: Resolution,
+    /// How the document's types are shown, built once from the check
+    /// (see [`Presentation`]): every hint and hover prints through it.
+    presentation: std::cell::OnceCell<Presentation>,
 }
 
 impl Analysis {
@@ -83,6 +86,7 @@ impl Analysis {
                     final_env: None,
                     state: None,
                     resolution,
+                    presentation: Default::default(),
                 };
             }
         };
@@ -116,6 +120,7 @@ impl Analysis {
                     final_env: Some(final_env),
                     state: Some(state),
                     resolution,
+                    presentation: Default::default(),
                 }
             }
             Err(_first) => {
@@ -133,6 +138,7 @@ impl Analysis {
                     final_env,
                     state: Some(state),
                     resolution,
+                    presentation: Default::default(),
                 }
             }
         }
@@ -161,6 +167,7 @@ impl Analysis {
             final_env: None,
             state: None,
             resolution: Resolution::default(),
+            presentation: Default::default(),
         }
     }
 
@@ -199,25 +206,19 @@ impl Analysis {
                 self.text.get(hit_span.start..hit_span.end) == Some(def.name.as_str())
             });
         if let Some((def, def_span, hit_span)) = named {
-            // `decl_types` holds a raw `Type` (no quantifiers or
-            // constraints), so the scheme comes first.
-            let type_str = if let Some(scheme) = state.get_decl_scheme(def_span) {
-                Some(format_scheme(state, state.display_scheme(scheme)))
-            } else if let Some(ty) = state.get_decl_type(def_span) {
-                Some(format_type(state, state.display_type(ty)))
-            } else {
+            // As its hint shows it, the constraints its type reaches
+            // added.
+            let ty = state.get_decl_type(def_span).cloned().or_else(|| {
                 // A binding inference keys by name alone (a catch
                 // parameter).
-                self.final_env
-                    .as_ref()
-                    .and_then(|env| env.lookup(&def.name))
-                    .map(|scheme| format_scheme(state, state.display_scheme(scheme)))
-            };
-            if let Some(type_str) = type_str {
+                let env = self.final_env.as_ref()?;
+                env.lookup(&def.name).map(|scheme| scheme.body.ty.clone())
+            });
+            if let Some(ty) = ty {
                 return Some(HoverResult {
                     name: def.name.clone(),
                     span: hit_span,
-                    type_str,
+                    type_str: self.describe_at(word.start, &ty, state.get_decl_scheme(def_span)),
                 });
             }
         }
@@ -247,11 +248,39 @@ impl Analysis {
                     && !made_up.contains(&(start, end))
             })
             .min_by_key(|((start, end), _)| (end - start, *start))?;
+        let ty = ty.clone();
         Some(HoverResult {
             name,
             span: word,
-            type_str: format_type(state, state.display_type(ty)),
+            type_str: self.describe_at(word.start, &ty, None),
         })
+    }
+
+    /// The presentation, built on first use.
+    fn presentation(&self) -> &Presentation {
+        self.presentation.get_or_init(|| Presentation::build(self))
+    }
+
+    /// `ty` as hover shows it at `offset`: in the naming of the scope
+    /// there (so as its hints name its variables), with every
+    /// constraint it reaches — its own scheme's (`own`), and those of
+    /// the schemes around it (a local's type variables are constrained
+    /// by its enclosing function's).
+    fn describe_at(
+        &self,
+        offset: usize,
+        ty: &Type,
+        own: Option<&inty::types::TypeScheme>,
+    ) -> String {
+        let Some(state) = self.state.as_ref() else {
+            return String::new();
+        };
+        let presentation = self.presentation();
+        let scope = presentation.scope_at(offset);
+        let mut tidy = scope.map(|s| s.tidy.clone()).unwrap_or_default();
+        let pool = scope.map(|s| s.pool.as_slice()).unwrap_or(&[]);
+        let (ty, where_clause) = describe(state, &mut tidy, ty, own, pool);
+        format!("{ty}{where_clause}")
     }
 
     /// Format the type of `name` (looked up in the final env) as a
@@ -391,31 +420,96 @@ impl Analysis {
     /// list's closing `)` so the function name itself stays clean and
     /// each parameter still gets its own per-name hint.
     ///
-    /// `text` is the source the analysis was built from; we use it
-    /// only to find the `)` byte offset for function declarations.
-    pub fn inlay_hints_in(&self, start: usize, end: usize, text: &str) -> Vec<InlayHintData> {
-        use crate::resolver::DefKind;
+    /// The hints are the document's, built once (see
+    /// [`Presentation`]): which are asked for doesn't change what any
+    /// of them says.
+    pub fn inlay_hints_in(&self, start: usize, end: usize) -> Vec<InlayHintData> {
+        self.presentation()
+            .scopes
+            .iter()
+            .flat_map(|scope| &scope.hints)
+            .filter(|(def_span, _)| start <= def_span.start && def_span.start < end)
+            .map(|(_, hint)| hint.clone())
+            .collect()
+    }
+}
 
-        let state = match self.state.as_ref() {
-            Some(s) => s,
-            None => return Vec::new(),
+/// How a document's types are shown: one naming of type variables per
+/// top-level statement (a function and everything in it), assigned in
+/// reading order, which every hint and hover in it prints with. Built
+/// once from the check, so what is shown doesn't depend on what is asked
+/// for first, or which part of the document is in view.
+#[derive(Default)]
+struct Presentation {
+    scopes: Vec<Scope>,
+}
+
+/// One top-level statement's naming, its hints, and the constraints of
+/// every scheme in it (what a local's type variables are constrained by).
+struct Scope {
+    span: Span,
+    tidy: inty::types::TidyEnv,
+    hints: Vec<(Span, InlayHintData)>,
+    pool: Vec<inty::types::TypePred>,
+}
+
+impl Presentation {
+    fn build(analysis: &Analysis) -> Presentation {
+        let (Some(state), Some(program)) = (analysis.state.as_ref(), analysis.program.as_ref())
+        else {
+            return Presentation::default();
         };
-        // One `TidyEnv` for every hint in this range so a tvar
-        // shared by two bindings gets the same canonical ID — and
-        // therefore the same letter — across hints. Each hint
-        // still uses a fresh `PrettyContext`; that context's
-        // letter-assignment state is no longer load-bearing
-        // because tidy has already canonicalised the IDs.
+        // A binding is its first scope's: a front end can lower one
+        // source statement to several whose spans overlap (a Python
+        // tuple assignment).
+        let mut claimed = std::collections::HashSet::new();
+        let scopes = program
+            .statements
+            .iter()
+            .map(|stmt| {
+                let span = stmt.span();
+                Scope::build(
+                    analysis,
+                    state,
+                    Span::new(span.start, span.end),
+                    &mut claimed,
+                )
+            })
+            .collect();
+        Presentation { scopes }
+    }
+
+    fn scope_at(&self, offset: usize) -> Option<&Scope> {
+        self.scopes
+            .iter()
+            .find(|s| s.span.start <= offset && offset <= s.span.end)
+    }
+}
+
+impl Scope {
+    fn build(
+        analysis: &Analysis,
+        state: &InferState,
+        span: Span,
+        claimed: &mut std::collections::HashSet<(usize, usize)>,
+    ) -> Scope {
+        use crate::resolver::DefKind;
+        let text = analysis.text.as_str();
         let mut tidy = inty::types::TidyEnv::new();
         let mut hints = Vec::new();
-        // Walk defs in source order so the tidy env assigns IDs
-        // in reading order — `defs_in_range` iterates a `HashMap`,
-        // which would otherwise shuffle the ID-to-letter mapping
-        // on every edit.
-        let mut ordered: Vec<(Span, &crate::resolver::Def)> =
-            self.resolution.defs_in_range(start, end).collect();
+        let mut pool = Vec::new();
+        // In source order, so names are assigned in reading order
+        // (`defs_in_range` iterates a `HashMap`).
+        let mut ordered: Vec<(Span, &crate::resolver::Def)> = analysis
+            .resolution
+            .defs_in_range(span.start, span.end)
+            .filter(|(s, _)| claimed.insert((s.start, s.end)))
+            .collect();
         ordered.sort_by_key(|(s, _)| (s.start, s.end));
         for (def_span, def) in ordered {
+            if let Some(scheme) = state.get_decl_scheme(def_span) {
+                pool.extend(state.flatten_scheme(scheme).body.preds);
+            }
             if matches!(def.kind, DefKind::Catch | DefKind::Import) {
                 continue;
             }
@@ -424,11 +518,11 @@ impl Analysis {
             if def.name.starts_with('$') {
                 continue;
             }
-            let ty = match state.get_decl_type(def_span) {
-                Some(t) => t,
-                None => continue,
+            let Some(ty) = state.get_decl_type(def_span) else {
+                continue;
             };
-            let applied = state.display_type_in(&mut tidy, ty);
+            let scheme = state.get_decl_scheme(def_span);
+            let (shown, where_clause) = describe(state, &mut tidy, ty, scheme, &[]);
 
             if matches!(def.kind, DefKind::Function) {
                 // Function decls show only the return type, anchored
@@ -444,17 +538,20 @@ impl Analysis {
                 {
                     continue;
                 }
+                let applied = state.display_type_in(&mut tidy, ty);
                 if let Some((_, _, ret)) = applied.as_callable() {
                     if let Some(pos) = close_paren_after(text, def_span.end) {
-                        let where_clause = where_clause_for(state, def_span, &mut tidy);
-                        hints.push(InlayHintData {
-                            after_byte: pos,
-                            label: format!(
-                                " -> {}{}",
-                                format_hint(state, ret.clone()),
-                                where_clause
-                            ),
-                        });
+                        hints.push((
+                            def_span,
+                            InlayHintData {
+                                after_byte: pos,
+                                label: format!(
+                                    " -> {}{}",
+                                    format_hint(state, ret.clone()),
+                                    where_clause
+                                ),
+                            },
+                        ));
                     }
                 }
                 continue;
@@ -462,7 +559,7 @@ impl Analysis {
 
             // Inference gave up on this binding (an error was reported
             // where it failed); `x: <error>` adds nothing to that.
-            if matches!(applied, Type::Error) {
+            if shown == "<error>" {
                 continue;
             }
             // `x: int` already shows its type in the source. (A JSDoc
@@ -475,45 +572,124 @@ impl Analysis {
             {
                 continue;
             }
-            let where_clause = where_clause_for(state, def_span, &mut tidy);
-            hints.push(InlayHintData {
-                after_byte: def_span.end,
-                label: format!(": {}{}", format_hint(state, applied), where_clause),
-            });
+            hints.push((
+                def_span,
+                InlayHintData {
+                    after_byte: def_span.end,
+                    label: format!(": {shown}{where_clause}"),
+                },
+            ));
         }
-        hints
+        Scope {
+            span,
+            tidy,
+            hints,
+            pool,
+        }
     }
 }
 
-/// Inlay-hint payload returned by [`Analysis::inlay_hints_in`]. The
-/// `label` already contains the leading `:` or `->`, so callers render
-/// it verbatim.
-pub struct InlayHintData {
-    pub after_byte: usize,
-    pub label: String,
-}
-
-/// If the binding at `def_span` was generalised with predicates,
-/// return ` where ...` tidied into the shared `tidy` env so the
-/// letters in the where-clause line up with the body's letters in
-/// the same hint and with every other hint built from the same
-/// env. Empty string when there's no scheme or no predicates.
-fn where_clause_for(state: &InferState, def_span: Span, tidy: &mut inty::types::TidyEnv) -> String {
-    let Some(scheme) = state.get_decl_scheme(def_span) else {
-        return String::new();
+/// `ty` printed in the naming `tidy` holds (assigning names to any
+/// variable it hasn't named yet), and its ` where …` clause: `own`'s
+/// constraints (a generalised binding's scheme), and, from `pool`, every
+/// constraint `ty` or those reach through its subject (see
+/// [`inty::types::ClassName::subject_positions`]). Every hint and hover
+/// prints through here, so a type reads the same wherever it is shown.
+fn describe(
+    state: &InferState,
+    tidy: &mut inty::types::TidyEnv,
+    ty: &Type,
+    own: Option<&inty::types::TypeScheme>,
+    pool: &[inty::types::TypePred],
+) -> (String, String) {
+    let ty = state.flatten_type(ty);
+    let (quantified, mut preds) = own
+        .map(|scheme| {
+            let flat = state.flatten_scheme(scheme);
+            (flat.vars, flat.body.preds)
+        })
+        .unwrap_or_default();
+    let mut reached = ty.free_vars();
+    for p in &preds {
+        for t in &p.types {
+            reached.extend(t.free_vars());
+        }
+    }
+    let mut taken = vec![false; pool.len()];
+    loop {
+        let mut changed = false;
+        for (i, pred) in pool.iter().enumerate() {
+            if taken[i] {
+                continue;
+            }
+            let reaches =
+                pred.class
+                    .subject_positions(pred.types.len())
+                    .iter()
+                    .any(|&k| match &pred.types[k] {
+                        Type::Var(v) => reached.contains(v),
+                        _ => false,
+                    });
+            if reaches {
+                taken[i] = true;
+                changed = true;
+                for t in &pred.types {
+                    reached.extend(t.free_vars());
+                }
+                if !preds.contains(pred) {
+                    preds.push(pred.clone());
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // The type's variables are named first, in reading order
+    // (`(items: a, q: b) => c`), then its constraints'.
+    tidy.tidy_type(&ty);
+    let displayed = tidy.tidy_scheme(&inty::types::TypeScheme {
+        vars: quantified,
+        pvars: Vec::new(),
+        body: inty::types::QualType { preds, ty },
+    });
+    // A generalised binding's own variables, as `<a, b>`: those it
+    // doesn't quantify are an enclosing scope's.
+    let mut ctx = pretty_context(state, &displayed.body.ty).hiding_row_args();
+    let mentioned = inty::types::displayed_vars_of_scheme(&displayed);
+    let own_vars: Vec<String> = displayed
+        .vars
+        .iter()
+        .filter(|v| mentioned.contains(*v))
+        .map(|v| ctx.format_type(&Type::Var(v.clone())))
+        .collect();
+    let prefix = if own_vars.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", own_vars.join(", "))
     };
-    let displayed = state.display_scheme_in(tidy, scheme);
+    let shown = format!("{prefix}{}", ctx.format_type(&displayed.body.ty));
     let preds: Vec<_> = displayed
         .body
         .preds
         .into_iter()
         .filter(|p| !is_vacuous_inject(p))
         .collect();
-    if preds.is_empty() {
-        return String::new();
-    }
-    let mut ctx = pretty_context(state, &displayed.body.ty).hiding_row_args();
-    format!(" where {}", ctx.format_preds(&preds))
+    let where_clause = if preds.is_empty() {
+        String::new()
+    } else {
+        format!(" where {}", ctx.format_preds(&preds))
+    };
+    (shown, where_clause)
+}
+
+/// Inlay-hint payload returned by [`Analysis::inlay_hints_in`]. The
+/// `label` already contains the leading `:` or `->`, so callers render
+/// it verbatim.
+#[derive(Clone)]
+pub struct InlayHintData {
+    pub after_byte: usize,
+    pub label: String,
 }
 
 /// `Inject a (Null | a)`: `a` is accepted where `Null | a` is, which

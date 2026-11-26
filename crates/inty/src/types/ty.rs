@@ -335,6 +335,31 @@ pub enum ClassName {
     Testable,
 }
 
+impl ClassName {
+    /// The positions of a constraint's subjects: the types that, while
+    /// free variables, leave it satisfiable whatever its other types are
+    /// (a receiver can be a record with the property, a container one of
+    /// the element, a `Plus` operand a `Number`). A constraint matters
+    /// to a type that reaches one of its subjects; one whose subjects
+    /// nothing reaches is vacuous (see `InferState::generalize_seeded`).
+    /// A `Spread` result can't be just anything, so all its types are
+    /// its subjects.
+    pub fn subject_positions(self, arity: usize) -> &'static [usize] {
+        match self {
+            ClassName::HasProp
+            | ClassName::FieldWrite
+            | ClassName::IndexWrite
+            | ClassName::Indexable
+            | ClassName::Iterable
+            | ClassName::Strip
+            | ClassName::Inject
+            | ClassName::Plus
+            | ClassName::Testable => &[0],
+            ClassName::Spread => &[0, 1, 2][..arity.min(3)],
+        }
+    }
+}
+
 /// Type class predicate: a constraint that a type must satisfy.
 #[derive(Clone, Debug)]
 pub struct TypePred {
