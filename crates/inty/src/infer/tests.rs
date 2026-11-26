@@ -6599,3 +6599,57 @@ fn mutually_recursive_classes_end() {
     // (An error, if any, is the program's; the point is that it ends.)
     let _ = check_program(src, &["n"]);
 }
+
+// ---- Recursive aliases' arguments --------------------------------------------
+
+/// Two recursive aliases compared are assumed equal, while compared, as
+/// the instances they are, arguments included. Keyed by their ids alone,
+/// `P<Number>` and `Q<Number>` agreeing let `P<String>` (`next`) and
+/// `Q<Number>` agree too, and `f(q)` returned a number as a string.
+#[test]
+fn recursive_aliases_compared_with_their_arguments() {
+    let unsound = "/** type P<A> = {v: A, next: P<String>} */\n\
+                   /** type Q<A> = {v: A, next: Q<Number>} */\n\
+                   /** function f(a: P<Number>) => String */\n\
+                   function f(a) { return a.next.v; }\n\
+                   /** function g(q: Q<Number>) => String */\n\
+                   function g(q) { return f(q); }";
+    assert!(check_program(unsound, &[]).is_err());
+    // The same with agreeing instances, and other regular recursive
+    // aliases (a parameter passed on, swapped, or a closed argument).
+    let ok = "/** type P<A> = {v: A, next: P<String>} */\n\
+              /** type Q<A> = {v: A, next: Q<String>} */\n\
+              /** function f(a: P<Number>) => String */\n\
+              function f(a) { return a.next.v; }\n\
+              /** function g(q: Q<Number>) => String */\n\
+              function g(q) { return f(q); }\n\
+              /** type L<A> = {head: A, tail: L<A> | Null} */\n\
+              /** type T<A, B> = {a: A, b: B, swap: T<B, A>} */\n\
+              /** function h(t: T<Number, String>) => Number */\n\
+              function h(t) { return t.swap.b; }";
+    assert!(
+        check_program(ok, &[]).is_ok(),
+        "{:?}",
+        check_program(ok, &[])
+    );
+}
+
+/// A recursive alias whose recursive use builds a larger argument from its
+/// own parameter has no finite set of instances: comparing two of its
+/// types could unroll new ones without end. It is rejected where it is
+/// declared, directly or through an alias it is defined with.
+#[test]
+fn expansive_recursive_aliases_are_rejected() {
+    for src in [
+        "/** type Nest<A> = {v: A, next: Nest<{w: A}>} */\n\
+         /** function f(n: Nest<Number>) => Number */\n\
+         function f(n) { return n.v; }",
+        "/** type A<X> = {b: B<X>} */\n\
+         /** type B<X> = {a: A<X[]>} */\n\
+         /** function f(a: A<Number>) => Number */\n\
+         function f(a) { return 1; }",
+    ] {
+        let err = check_program(src, &[]).unwrap_err();
+        assert!(err.contains("built from its own parameter"), "{src}: {err}");
+    }
+}

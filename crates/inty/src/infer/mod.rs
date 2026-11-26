@@ -440,6 +440,12 @@ impl InferState {
             .collect();
         let sccs = crate::infer::features::functions::tarjan_scc(&deps);
         let mut recursive = vec![false; aliases.len()];
+        let mut group = vec![0usize; aliases.len()];
+        for (g, scc) in sccs.iter().enumerate() {
+            for &i in scc {
+                group[i] = g;
+            }
+        }
         for scc in &sccs {
             if scc.len() > 1 || deps[scc[0]].contains(&scc[0]) {
                 for &i in scc {
@@ -572,6 +578,55 @@ impl InferState {
                     class: false,
                 },
             );
+        }
+
+        // A recursive alias may pass each alias of its group (itself
+        // included) one of its own parameters, or a type that mentions
+        // none, as an argument: then its unrollings meet finitely many
+        // instances (Kennedy and Pierce's non-expansive definitions), so
+        // comparing two recursive types, which assumes a pair met again
+        // matches, ends. `type Nest<A> = {next: Nest<{w: A}>}` meets
+        // `Nest<A>`, `Nest<{w: A}>`, `Nest<{w: {w: A}}>`, … without end.
+        let in_group: std::collections::HashMap<crate::types::TypeId, usize> = aliases
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| Some((self.type_aliases.get(&a.name)?.rec_id?, group[i])))
+            .collect();
+        for (i, alias) in aliases.iter().enumerate() {
+            if !recursive[i] {
+                continue;
+            }
+            let Some(def) = self.type_aliases.get(&alias.name) else {
+                continue;
+            };
+            let params: std::collections::HashSet<TVarName> =
+                def.params.iter().map(|p| TVarName::Flex(*p)).collect();
+            let mut expansive: Option<Type> = None;
+            def.body.for_each_named(&mut |id, args| {
+                if expansive.is_none() && in_group.get(&id) == Some(&group[i]) {
+                    let grows = args.iter().any(|a| {
+                        !matches!(a, Type::Var(v) if params.contains(v))
+                            && a.free_vars().iter().any(|v| params.contains(v))
+                    });
+                    if grows {
+                        expansive = Some(Type::Named(id, args.to_vec()));
+                    }
+                }
+            });
+            if let Some(use_) = expansive {
+                let shown = self.show(&use_);
+                self.push_error(TypeError::InvalidSyntax {
+                    message: format!(
+                        "type alias '{}' uses itself (or an alias it is defined with) as `{shown}`, \
+                         an argument built from its own parameter: each unrolling would \
+                         be a new, larger type, without end. Pass the parameter itself, \
+                         or a type that doesn't mention it",
+                        alias.name
+                    ),
+                    span: alias.span,
+                }
+                .into());
+            }
         }
     }
 

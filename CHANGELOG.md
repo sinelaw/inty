@@ -191,6 +191,19 @@ unterminated-comment error.
 
 ### Fixes
 
+- Two recursive aliases being compared are assumed equal, while compared,
+  as the instances they are, arguments included. Keyed by their ids alone,
+  `P<Number>` agreeing with `Q<Number>` let `P<String>` agree with
+  `Q<Number>` too: with `type P<A> = {v: A, next: P<String>}` and `type
+  Q<A> = {v: A, next: Q<Number>}`, a `Q<Number>` passed as a `P<Number>`
+  was accepted, and its `next.v`, a number, read as a string.
+- A recursive alias whose recursive use builds a larger argument from its
+  own parameter (`type Nest<A> = {next: Nest<{w: A}>}`, directly or
+  through an alias it is defined with) is rejected where it is declared:
+  its unrollings are ever larger types, so comparing two of them, keyed by
+  their arguments, needn't end. A recursive use may pass the alias's own
+  parameters, in any order, or types that don't mention them
+  (non-expansive definitions, Kennedy and Pierce 2007).
 - Unifying recursive types always ends, with no depth limit: the "Type
   too complex: unifying these recursive types did not terminate" error is
   gone. Its cause was a row whose tail led back to itself (`ρ = {| ρ}`, met

@@ -543,7 +543,16 @@ impl InferState {
                 if n1 && n2 {
                     return Err(self.unification_error(span, t1, t2));
                 }
-                let assumption = UnfoldAssumption::NamedPair((*id1).min(*id2), (*id1).max(*id2));
+                // The two instances, arguments included: `P<Number>` and
+                // `Q<Number>` agreeing says nothing of `P<String>` and
+                // `Q<Number>` (their unrollings' `next`). Finitely many
+                // pairs: recursive aliases are non-expansive.
+                let (a1, a2) = (args1.clone(), args2.clone());
+                let assumption = if id1 < id2 {
+                    UnfoldAssumption::NamedPair(*id1, a1, *id2, a2)
+                } else {
+                    UnfoldAssumption::NamedPair(*id2, a2, *id1, a1)
+                };
                 if self.unfold_assumptions.contains(&assumption) {
                     return Ok(());
                 }
