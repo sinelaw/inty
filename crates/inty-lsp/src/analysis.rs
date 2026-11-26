@@ -3,6 +3,7 @@
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
+use inty::ast::visit::each_expr;
 use inty::ast::{Expr, ImportSpecifier, Program, Stmt};
 use inty::error::IntyError;
 use inty::frontends::Language;
@@ -17,7 +18,8 @@ use crate::resolver::Resolution;
 /// program parsed) the inference state needed to answer hover queries.
 pub struct Analysis {
     pub errors: Vec<IntyError>,
-    /// The document as checked: hover reads a member's property off it.
+    /// The document as checked: hover reads the word under the cursor
+    /// off it.
     text: String,
     program: Option<Program>,
     final_env: Option<TypeEnv>,
@@ -162,82 +164,93 @@ impl Analysis {
         }
     }
 
-    /// If an identifier covers `byte_offset`, return its inferred type
-    /// formatted as a string.
+    /// The type at `byte_offset`, as inference recorded it, for the word
+    /// there:
     ///
-    /// Resolution order:
-    /// 1. Ask the resolver for the binding at the cursor (handles
-    ///    shadowing — inner scopes win).
-    /// 2. Look up the binding's type in the inference state's
-    ///    `decl_types` map by the binding's name span.
-    /// 3. Fall back to `env.lookup(name)` (the final env) for bindings
-    ///    we don't yet record per-span — currently catch params and
-    ///    named function expressions whose spans the resolver can't
-    ///    pin precisely.
+    /// 1. A name the resolver knows (a declaration, or a use of one)
+    ///    shows its declaration's type: the scheme a generic function
+    ///    has (`<a>(a) => a`), shadow-correct.
+    /// 2. Anything else shows the type inference recorded
+    ///    (`expr_types`) for the innermost expression the word begins
+    ///    or ends: itself (a global, `this`), a member it is the
+    ///    property of (`s.startsWith`), one it is the keyword of
+    ///    (`new Map()`); or a literal it is inside (`"#prompt"`). An
+    ///    expression the front end made up (a class field's `$field$N`,
+    ///    in place of `this.x`) isn't one the source shows, so it
+    ///    doesn't count.
+    ///
+    /// Hover computes no type of its own, so what inference types,
+    /// hover shows. Off any word, nothing.
     pub fn hover_at(&self, byte_offset: usize) -> Option<HoverResult> {
         let state = self.state.as_ref()?;
-        let env = self.final_env.as_ref()?;
+        let word = word_at(&self.text, byte_offset)?;
+        let name = self.text[word.start..word.end].to_string();
 
-        // Try the resolver first — gives shadowing-correct answers and
-        // also resolves uses of function parameters that aren't in the
-        // final env at all.
-        if let Some((def_span, hit_span)) = self.resolution.binding_at(byte_offset) {
-            let def = self.resolution.def_at(def_span)?;
-            // Prefer the span-keyed scheme: it covers any generalised
-            // binding (function decl, `var f = function(...)`, etc.)
-            // and is shadow-correct, unlike a name-based env lookup.
-            // `decl_types` stores raw `Type` and loses both quantifiers
-            // and type-class predicates, so use it only as a fallback.
-            if let Some(scheme) = state.get_decl_scheme(def_span) {
+        // A name the source shows where the resolver has it: not one the
+        // front end made up (a class's field, `this.x = …`, is a
+        // `$field$N` declared there).
+        let named = self
+            .resolution
+            .binding_at(word.start)
+            .and_then(|(def_span, hit_span)| {
+                Some((self.resolution.def_at(def_span)?, def_span, hit_span))
+            })
+            .filter(|(def, _, hit_span)| {
+                self.text.get(hit_span.start..hit_span.end) == Some(def.name.as_str())
+            });
+        if let Some((def, def_span, hit_span)) = named {
+            // `decl_types` holds a raw `Type` (no quantifiers or
+            // constraints), so the scheme comes first.
+            let type_str = if let Some(scheme) = state.get_decl_scheme(def_span) {
+                Some(format_scheme(state, state.display_scheme(scheme)))
+            } else if let Some(ty) = state.get_decl_type(def_span) {
+                Some(format_type(state, state.display_type(ty)))
+            } else {
+                // A binding inference keys by name alone (a catch
+                // parameter).
+                self.final_env
+                    .as_ref()
+                    .and_then(|env| env.lookup(&def.name))
+                    .map(|scheme| format_scheme(state, state.display_scheme(scheme)))
+            };
+            if let Some(type_str) = type_str {
                 return Some(HoverResult {
                     name: def.name.clone(),
                     span: hit_span,
-                    type_str: format_scheme(state, state.display_scheme(scheme)),
-                });
-            }
-            if let Some(ty) = state.get_decl_type(def_span) {
-                return Some(HoverResult {
-                    name: def.name.clone(),
-                    span: hit_span,
-                    type_str: format_type(state, state.display_type(ty)),
-                });
-            }
-            // Resolver knows the def but inference didn't record a
-            // type for it. Fall back to env lookup by name — catches
-            // catch params and similar.
-            if let Some(scheme) = env.lookup(&def.name) {
-                return Some(HoverResult {
-                    name: def.name.clone(),
-                    span: hit_span,
-                    type_str: format_scheme(state, state.display_scheme(scheme)),
+                    type_str,
                 });
             }
         }
 
-        // Resolver said nothing — fall back to the original AST scan
-        // (e.g. for unresolved free identifiers we still want a
-        // best-effort type from the final env).
-        let program = self.program.as_ref()?;
-        let at = At {
-            offset: byte_offset,
-            text: &self.text,
-        };
-        let hit = find_identifier(program, &at)?;
-        let type_str = match hit.member {
-            // A member's property is typed as the whole `obj.prop` is.
-            Some(member) => {
-                let ty = state
-                    .expr_types
-                    .as_ref()?
-                    .get(&(member.start, member.end))?;
-                format_type(state, state.display_type(ty))
+        let mut made_up = std::collections::HashSet::new();
+        let mut literals = std::collections::HashSet::new();
+        each_expr(&self.program.as_ref()?.statements, &mut |e| match e {
+            Expr::Ident { name, span } => {
+                if self.text.get(span.start..span.end) != Some(name.as_str()) {
+                    made_up.insert((span.start, span.end));
+                }
             }
-            None => format_scheme(state, state.display_scheme(env.lookup(&hit.name)?)),
-        };
+            Expr::Lit { span, .. } | Expr::TemplateLiteral { span, .. } => {
+                literals.insert((span.start, span.end));
+            }
+            _ => {}
+        });
+        let (_, ty) = state
+            .expr_types
+            .as_ref()?
+            .iter()
+            .filter(|(&(start, end), _)| {
+                let holds = start <= word.start && word.end <= end;
+                let bounds = start == word.start || end == word.end;
+                holds
+                    && (bounds || literals.contains(&(start, end)))
+                    && !made_up.contains(&(start, end))
+            })
+            .min_by_key(|((start, end), _)| (end - start, *start))?;
         Some(HoverResult {
-            name: hit.name,
-            span: hit.span,
-            type_str,
+            name,
+            span: word,
+            type_str: format_type(state, state.display_type(ty)),
         })
     }
 
@@ -981,271 +994,36 @@ fn this_document(error: IntyError, source: Option<inty::error::SourceFile>) -> I
     }
 }
 
-/// Where hover is asked: the offset, in the document's text.
-struct At<'a> {
-    offset: usize,
-    text: &'a str,
-}
-
-/// What hover found at an offset: a name, or a member's property, typed
-/// as the whole `member` expression is.
-struct Hit {
-    name: String,
-    span: Span,
-    member: Option<Span>,
-}
-
-impl Hit {
-    fn name(name: String, span: Span) -> Self {
-        Hit {
-            name,
-            span,
-            member: None,
-        }
-    }
-}
-
-fn find_identifier(program: &Program, at: &At) -> Option<Hit> {
-    let mut best: Option<Hit> = None;
-    for stmt in &program.statements {
-        visit_stmt(stmt, at, &mut best);
-    }
-    best
-}
-
-fn visit_stmt(stmt: &Stmt, at: &At, best: &mut Option<Hit>) {
-    match stmt {
-        Stmt::Var { declarations, .. } => {
-            for d in declarations {
-                if span_contains(d.name_span(), at.offset) {
-                    consider(best, Hit::name(d.name.clone(), d.name_span()));
-                }
-                if let Some(init) = &d.init {
-                    visit_expr(init, at, best);
-                }
-            }
-        }
-        Stmt::Expr { expression, .. } => visit_expr(expression, at, best),
-        Stmt::Block { body, .. } => {
-            for s in body {
-                visit_stmt(s, at, best);
-            }
-        }
-        Stmt::If {
-            test,
-            consequent,
-            alternate,
-            ..
-        } => {
-            visit_expr(test, at, best);
-            visit_stmt(consequent, at, best);
-            if let Some(e) = alternate {
-                visit_stmt(e, at, best);
-            }
-        }
-        Stmt::While { test, body, .. } | Stmt::DoWhile { test, body, .. } => {
-            visit_expr(test, at, best);
-            visit_stmt(body, at, best);
-        }
-        Stmt::For {
-            init,
-            test,
-            update,
-            body,
-            ..
-        } => {
-            if let Some(init) = init {
-                use inty::ast::ForInit;
-                match init {
-                    ForInit::VarDecl(decls) => {
-                        for d in decls {
-                            if span_contains(d.name_span(), at.offset) {
-                                consider(best, Hit::name(d.name.clone(), d.name_span()));
-                            }
-                            if let Some(e) = &d.init {
-                                visit_expr(e, at, best);
-                            }
-                        }
-                    }
-                    ForInit::Expr(e) => visit_expr(e, at, best),
-                }
-            }
-            if let Some(t) = test {
-                visit_expr(t, at, best);
-            }
-            if let Some(u) = update {
-                visit_expr(u, at, best);
-            }
-            visit_stmt(body, at, best);
-        }
-        Stmt::ForIn { right, body, .. } | Stmt::ForOf { right, body, .. } => {
-            visit_expr(right, at, best);
-            visit_stmt(body, at, best);
-        }
-        Stmt::Return {
-            argument: Some(v), ..
-        } => visit_expr(v, at, best),
-        Stmt::Return { argument: None, .. } => {}
-        Stmt::Throw { argument, .. } => visit_expr(argument, at, best),
-        Stmt::Try {
-            block,
-            handler,
-            finalizer,
-            ..
-        } => {
-            visit_stmt(block, at, best);
-            if let Some(h) = handler {
-                visit_stmt(&h.body, at, best);
-            }
-            if let Some(f) = finalizer {
-                visit_stmt(f, at, best);
-            }
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-            ..
-        } => {
-            visit_expr(discriminant, at, best);
-            for c in cases {
-                if let Some(t) = &c.test {
-                    visit_expr(t, at, best);
-                }
-                for s in &c.consequent {
-                    visit_stmt(s, at, best);
-                }
-            }
-        }
-        Stmt::Labeled { body, .. } => visit_stmt(body, at, best),
-        Stmt::FunctionDecl { name, body, .. } => {
-            let name_span = stmt.function_name_span().expect("a function declaration");
-            if span_contains(name_span, at.offset) {
-                consider(best, Hit::name(name.clone(), name_span));
-            }
-            visit_stmt(body, at, best);
-        }
-        _ => {}
-    }
-}
-
-fn visit_expr(expr: &Expr, at: &At, best: &mut Option<Hit>) {
-    if !span_contains(expr.span(), at.offset) {
-        return;
-    }
-    match expr {
-        Expr::Ident { name, span } => consider(best, Hit::name(name.clone(), *span)),
-        Expr::Array { elements, .. } => {
-            for e in elements.iter().flatten() {
-                visit_expr(e, at, best);
-            }
-        }
-        Expr::Object { properties, .. } => {
-            use inty::ast::PropDef;
-            for p in properties {
-                match p {
-                    PropDef::Property { value, .. } => visit_expr(value, at, best),
-                    PropDef::Method { body, .. }
-                    | PropDef::Getter { body, .. }
-                    | PropDef::Setter { body, .. } => visit_stmt(body, at, best),
-                    PropDef::Spread { argument, .. } => visit_expr(argument, at, best),
-                }
-            }
-        }
-        Expr::Member {
-            object,
-            property,
-            span,
-        } => {
-            if let Some(prop) = property_span(at.text, *span, property) {
-                if span_contains(prop, at.offset) {
-                    consider(
-                        best,
-                        Hit {
-                            name: property.clone(),
-                            span: prop,
-                            member: Some(*span),
-                        },
-                    );
-                }
-            }
-            visit_expr(object, at, best)
-        }
-        Expr::ComputedMember {
-            object, property, ..
-        } => {
-            visit_expr(object, at, best);
-            visit_expr(property, at, best);
-        }
-        Expr::Call {
-            callee, arguments, ..
-        }
-        | Expr::New {
-            callee, arguments, ..
-        } => {
-            visit_expr(callee, at, best);
-            for a in arguments {
-                visit_expr(a, at, best);
-            }
-            for (_, v) in expr.keyword_args() {
-                visit_expr(v, at, best);
-            }
-        }
-        Expr::Function { body, .. } => visit_stmt(body, at, best),
-        Expr::Unary { argument, .. } => visit_expr(argument, at, best),
-        Expr::Binary { left, right, .. } => {
-            visit_expr(left, at, best);
-            visit_expr(right, at, best);
-        }
-        Expr::Assign { left, right, .. } => {
-            visit_expr(left, at, best);
-            visit_expr(right, at, best);
-        }
-        Expr::Conditional {
-            test,
-            consequent,
-            alternate,
-            ..
-        } => {
-            visit_expr(test, at, best);
-            visit_expr(consequent, at, best);
-            visit_expr(alternate, at, best);
-        }
-        Expr::Sequence { expressions, .. } => {
-            for e in expressions {
-                visit_expr(e, at, best);
-            }
-        }
-        Expr::TemplateLiteral { expressions, .. } => {
-            for e in expressions {
-                visit_expr(e, at, best);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn span_contains(span: Span, offset: usize) -> bool {
     span.start <= offset && offset <= span.end
 }
 
-fn span_len(span: Span) -> usize {
-    span.end.saturating_sub(span.start)
-}
-
-/// A member's property: `member` ends with the property's name, as the
-/// source shows it (`obj.prop`, `obj\n  .prop`). `None` for a member
-/// that doesn't, one the front end made up.
-fn property_span(text: &str, member: Span, property: &str) -> Option<Span> {
-    let start = member.end.checked_sub(property.len())?;
-    (start >= member.start && text.get(start..member.end) == Some(property))
-        .then(|| Span::new(start, member.end))
-}
-
-fn consider(best: &mut Option<Hit>, hit: Hit) {
-    match best {
-        Some(current) if span_len(current.span) <= span_len(hit.span) => {}
-        _ => *best = Some(hit),
+/// The word (identifier, keyword, or number) at `offset`, or just
+/// before it (a cursor right after a word); `None` off any word.
+fn word_at(text: &str, offset: usize) -> Option<Span> {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let offset = offset.min(text.len());
+    let at = |i: usize| text.get(i..).and_then(|t| t.chars().next());
+    let mut start = if at(offset).is_some_and(is_word) {
+        offset
+    } else {
+        let (i, c) = text.get(..offset)?.char_indices().next_back()?;
+        if !is_word(c) {
+            return None;
+        }
+        i
+    };
+    while let Some((i, c)) = text[..start].char_indices().next_back() {
+        if !is_word(c) {
+            break;
+        }
+        start = i;
     }
+    let end = text[start..]
+        .char_indices()
+        .find(|&(_, c)| !is_word(c))
+        .map_or(text.len(), |(i, _)| start + i);
+    Some(Span::new(start, end))
 }
 
 #[cfg(test)]
@@ -1461,6 +1239,102 @@ const func = function() { return {id: '123', name: 'hello'}; };";
                 .unwrap_or_else(|| panic!("hover on `{needle}`"));
             assert_eq!((hover.name.as_str(), hover.type_str.as_str()), (name, ty));
         }
+    }
+
+    /// Hover shows what inference recorded for the word under the
+    /// cursor, whatever expression holds it: nothing in hover is typed
+    /// by hand, so nothing inference types is missing from it.
+    #[test]
+    fn hover_shows_what_inference_recorded() {
+        let src = "const o = {a: {b: 1}, m() { return this.a; }};\n\
+                   const n = 42;\n\
+                   const g = Math.max(1, 2);\n\
+                   const m = new Map();\n\
+                   const d = o?.a.b;\n";
+        let analysis = Analysis::check(src);
+        assert!(analysis.errors.is_empty(), "{:?}", analysis.errors);
+        for (needle, name, ty) in [
+            ("42", "42", "42"),
+            (
+                "this",
+                "this",
+                "{a: {b: Number}, m: (this: {…}) => {b: Number}}",
+            ),
+            ("max", "max", "(Number, Number) => Number"),
+            ("new", "new", "Map<a, b>"),
+            ("a.b;", "a", "{b: Number}"),
+            ("b;", "b", "Number"),
+        ] {
+            let hover = analysis
+                .hover_at(src.find(needle).unwrap() + 1)
+                .unwrap_or_else(|| panic!("hover on `{needle}`"));
+            assert_eq!((hover.name.as_str(), hover.type_str.as_str()), (name, ty));
+        }
+        let src_lit = "const p = '#prompt';\n";
+        let lit = Analysis::check(src_lit);
+        let hover = lit
+            .hover_at(src_lit.find("prompt").unwrap() + 2)
+            .expect("hover in a string");
+        assert_eq!(hover.type_str, "\"#prompt\"");
+        // Off any word: an operator after a space, whitespace.
+        for off in [src.find("= 42").unwrap(), src.find("= 42").unwrap() + 1] {
+            assert!(analysis.hover_at(off).is_none(), "hover at {off}");
+        }
+
+        let src = "n = len('ab')\ns = 'x'.upper()\n";
+        let analysis = Analysis::check_lang(src, Language::Python);
+        let hover = analysis
+            .hover_at(src.find("upper").unwrap())
+            .expect("hover on `upper`");
+        assert_eq!(hover.type_str, "(String?) => String");
+    }
+
+    /// A name or expression the front end made up never shows: a class
+    /// field set in the constructor (`this.el = e`) is a hidden local
+    /// there, which the source doesn't show. What the source does show
+    /// still answers.
+    #[test]
+    fn hover_never_shows_a_made_up_name() {
+        let src =
+            "class P {\n  constructor(e) {\n    this.el = e;\n  }\n  m() { return this.el; }\n}\n";
+        let analysis = Analysis::check(src);
+        assert!(analysis.errors.is_empty(), "{:?}", analysis.errors);
+        for needle in ["this.el =", "el ="] {
+            let hover = analysis.hover_at(src.find(needle).unwrap() + 1);
+            assert!(
+                hover
+                    .as_ref()
+                    .is_none_or(|h| !h.name.contains('$') && !h.type_str.contains('$')),
+                "hover in `{needle}`: {:?}",
+                hover.map(|h| (h.name, h.type_str))
+            );
+        }
+        let e = analysis
+            .hover_at(src.find("= e").unwrap() + 2)
+            .expect("hover on `e`");
+        assert_eq!(e.name, "e");
+        let el = analysis
+            .hover_at(src.find("el; }").unwrap())
+            .expect("hover on `el` in `m`");
+        assert_eq!(el.name, "el");
+    }
+
+    /// A type error in one method leaves the rest of the class checked:
+    /// a later method's words answer hover.
+    #[test]
+    fn an_error_in_one_method_leaves_the_others_hoverable() {
+        let src = "class P {\n\
+                   \x20 constructor() { this.n = 1; }\n\
+                   \x20 bad() { return 1 - {}; }\n\
+                   \x20 good(d) { return this.n + d; }\n\
+                   }\n";
+        let analysis = Analysis::check(src);
+        assert_eq!(analysis.errors.len(), 1, "{:?}", analysis.errors);
+        let at = src.find("n + d").unwrap();
+        let n = analysis.hover_at(at).expect("hover on `n` in `good`");
+        assert_eq!((n.name.as_str(), n.type_str.as_str()), ("n", "Number"));
+        let d = analysis.hover_at(at + 4).expect("hover on `d`");
+        assert_eq!((d.name.as_str(), d.type_str.as_str()), ("d", "Number"));
     }
 
     /// `check_lang` routes to the right frontend: a Lua document parses

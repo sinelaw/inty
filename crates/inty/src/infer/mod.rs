@@ -247,8 +247,6 @@ impl InferState {
             .cloned()
             .collect();
         let result = self.infer_stmt_list(&env, &program.statements);
-        // (A module imported mid-way leaves its own here: take ours now.)
-        let env_after_errors = self.env_after_errors.take();
         // The method calls whose callee's `this` is still unknown, then
         // the detached ones (see `generalize_seeded`).
         self.settle_receivers(None);
@@ -267,10 +265,6 @@ impl InferState {
         }
         self.ambient = ambient;
         let result = result.map(|(ty, env)| (ty, env.without_narrowings().globalized()));
-        self.env_after_errors = match &result {
-            Ok(_) => None,
-            Err(_) => env_after_errors.map(|env| env.without_narrowings().globalized()),
-        };
         self.stmt_list_depth = depth;
         // Every binding read before its declaration must have met it
         // since: one that didn't means a declaration was bound under a
@@ -828,7 +822,6 @@ impl InferState {
                 env::Binding::mutable(TypeScheme::mono(ty.clone())),
             );
         }
-        let errors_at_entry = self.errors.len();
 
         // Each SCC is inferred *lazily*: as late as possible, but before
         // anything that uses it. A group waits for the `var` / `let` /
@@ -1218,19 +1211,12 @@ impl InferState {
             );
         }
 
-        // If we accumulated any errors in this `infer_stmt_list` call
-        // (or one nested inside the bodies of statements we just
-        // walked), surface the first new one. Callers that want every
-        // error drain `state.errors` after the top-level inference
-        // completes.
-        if self.errors.len() > errors_at_entry {
-            // A program's top level: keep the recovered env for
-            // `infer_program_with_env` to hand out.
-            if self.stmt_list_depth == 1 {
-                self.env_after_errors = Some(current_env);
-            }
-            return Err(self.errors[errors_at_entry].clone());
-        }
+        // What failed is collected, not re-raised: the statement holding
+        // this list (a function's body, a block, a class) goes on with
+        // what it typed, as the statements after a failing one do, so a
+        // type error in one method doesn't leave the rest of its class
+        // unchecked. `infer_program_with_env` fails with the first
+        // error collected.
         Ok((result, current_env))
     }
 
@@ -1408,6 +1394,24 @@ impl InferState {
     /// is a fresh variable, a primitive, or anything else where
     /// pushing-down has no purchase.
     pub fn check_expr(&mut self, env: &TypeEnv, expr: &Expr, expected: &Type) -> InferResult<Type> {
+        let ty = self.check_expr_inner(env, expr, expected)?;
+        // Recorded as `infer_expr` records what it synthesises (and that,
+        // when checking fell back to synthesis, stays).
+        if let Some(types) = self.expr_types.as_mut() {
+            let span = expr.span();
+            types
+                .entry((span.start, span.end))
+                .or_insert_with(|| ty.clone());
+        }
+        Ok(ty)
+    }
+
+    fn check_expr_inner(
+        &mut self,
+        env: &TypeEnv,
+        expr: &Expr,
+        expected: &Type,
+    ) -> InferResult<Type> {
         // Only these push what is expected into them; anything else is
         // synthesised and subsumed, which resolves `expected` as far as
         // it goes (not whole, up front).
@@ -1464,14 +1468,7 @@ impl InferState {
             Expr::Object { .. } | Expr::Array { .. } | Expr::Function { .. },
         ) = (&expected, expr)
         {
-            let ty = self.check_expr(env, expr, inner)?;
-            if let Some(types) = self.expr_types.as_mut() {
-                let span = expr.span();
-                types
-                    .entry((span.start, span.end))
-                    .or_insert_with(|| ty.clone());
-            }
-            return Ok(ty);
+            return self.check_expr(env, expr, inner);
         }
         // A function literal against a known function type takes its
         // parameter and result types from it (see
@@ -1498,9 +1495,6 @@ impl InferState {
                     *arrow,
                     *span,
                 )?;
-                if let Some(types) = self.expr_types.as_mut() {
-                    types.insert((span.start, span.end), ty.clone());
-                }
                 self.subsume(*span, &ty, &expected)?;
                 return Ok(self.zonk_head_into(ty));
             }
@@ -1527,9 +1521,6 @@ impl InferState {
                 }
             }
             let ty = self.zonk_head(&expected);
-            if let Some(types) = self.expr_types.as_mut() {
-                types.insert((span.start, span.end), ty.clone());
-            }
             return Ok(ty);
         }
         // Object-literal special case: dispatch to the contextual
@@ -1549,7 +1540,7 @@ impl InferState {
                 test,
                 consequent,
                 alternate,
-                span,
+                ..
             },
         ) = (known, expr)
         {
@@ -1557,25 +1548,19 @@ impl InferState {
             self.check_expr(&cons_env, consequent, &expected)?;
             self.check_expr(&alt_env, alternate, &expected)?;
             let ty = self.zonk_head(&expected);
-            if let Some(types) = self.expr_types.as_mut() {
-                types.insert((span.start, span.end), ty.clone());
-            }
             return Ok(ty);
         }
-        if let (true, Expr::NullishCoalesce { left, right, span }) = (known, expr) {
+        if let (true, Expr::NullishCoalesce { left, right, .. }) = (known, expr) {
             // `a ?? b`: what `a` holds besides nothing, and `b`, each fit.
             let left_ty = self.infer_expr(env, left)?;
             let value = self.strip_sum(left.span(), &left_ty)?;
             self.subsume(left.span(), &value, &expected)?;
             self.check_expr(env, right, &expected)?;
             let ty = self.zonk_head(&expected);
-            if let Some(types) = self.expr_types.as_mut() {
-                types.insert((span.start, span.end), ty.clone());
-            }
             return Ok(ty);
         }
         // An array literal where a tuple is expected is that tuple.
-        if let (Expr::Array { elements, span }, Type::Tuple(elems)) = (expr, &expected) {
+        if let (Expr::Array { elements, .. }, Type::Tuple(elems)) = (expr, &expected) {
             let plain = elements.iter().all(|e| {
                 e.as_ref()
                     .is_some_and(|e| !matches!(e, Expr::Spread { .. }))
@@ -1585,13 +1570,10 @@ impl InferState {
                     self.check_expr(env, e, t)?;
                 }
                 let ty = self.zonk_head(&expected);
-                if let Some(types) = self.expr_types.as_mut() {
-                    types.insert((span.start, span.end), ty.clone());
-                }
                 return Ok(ty);
             }
         }
-        if let (Expr::Array { elements, span }, Type::Array(elem)) = (expr, &expected) {
+        if let (Expr::Array { elements, .. }, Type::Array(elem)) = (expr, &expected) {
             if elements.iter().all(|e| e.is_some()) {
                 for e in elements.iter().flatten() {
                     match e {
@@ -1618,9 +1600,6 @@ impl InferState {
                     }
                 }
                 let ty = self.zonk_head(&expected);
-                if let Some(types) = self.expr_types.as_mut() {
-                    types.insert((span.start, span.end), ty.clone());
-                }
                 return Ok(ty);
             }
         }
