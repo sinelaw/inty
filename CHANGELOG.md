@@ -222,6 +222,13 @@ unterminated-comment error.
 - An unknown type in a function type, `{ run: (String) => Item }`, is named
   (`unknown type 'Item'`) instead of reported as "expected ',' or ';'
   between object-type properties".
+- An annotation that doesn't parse (`/** function f(a: String) => Item */`
+  with `Item` undeclared) is reported, and the function or variable it
+  annotates is checked as if it had none. The whole declaration used to
+  fail, so its body was never checked: its parameters and locals had no
+  types, and it was an error type wherever it was used.
+- Hover off any name (in a function's body, or a declaration's initialiser)
+  shows nothing. It used to show the enclosing function or variable.
 - `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
   string literal type (`"a, b"`) or after an arrow inside type arguments
   (`Pair<() => A, B>`).

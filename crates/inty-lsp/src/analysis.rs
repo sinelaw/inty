@@ -964,8 +964,8 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
     match stmt {
         Stmt::Var { declarations, .. } => {
             for d in declarations {
-                if span_contains(d.span, offset) {
-                    consider(best, d.name.clone(), d.span);
+                if span_contains(d.name_span(), offset) {
+                    consider(best, d.name.clone(), d.name_span());
                 }
                 if let Some(init) = &d.init {
                     visit_expr(init, offset, best);
@@ -1006,8 +1006,8 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
                 match init {
                     ForInit::VarDecl(decls) => {
                         for d in decls {
-                            if span_contains(d.span, offset) {
-                                consider(best, d.name.clone(), d.span);
+                            if span_contains(d.name_span(), offset) {
+                                consider(best, d.name.clone(), d.name_span());
                             }
                             if let Some(e) = &d.init {
                                 visit_expr(e, offset, best);
@@ -1064,11 +1064,10 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
             }
         }
         Stmt::Labeled { body, .. } => visit_stmt(body, offset, best),
-        Stmt::FunctionDecl {
-            name, body, span, ..
-        } => {
-            if span_contains(*span, offset) {
-                consider(best, name.clone(), *span);
+        Stmt::FunctionDecl { name, body, .. } => {
+            let name_span = stmt.function_name_span().expect("a function declaration");
+            if span_contains(name_span, offset) {
+                consider(best, name.clone(), name_span);
             }
             visit_stmt(body, offset, best);
         }
@@ -1288,7 +1287,7 @@ const func = function() { return {id: '123', name: 'hello'}; };";
         let src = "function f() {\n  return\n  1;\n}\n";
         let analysis = Analysis::check(src);
         let hover = analysis
-            .hover_at(src.find('f').unwrap())
+            .hover_at(src.find("f(").unwrap())
             .expect("hover on `f`");
         assert_eq!(hover.type_str, "() => Undefined");
     }
@@ -1308,6 +1307,50 @@ const func = function() { return {id: '123', name: 'hello'}; };";
             .hover_at(src.find("n =").unwrap())
             .expect("hover on `n`");
         assert_eq!(hover.type_str, "Number");
+    }
+
+    /// Hover answers on a name, not on the rest of its declaration: off
+    /// any name, in a function's body or a declarator's initialiser,
+    /// there is nothing to show.
+    #[test]
+    fn hover_off_a_name_is_nothing() {
+        let src = "function f(a) {  return a; }\nconst x =   1;\n";
+        let analysis = Analysis::check(src);
+        assert!(analysis.errors.is_empty(), "{:?}", analysis.errors);
+        for (what, at) in [
+            ("function body", src.find("{ ").unwrap() + 1),
+            ("initialiser", src.find("=   ").unwrap() + 2),
+        ] {
+            let hover = analysis.hover_at(at).map(|h| h.name);
+            assert_eq!(hover, None, "hover in the {what}");
+        }
+    }
+
+    /// An annotation that doesn't parse is reported, and what it
+    /// annotates is checked as if it had none: a function's parameters
+    /// and locals, and a constant, still answer hover.
+    #[test]
+    fn a_bad_annotation_is_reported_and_its_declaration_checked() {
+        let src = "/** function f(a: String) => Item */\n\
+                   function f(a) { const z = a; return z; }\n\
+                   /** const x: Item */\n\
+                   const x = 1;\n";
+        let analysis = Analysis::check(src);
+        let shown: Vec<String> = analysis.errors.iter().map(|e| e.to_string()).collect();
+        assert_eq!(shown.len(), 2, "{shown:?}");
+        assert!(
+            shown.iter().all(|e| e.contains("unknown type 'Item'")),
+            "{shown:?}"
+        );
+        for (needle, name) in [("(a)", "a"), ("z =", "z"), ("x =", "x")] {
+            let at = src.find(needle).unwrap() + needle.find(name).unwrap();
+            let hover = analysis
+                .hover_at(at)
+                .unwrap_or_else(|| panic!("hover on `{name}`"));
+            assert_eq!(hover.name, name);
+        }
+        let x = analysis.hover_at(src.find("x =").unwrap()).unwrap();
+        assert_eq!(x.type_str, "Number");
     }
 
     /// `check_lang` routes to the right frontend: a Lua document parses

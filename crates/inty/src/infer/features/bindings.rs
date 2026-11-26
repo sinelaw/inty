@@ -526,16 +526,21 @@ impl InferState {
                 let ty = self.class_annotation_type(env, &annotation.content, annotation_span)?;
                 let ty = self.declared_callbacks_detached(&ty);
                 Some((ty, annotation_span))
-            } else if let Some(annotation) = &decl.type_annotation {
-                let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-                let (ann_ty, var_map, next_pvar, preds) = parse_type_annotation_with_preds(
-                    &annotation.content,
-                    annotation_span,
-                    annotation.content_start,
-                    self.next_var_id(),
-                    self.next_pvar_id(),
-                    &self.type_aliases,
-                )?;
+            } else if let Some((annotation_span, (ann_ty, var_map, next_pvar, preds))) =
+                decl.type_annotation.as_ref().and_then(|annotation| {
+                    let annotation_span = Span::new(annotation.span.start, annotation.span.end);
+                    let parsed = parse_type_annotation_with_preds(
+                        &annotation.content,
+                        annotation_span,
+                        annotation.content_start,
+                        self.next_var_id(),
+                        self.next_pvar_id(),
+                        &self.type_aliases,
+                    );
+                    self.annotation_or_report(parsed)
+                        .map(|parsed| (annotation_span, parsed))
+                })
+            {
                 self.bump_pvar_id_to(next_pvar);
                 if let Some(&max) = var_map.values().max() {
                     self.bump_var_id_to(max + 1);

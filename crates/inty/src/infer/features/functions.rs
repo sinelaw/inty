@@ -570,16 +570,20 @@ impl InferState {
             self.unify(span, &ret_type, ret)?;
         }
 
-        if let Some(annotation) = type_annotation {
+        let parsed_annotation = type_annotation.as_ref().and_then(|annotation| {
             let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-            let (annotated_type, var_map, next_pvar) = parse_type_annotation_with_pvars(
+            let parsed = parse_type_annotation_with_pvars(
                 &annotation.content,
                 annotation_span,
                 annotation.content_start,
                 self.next_var_id(),
                 self.next_pvar_id(),
                 &self.type_aliases,
-            )?;
+            );
+            self.annotation_or_report(parsed)
+                .map(|parsed| (annotation_span, parsed))
+        });
+        if let Some((annotation_span, (annotated_type, var_map, next_pvar))) = parsed_annotation {
             if let Some(&max) = var_map.values().max() {
                 self.bump_var_id_to(max + 1);
             }
@@ -2065,14 +2069,17 @@ impl InferState {
             return Ok(None);
         }
         let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-        let (ann_ty, var_map, next_pvar, preds) = parse_type_annotation_with_preds(
+        let parsed = parse_type_annotation_with_preds(
             &annotation.content,
             annotation_span,
             annotation.content_start,
             self.next_var_id(),
             self.next_pvar_id(),
             &self.type_aliases,
-        )?;
+        );
+        let Some((ann_ty, var_map, next_pvar, preds)) = self.annotation_or_report(parsed) else {
+            return Ok(None);
+        };
         self.bump_pvar_id_to(next_pvar);
         if let Some(&max) = var_map.values().max() {
             self.bump_var_id_to(max + 1);

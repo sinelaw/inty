@@ -688,6 +688,23 @@ impl InferState {
     /// failing statement. The first call's error is what the public
     /// `infer_program*` API returns via `Err`; later errors are only
     /// visible to callers that drain `errors` after the run.
+    /// An annotation as parsed, or, when it doesn't parse, `None` with
+    /// the error reported: what it annotates is then checked as if it
+    /// had no annotation, rather than given up on (its body, and what
+    /// uses it, still typed).
+    pub(in crate::infer) fn annotation_or_report<T>(
+        &mut self,
+        parsed: crate::infer::type_parser::ParseResult<T>,
+    ) -> Option<T> {
+        match parsed {
+            Ok(t) => Some(t),
+            Err(e) => {
+                self.push_error(e.into());
+                None
+            }
+        }
+    }
+
     pub fn push_error(&mut self, err: IntyError) {
         // Reported: render the types it holds.
         let err = self.render_error(err);

@@ -781,6 +781,14 @@ pub struct VarDeclarator {
     pub span: Source,
 }
 
+impl VarDeclarator {
+    /// The span of the declared name: `span` covers `name = init`, and
+    /// starts at the name.
+    pub fn name_span(&self) -> Span {
+        Span::new(self.span.start, self.span.start + self.name.len())
+    }
+}
+
 /// Left-hand side of for-in/of
 #[derive(Debug, Clone)]
 pub enum ForInLhs {
