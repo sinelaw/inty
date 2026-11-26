@@ -1022,7 +1022,7 @@ fn naming_instance(ty: &Type, is_instance: &dyn Fn(&Type) -> bool, class: &Type)
         Type::Tuple(ts) => Type::Tuple(ts.iter().map(go).collect()),
         Type::Union(ts) => Type::Union(ts.iter().map(go).collect()),
         Type::Named(id, args) => Type::Named(*id, args.iter().map(go).collect()),
-        Type::Maybe(n, t) => Type::Maybe(n.clone(), Box::new(go(t))),
+        Type::Maybe(n, t) => Type::Maybe(*n, Box::new(go(t))),
         other => other.clone(),
     }
 }
