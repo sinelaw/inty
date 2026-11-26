@@ -166,8 +166,10 @@ fn lay_out_annotation(text: &str, fit: &Fit) -> Option<Laid> {
         })?),
         "const" | "let" | "var" => {
             let colon = top_level_find(text, |t, i| t[i..].starts_with(':'))?;
-            // Several declarators: left as they are.
-            if split_top(&text[colon + 1..], ',').len() > 1 {
+            // Several declarators: left as they are. Counted as the
+            // annotation reader counts them, as a scheme's `where`
+            // constraints are also separated by top-level commas.
+            if read_types(&format!("/** {text} */"))?.len() > 1 {
                 return None;
             }
             Some(colon)
@@ -177,6 +179,12 @@ fn lay_out_annotation(text: &str, fit: &Fit) -> Option<Laid> {
     };
     if let Some(at) = head_end {
         let (head, ty) = (text[..=at].trim_end(), text[at + 1..].trim());
+        if let Some(lines) = lay_out_constrained(head, ty, fit) {
+            return Some(Laid {
+                lines,
+                close_on_own_line: false,
+            });
+        }
         let members = split_top(ty, '|');
         // A function type's result takes in the rest of a union
         // (`(A) => B | C` returns `B | C`), and a quantified type starts
@@ -205,6 +213,62 @@ fn lay_out_annotation(text: &str, fit: &Fit) -> Option<Laid> {
         lines,
         close_on_own_line: false,
     })
+}
+
+/// A constrained scheme `<a, …> where C, … => T` laid out with its
+/// quantifier after `head`, then `where` and each constraint on lines
+/// of their own, then `=> T`:
+///
+/// ```text
+/// const f: <a, b>
+/// where
+///   a has {length: b},
+///   Plus b
+/// => (a) => b
+/// ```
+///
+/// `None` when `ty` isn't one.
+fn lay_out_constrained(head: &str, ty: &str, fit: &Fit) -> Option<Vec<String>> {
+    if !ty.starts_with('<') {
+        return None;
+    }
+    // The quantifier's `>`: where the walk is back outside brackets.
+    let mut close = None;
+    walk(ty, |i, c, depth| {
+        if c == '>' && depth == 1 && i > 0 && !ty[..i].ends_with('=') {
+            close = Some(i);
+            return false;
+        }
+        true
+    });
+    let close = close?;
+    let rest = ty[close + 1..].trim_start();
+    let clause = rest.strip_prefix("where")?;
+    if !clause.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let arrow = top_level_find(clause, |t, i| t[i..].starts_with("=>"))?;
+    let constraints = split_top(&clause[..arrow], ',');
+    let body = clause[arrow + 2..].trim();
+    if constraints.iter().any(|c| c.is_empty()) || body.is_empty() {
+        return None;
+    }
+    let mut lines = vec![format!("{head} {}", &ty[..=close])];
+    lines.push("where".to_string());
+    let last = constraints.len() - 1;
+    for (n, c) in constraints.into_iter().enumerate() {
+        // No comma after the last: the clause ends at `=>`.
+        let c = if n < last {
+            format!("{c},")
+        } else {
+            c.to_string()
+        };
+        let sub = lay_out(&c, 2, fit);
+        lines.push(format!("  {}", sub[0]));
+        lines.extend(sub[1..].iter().cloned());
+    }
+    lines.extend(lay_out(&format!("=> {body}"), 0, fit));
+    Some(lines)
 }
 
 /// `text` laid out at `indent` columns past the margin: as is when it
@@ -405,6 +469,25 @@ mod tests {
         assert_eq!(
             fmt(src, 40),
             "/** function sideView(\n *   b: Builder,\n *   v: ScoreView,\n *   c: Cached,\n * ) => Undefined */\nfunction sideView(b, v, c) {}\n"
+        );
+    }
+
+    #[test]
+    fn a_constrained_scheme_is_laid_out_one_constraint_per_line() {
+        // Its `where` constraints' commas are not declarators'.
+        let src = "/** const f: <a, b> where a has {length: b} => (a, (a) => b, Number) => b */\nconst f;\n";
+        assert_eq!(
+            fmt(src, 60),
+            "/** const f: <a, b>\n * where\n *   a has {length: b}\n * => (a, (a) => b, Number) => b */\nconst f;\n"
+        );
+    }
+
+    #[test]
+    fn a_constrained_scheme_breaks_its_parameters_and_constraints() {
+        let src = "/** const f: <a, b, c> where a has {then: ((b) => c) => a}, b has {length: c}, Plus c => (a, b, (a) => b, (b) => c, () => Undefined) => c */\nconst f;\n";
+        assert_eq!(
+            fmt(src, 40),
+            "/** const f: <a, b, c>\n * where\n *   a has {then: ((b) => c) => a},\n *   b has {length: c},\n *   Plus c\n * => (\n *   a,\n *   b,\n *   (a) => b,\n *   (b) => c,\n *   () => Undefined,\n * ) => c */\nconst f;\n"
         );
     }
 
