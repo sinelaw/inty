@@ -970,6 +970,48 @@ mod tests {
         }
     }
 
+    /// A read of a value an importer decides (`view.primary.pos`) leaves
+    /// what kind of property it is to the importer: a class's getter or
+    /// method fits it, as in a single file.
+    #[test]
+    fn a_pending_read_fits_a_getter_or_a_method() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "view.js",
+            "let view; export function attach(v) { view = v; } \
+             export function pos() { return view.primary.pos + view.decor.count(1); }",
+        );
+        for (arg, ok) in [
+            ("new View()", true),
+            ("{ primary: { pos: 1 }, decor: new Decor() }", true),
+            ("{ primary: { pos: \"x\" }, decor: new Decor() }", false),
+            ("{ primary: { pos: 1 }, decor: { count: 2 } }", false),
+        ] {
+            write_file(
+                dir.path(),
+                "main.js",
+                &format!(
+                    "import {{ attach }} from \"./view.js\"; \
+                     class Decor {{ constructor() {{ this.n = 1; }} count(k) {{ return this.n + k; }} }} \
+                     class View {{ constructor() {{ this.cs = [{{ pos: 1 }}]; this.decor = new Decor(); }} \
+                       get primary() {{ return this.cs[0]; }} }} \
+                     attach({arg});"
+                ),
+            );
+            let main_path = dir.path().join("main.js");
+            let mut state = InferState::new();
+            let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+                .and_then(|_| state.resolve_constraints());
+            assert_eq!(
+                r.is_ok() && state.errors.is_empty(),
+                ok,
+                "attach({arg}): {r:?} {:?}",
+                state.errors
+            );
+        }
+    }
+
     #[test]
     fn named_import_resolves() {
         let dir = tempdir();

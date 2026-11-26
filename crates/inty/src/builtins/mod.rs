@@ -937,6 +937,10 @@ impl InferState {
                     .flat_map(|c| c.pred.types.clone())
                     .collect();
                 let operands: Vec<Type> = operands.iter().map(|t| self.zonk_head(t)).collect();
+                // The receivers an importing module still sees: those
+                // `keep` names, and through them the results of their
+                // reads (`view.primary` of a `view` it sees is seen too).
+                let seen_by_importers = self.receivers_seen_by_importers(&deferred, &keys, keep);
                 let mut defaulted = false;
                 let mut rest = Vec::new();
                 let mut seen: Vec<(Type, String)> = Vec::new();
@@ -952,8 +956,10 @@ impl InferState {
                         }
                         Some(key) => {
                             if !seen.contains(&key) {
+                                let open =
+                                    matches!(&key.0, Type::Var(v) if seen_by_importers.contains(v));
                                 seen.push(key);
-                                self.default_has_prop(&c)?;
+                                self.default_has_prop(&c, open)?;
                             }
                             defaulted = true;
                         }
@@ -1045,18 +1051,77 @@ impl InferState {
         Ok(())
     }
 
+    /// Of the receivers of the deferred `HasProp`s (`keys`), the
+    /// variables an importing module still sees: those in `keep`, and the
+    /// variables of the results read from them, transitively.
+    fn receivers_seen_by_importers(
+        &mut self,
+        deferred: &[crate::infer::PendingConstraint],
+        keys: &[Option<(Type, String)>],
+        keep: &std::collections::HashSet<TVarName>,
+    ) -> std::collections::HashSet<TVarName> {
+        let mut seen = keep.clone();
+        if keep.is_empty() {
+            return seen;
+        }
+        // (The variables a result reaches, found without writing it out:
+        // see `Subst::reach`.)
+        let reads: Vec<(TVarName, std::collections::HashSet<TVarName>)> = deferred
+            .iter()
+            .zip(keys)
+            .filter_map(|(c, key)| match key {
+                Some((Type::Var(v), _)) => {
+                    let (_, _, result) = c.pred.as_has_prop()?;
+                    let mut reach = crate::types::subst::Reach::default();
+                    self.main_subst.reach(result, &mut reach);
+                    Some((v.clone(), reach.vars))
+                }
+                _ => None,
+            })
+            .collect();
+        loop {
+            let before = seen.len();
+            for (recv, result) in &reads {
+                if seen.contains(recv) {
+                    seen.extend(result.iter().cloned());
+                }
+            }
+            if seen.len() == before {
+                return seen;
+            }
+        }
+    }
+
     /// Read `HasProp(receiver, name, result)` as a field of an object:
     /// bind the receiver to `{name: result | ρ}`. A valid choice for a
     /// receiver nothing else constrains (it only narrows the types the
     /// constraint admits), and what inty inferred before `HasProp`.
-    fn default_has_prop(&mut self, c: &crate::infer::PendingConstraint) -> Result<(), IntyError> {
+    ///
+    /// The field is an own property that takes stores, unless `open`: a
+    /// receiver an importing module still sees, whose uses there decide
+    /// what kind of property it is (a getter, a class's method), as they
+    /// would in a single file. Its flags are then left as a read leaves
+    /// them.
+    fn default_has_prop(
+        &mut self,
+        c: &crate::infer::PendingConstraint,
+        open: bool,
+    ) -> Result<(), IntyError> {
         let (recv, name, result) = c
             .pred
             .as_has_prop()
             .expect("default_has_prop: a HasProp constraint");
         let tail = self.fresh_flex();
         self.note_field_read(&tail, name, result);
-        let row = Type::object_open([(name, result.clone())], tail);
+        let row = if open {
+            let entry = self.read_entry(result.clone());
+            Type::Row(RowType::open_entries(
+                std::collections::BTreeMap::from([(PropName(name.to_string()), entry)]),
+                tail,
+            ))
+        } else {
+            Type::object_open([(name, result.clone())], tail)
+        };
         self.unify(c.span, recv, &row)?;
         if let Some(this) = c.pred.method_this() {
             self.unify_this(c.span, this, recv)?;
