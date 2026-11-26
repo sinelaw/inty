@@ -319,6 +319,9 @@ pub struct InferState {
     /// and not checked again by a later importer (see
     /// `modules::resolve_imports`).
     pub failed_modules: std::collections::HashSet<std::path::PathBuf>,
+    /// The environment each project's libs were loaded into this run, by
+    /// its canonical `inty.json` path (see `modules::with_project_libs`).
+    pub project_libs: HashMap<std::path::PathBuf, crate::infer::TypeEnv>,
 
     /// Policy knobs. See `InferConfig`.
     pub config: InferConfig,
@@ -630,6 +633,7 @@ impl InferState {
             quiet: 0,
             module_cache: HashMap::new(),
             failed_modules: std::collections::HashSet::new(),
+            project_libs: HashMap::new(),
             timings: None,
             module_timings: Vec::new(),
             stmt_list_depth: 0,
