@@ -314,7 +314,7 @@ pub fn python_string_method_type(state: &mut InferState, method: &str) -> Option
         // string itself isn't iterable). Modelled as a list of them,
         // which is what the elements are iterated and indexed as.
         "elems" if starlark => Type::simple_func(vec![], Type::array(s.clone())),
-        // `s[a:b:c]`, lowered by the parser to `s.__slice__(a, b, c)`.
+        // `s[a:b:c]`, lowered by the parser to a call of `SLICE_METHOD`.
         crate::frontends::python::SLICE_METHOD => slice_method(s.clone()),
         // `sep.join(iterable)` — element type unconstrained (permissive to
         // avoid false positives on generators / maps).
@@ -624,7 +624,7 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
     })
 }
 
-/// The type of the `__slice__` method a slice subscript lowers to: three
+/// The type of the method a slice subscript lowers to: three
 /// bounds, each a number or `None` (omitted), giving a value of the
 /// receiver's own type `of`.
 fn slice_method(of: Type) -> Type {
@@ -787,7 +787,7 @@ pub fn python_list_method_type(state: &mut InferState, elem: &Type, method: &str
         "count" => Type::simple_func(vec![elem.clone()], Type::Number),
         "sort" | "reverse" | "clear" => Type::simple_func(vec![], nil.clone()),
         "copy" => Type::simple_func(vec![], arr.clone()),
-        // `xs[a:b:c]`, lowered by the parser to `xs.__slice__(a, b, c)`.
+        // `xs[a:b:c]`, lowered by the parser to a call of `SLICE_METHOD`.
         crate::frontends::python::SLICE_METHOD => slice_method(arr.clone()),
         _ => {
             let _ = (state, n, nil, arr);

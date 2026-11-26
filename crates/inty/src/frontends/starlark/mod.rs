@@ -6,8 +6,10 @@
 //! ([`crate::frontends::python`]) run in a Starlark mode, and its programs
 //! are inferred by the Python rules (`SourceLanguage::Starlark`, which is
 //! [`is_python_like`](crate::ast::SourceLanguage::is_python_like)), except
-//! where the languages differ: a Starlark string isn't iterable, and its
-//! `str` methods differ a little (`elems()`, `codepoints()`).
+//! where the languages differ: a Starlark string isn't iterable by `for`
+//! or a comprehension (the builtins that take an iterable, such as `list`
+//! or `enumerate`, accept any argument unchecked), and its `str` methods
+//! differ a little (`elems()`).
 //!
 //! What the Starlark mode changes:
 //!
@@ -137,9 +139,13 @@ pub fn resolve_label(label: &str, from: &Path) -> Option<LoadTarget> {
     let mut rest = label;
     if let Some(after) = rest.strip_prefix('@') {
         let after = after.strip_prefix('@').unwrap_or(after);
-        let (repo, path) = after.split_once("//")?;
+        // `@repo` alone names `@repo//:repo`.
+        let (repo, path) = after.split_once("//").unwrap_or((after, ""));
         if !repo.is_empty() {
             return Some(LoadTarget::External);
+        }
+        if path.is_empty() {
+            return None;
         }
         rest = path;
         return Some(LoadTarget::File(in_package(&root?, rest)));
@@ -220,12 +226,11 @@ impl Loader {
 
 /// Resolve every `load` in `program` (the file at `path`) and return `env`
 /// extended with the loaded names. Each loaded file is parsed, its own
-/// loads resolved, and inferred with `base` (the prelude, without the
-/// loading file's names) as its environment; a file is read once per
-/// [`Loader`].
+/// loads resolved, and inferred with its own prelude (Bazel's globals for
+/// a `.bzl` file) as its environment, never the loading file's names; a
+/// file is read once per [`Loader`].
 pub fn resolve_loads(
     state: &mut InferState,
-    base: &TypeEnv,
     env: TypeEnv,
     program: &Program,
     path: &Path,
@@ -255,7 +260,7 @@ pub fn resolve_loads(
                         file.display()
                     )));
                 }
-                load_file(state, base, &file, loader)?
+                load_file(state, &file, loader)?
             }
             Some(LoadTarget::External) => {
                 // Another repository: bind each name opaquely.
@@ -323,12 +328,7 @@ pub fn bind_loads_opaquely(
 }
 
 /// Parse, resolve and infer the file at `path`, returning its exports.
-fn load_file(
-    state: &mut InferState,
-    base: &TypeEnv,
-    path: &Path,
-    loader: &mut Loader,
-) -> Result<Exports> {
+fn load_file(state: &mut InferState, path: &Path, loader: &mut Loader) -> Result<Exports> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if let Some(exports) = loader.cache.get(&canonical) {
         return Ok(exports.clone());
@@ -358,21 +358,47 @@ fn load_file(
             return Err(e);
         }
     };
-    // A loaded file sees the prelude and its own loads, never the names of
-    // the file that loads it.
-    let env = resolve_loads(state, base, base.clone(), &program, path, loader)?;
-    let base_names: HashSet<String> = env.names().cloned().collect();
+    // A loaded file sees its own prelude and its own loads, never the names
+    // of the file that loads it.
+    let base = prelude::load(state, crate::builtins::initial_env(), is_bazel_file(path))?;
+    let env = resolve_loads(state, base, &program, path, loader)?;
+    // Its type aliases are its own: the alias table is restored after it is
+    // inferred, so the loading file can't name them. (Its exports' types
+    // keep what the aliases expanded to.)
+    let aliases = state.type_aliases.clone();
     let prev = state.set_current_source(Some(module_src));
-    let (_, module_env) = state.infer_program_with_env(&env, &program)?;
+    let inferred = state.infer_program_with_env(&env, &program);
+    state.type_aliases = aliases;
+    let (_, module_env) = inferred?;
     state.set_current_source(prev);
     loader.visiting.remove(&canonical);
-    let exports: Exports = module_env
-        .iter()
-        .filter(|(name, _)| !base_names.contains(*name) && !name.starts_with('_'))
-        .map(|(name, scheme)| (name.clone(), scheme.clone()))
+    // Its exports are the names it binds at the top level (not the names it
+    // loads, which are its own), except `_private` ones; one may shadow a
+    // builtin.
+    let mut bound = Vec::new();
+    top_level_bindings(&program.statements, &mut bound);
+    let exports: Exports = bound
+        .into_iter()
+        .filter(|name| !name.starts_with('_') && !name.starts_with('$'))
+        .filter_map(|name| Some((name.to_string(), module_env.lookup(name)?.clone())))
         .collect();
     loader.cache.insert(canonical, exports.clone());
     Ok(exports)
+}
+
+/// The names `stmts` bind at the top level: assignments and `def`s (and
+/// those inside a block a lowering made), not `load`s.
+fn top_level_bindings<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a str>) {
+    for s in stmts {
+        match s {
+            Stmt::Var { declarations, .. } => {
+                out.extend(declarations.iter().map(|d| d.name.as_str()))
+            }
+            Stmt::FunctionDecl { name, .. } => out.push(name),
+            Stmt::Block { body, .. } => top_level_bindings(body, out),
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]

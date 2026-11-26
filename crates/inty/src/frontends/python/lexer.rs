@@ -244,7 +244,9 @@ impl Lexer {
         }
         let text: String = self.chars[start..self.pos].iter().map(|(_, c)| c).collect();
         let body = text[1..].trim_start();
-        let at = |part: &str| self.byte_at(start) + (text.len() - part.len());
+        // The byte offset in the source of `part`, a slice of `text`.
+        let at =
+            |part: &str| self.byte_at(start) + (part.as_ptr() as usize - text.as_ptr() as usize);
         if let Some(rest) = body.strip_prefix("type:") {
             let ty = rest.trim_start();
             if !ty.is_empty() && !ty.starts_with("ignore") {

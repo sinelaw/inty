@@ -247,7 +247,7 @@ fn check_file(path: &Path) -> Vec<String> {
     )
     .unwrap();
     let mut loader = Loader::new();
-    let env = match resolve_loads(&mut state, &base, base.clone(), &program, path, &mut loader) {
+    let env = match resolve_loads(&mut state, base, &program, path, &mut loader) {
         Ok(env) => env,
         Err(e) => return vec![format!("{e:?}")],
     };
@@ -438,4 +438,59 @@ fn record_aliases_type_starlark_values() {
          \x20   return r[\"s\"].casefold()\n",
         "casefold",
     );
+}
+
+#[test]
+fn review_fixes() {
+    // No generator expressions in Starlark.
+    rejects(
+        "def f(xs):\n    return any(x > 0 for x in xs)\n",
+        "generator expression is not part of Starlark",
+    );
+    // A call of a comprehension's loop variable or a lambda's parameter
+    // isn't a call of the module-level `def` of the same name.
+    accepts(
+        "def apply(fs):\n    return [f() for f in fs]\n\
+         def f():\n    return apply([lambda: 1])\n",
+    );
+    accepts("def g(h):\n    return (lambda g: g(1))(h)\n");
+    // Recursion through a comprehension's element is still found.
+    rejects(
+        "def f(n):\n    return [f(x) for x in n]\n",
+        "recursion is not allowed",
+    );
+    // `@repo` alone is another repository's label.
+    assert_eq!(
+        resolve_label("@foo", Path::new("x.star")),
+        Some(LoadTarget::External)
+    );
+}
+
+#[test]
+fn loaded_files_have_their_own_prelude_exports_and_aliases() {
+    let root = temp_dir("own");
+    write(&root.join("MODULE.bazel"), "");
+    // A `.bzl` file sees Bazel's globals even when a `.star` file loads it,
+    // and exports a name that shadows a builtin.
+    write(
+        &root.join("lib/defs.bzl"),
+        "def len(x):\n    return 1\nD = depset([])\n# type Rec = {a: int}\n",
+    );
+    let a = root.join("a.star");
+    write(&a, "load(\"//lib:defs.bzl\", \"len\")\nx = len(3) + 1\n");
+    let errs = check_file(&a);
+    assert!(errs.is_empty(), "{errs:?}");
+    // Its type aliases stay its own.
+    let b = root.join("b.star");
+    write(
+        &b,
+        "load(\"//lib:defs.bzl\", \"D\")\n\
+         def f(r):\n    # type: (Rec) -> int\n    return 1\n",
+    );
+    let errs = check_file(&b);
+    assert!(
+        errs.iter().any(|e| e.contains("UnknownTypeRef")),
+        "{errs:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }

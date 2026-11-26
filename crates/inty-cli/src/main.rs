@@ -1031,7 +1031,7 @@ fn run_inference(
                     starlark::bind_loads_opaquely(state, base, &program)
                 } else {
                     let mut loader = starlark::Loader::new();
-                    starlark::resolve_loads(state, &base, base.clone(), &program, path, &mut loader)
+                    starlark::resolve_loads(state, base, &program, path, &mut loader)
                 }
             });
         match loaded {

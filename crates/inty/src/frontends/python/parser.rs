@@ -1286,10 +1286,13 @@ impl Parser {
     /// written after a `def` header's `:` (on that line or as the first
     /// line of the body), to the parameters and return type. A type
     /// written inline (`a: T`, `-> R`) takes precedence over the comment.
+    /// For a method (`receiver`), `params` leaves out `self`, and the
+    /// comment may give `self` a type or leave it out, as PEP 484 allows.
     fn apply_signature_comment(
         &mut self,
         params: &mut [Param],
         ret: &mut Option<TypeAst>,
+        receiver: bool,
     ) -> Result<()> {
         let from = self.prev_span().end;
         // Up to the first token of the body.
@@ -1301,7 +1304,10 @@ impl Parser {
             return Ok(());
         };
         let (param_types, ret_type) = Self::comment_signature(&c)?;
-        if let Some(types) = param_types {
+        if let Some(mut types) = param_types {
+            if receiver && types.len() == params.len() + 1 {
+                types.remove(0); // `self`'s type
+            }
             if types.len() != params.len() {
                 return Err(ParseError::Unsupported {
                     feature: format!(
@@ -1373,7 +1379,7 @@ impl Parser {
             None
         };
         self.expect(&Tok::Colon, "':'")?;
-        self.apply_signature_comment(&mut params, &mut return_type_ast)?;
+        self.apply_signature_comment(&mut params, &mut return_type_ast, false)?;
 
         let starlark_top = self.starlark && !self.in_function();
         if starlark_top {
@@ -1506,12 +1512,17 @@ impl Parser {
                         }
                     }
                     self.expect(&Tok::RParen, "')'")?;
-                    let return_type_ast = if self.eat(&Tok::Arrow) {
+                    let mut return_type_ast = if self.eat(&Tok::Arrow) {
                         Some(self.parse_type_ast())
                     } else {
                         None
                     };
                     self.expect(&Tok::Colon, "':'")?;
+                    self.apply_signature_comment(
+                        &mut params,
+                        &mut return_type_ast,
+                        self_param.is_some(),
+                    )?;
 
                     // Parse the body with `self` lowered to `this`.
                     let saved_self = self.self_name.take();
@@ -2223,7 +2234,15 @@ impl Parser {
             }
         }
         self.expect(&Tok::Colon, "':'")?;
-        let body_expr = self.expr()?;
+        // The parameters are bound in the body: a call of one isn't a call
+        // of a module-level `def` of the same name (Starlark's recursion
+        // check).
+        let mut scope = Scope::default();
+        scope.locals.extend(params.iter().map(|p| p.name.clone()));
+        self.scopes.push(scope);
+        let body_expr = self.expr();
+        self.scopes.pop();
+        let body_expr = body_expr?;
         let span = Span::new(start, self.prev_span().end);
         let body = Box::new(Stmt::Block {
             body: vec![Stmt::Return {
@@ -2446,9 +2465,9 @@ impl Parser {
     }
 
     /// The rest of a slice subscript `e[lower:upper:step]`, positioned at
-    /// the first `:`. Lowered to a call of the `__slice__` method that the
+    /// the first `:`. Lowered to a call of the [`SLICE_METHOD`] that the
     /// Python `str` and `list` method surfaces provide, with `None` for an
-    /// omitted bound: `xs[1:]` ⇒ `xs.__slice__(1, None, None)`. The result
+    /// omitted bound: `xs[1:]` ⇒ `xs.[:](1, None, None)`. The result
     /// has the receiver's type (a string or a list of the same element).
     fn slice(&mut self, start: usize, object: Expr, lower: Option<Expr>) -> Result<Expr> {
         let none = |span: Span| Expr::Lit {
@@ -2537,7 +2556,7 @@ impl Parser {
                 }
                 Tok::LParen => {
                     self.advance();
-                    let (arguments, keywords) = self.call_args()?;
+                    let (arguments, keywords) = self.call_args(&e)?;
                     let span = Span::new(start, self.prev_span().end);
                     if self.starlark {
                         if let Expr::Ident { name, .. } = &e {
@@ -2570,10 +2589,48 @@ impl Parser {
         Ok(e)
     }
 
+    /// A generator expression passed to `callee` is lowered to a list, which
+    /// is faithful only where the callee just iterates its argument: these
+    /// builtins and methods. Starlark has no generator expressions.
+    fn check_generator_consumer(&self, callee: &Expr) -> Result<()> {
+        const CONSUMERS: &[&str] = &[
+            "any",
+            "all",
+            "sum",
+            "min",
+            "max",
+            "sorted",
+            "list",
+            "tuple",
+            "set",
+            "frozenset",
+            "dict",
+            "enumerate",
+            "join",
+            "extend",
+        ];
+        if self.starlark {
+            return Err(self.not_starlark("a generator expression", "use a list comprehension"));
+        }
+        let name = match callee {
+            Expr::Ident { name, .. } => Some(name.as_str()),
+            Expr::Member { property, .. } => Some(property.as_str()),
+            _ => None,
+        };
+        if name.is_some_and(|n| CONSUMERS.contains(&n)) {
+            Ok(())
+        } else {
+            Err(self.unsupported(
+                "a generator expression is supported only as the sole argument of a call \
+                 that iterates it (any, all, sum, sorted, join, …); use a list comprehension",
+            ))
+        }
+    }
+
     /// Parse a call's argument list into `(positional, keyword)`. A
     /// `name=value` argument is a keyword; positional arguments may not
     /// follow a keyword (a Python `SyntaxError`).
-    fn call_args(&mut self) -> Result<CallArgs> {
+    fn call_args(&mut self, callee: &Expr) -> Result<CallArgs> {
         let mut args = Vec::new();
         let mut kwargs: Vec<(String, Expr)> = Vec::new();
         if self.check(&Tok::RParen) {
@@ -2605,9 +2662,11 @@ impl Parser {
             }
             let arg_start = self.cur_span().start;
             let arg = self.expr()?;
-            // A generator expression as the sole argument
-            // (`any(x > 0 for x in xs)`): lowered to a list comprehension.
+            // A generator expression as the sole argument of a call that
+            // only iterates it (`any(x > 0 for x in xs)`): lowered to a list
+            // comprehension, which it iterates the same way.
             if args.is_empty() && self.check(&Tok::For) {
+                self.check_generator_consumer(callee)?;
                 args.push(self.comprehension(arg_start, arg)?);
                 self.expect(&Tok::RParen, "')'")?;
                 return Ok((args, kwargs));
@@ -2713,12 +2772,18 @@ impl Parser {
                     });
                 }
                 let first = self.expr()?;
-                // `(e for x in xs)`: a generator expression, lowered to a
-                // list comprehension (its consumers all take a list).
+                // `(e for x in xs)` on its own: a generator, which can't be
+                // indexed or measured as a list can, so it isn't one.
                 if self.check(&Tok::For) {
-                    let comp = self.comprehension(span.start, first)?;
-                    self.expect(&Tok::RParen, "')'")?;
-                    return Ok(comp);
+                    return Err(if self.starlark {
+                        self.not_starlark("a generator expression", "use a list comprehension")
+                    } else {
+                        self.unsupported(
+                            "a generator expression is supported only as the sole argument \
+                             of a call that iterates it (any, all, sum, sorted, join, …); \
+                             use a list comprehension",
+                        )
+                    });
                 }
                 // A comma makes it a tuple (`(a, b)`, `(a,)`); otherwise the
                 // parentheses are just grouping.
@@ -2829,6 +2894,20 @@ impl Parser {
             }
         }
         let span = Span::new(start, self.prev_span().end);
+
+        // A call of a loop variable is not a call of a module-level `def` of
+        // the same name: drop such calls the element and conditions (parsed
+        // before the targets were known) recorded for the recursion check.
+        let targets: Vec<&String> = clauses
+            .iter()
+            .filter_map(|c| match c {
+                Clause::For { targets, .. } => Some(targets),
+                Clause::If(_) => None,
+            })
+            .flatten()
+            .collect();
+        self.top_calls
+            .retain(|(_, callee, at)| at.start < start || !targets.contains(&callee));
 
         let acc = self.fresh_temp();
         let first_iter = self.fresh_temp();
@@ -2950,21 +3029,22 @@ impl Parser {
         let mut props = Vec::new();
         while !self.check(&Tok::RBrace) {
             let field_span = self.cur_span();
-            let key =
-                match self.cur().clone() {
-                    Tok::Str(s) => {
-                        self.advance();
-                        PropKey::String(s)
-                    }
-                    Tok::Number(n) => {
-                        self.advance();
-                        PropKey::Number(n)
-                    }
-                    _ => return Err(self.unsupported(
-                        "dict keys must be string or number literals (or this is a set literal, \
-                         which is unsupported)",
-                    )),
-                };
+            let key = match self.cur().clone() {
+                Tok::Str(s) => {
+                    self.advance();
+                    PropKey::String(s)
+                }
+                Tok::Number(n) => {
+                    self.advance();
+                    PropKey::Number(n)
+                }
+                _ => {
+                    return Err(self.unsupported(
+                        "dict keys must be string or number literals \
+                         (set literals and dict comprehensions are unsupported)",
+                    ))
+                }
+            };
             self.expect(&Tok::Colon, "':' in dict")?;
             let value = self.expr()?;
             props.push(PropDef::Property {
@@ -3006,7 +3086,9 @@ fn struct_literal(keywords: Vec<(String, Expr)>, span: Span) -> Expr {
 
 /// The method a slice subscript (`xs[a:b:c]`) lowers to. The Python
 /// `str` and `list` method surfaces define it (`builtins::python_*_method_type`).
-pub const SLICE_METHOD: &str = "__slice__";
+/// Not a name a program can write (or define on a class), so only a slice
+/// reaches it.
+pub const SLICE_METHOD: &str = "[:]";
 
 /// `var t0 = tmp[0]; var t1 = tmp[1]; …` — the statements that bind the
 /// names of a tuple target (`for k, v in …`) from the element `tmp`. Each

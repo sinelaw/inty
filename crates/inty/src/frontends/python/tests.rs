@@ -2163,9 +2163,9 @@ fn list_comprehensions_are_typed() {
         "x = [1, 2]\nx2 = [x + 1 for x in x]\nz = x2[0] + 1\n",
         // A loop variable doesn't clobber an enclosing name.
         "x = 5\nys = [x for x in [\"a\"]]\nz = x + 1\n",
-        // A generator expression as a call's sole argument, or parenthesised.
+        // A generator expression as the sole argument of a call that
+        // iterates it.
         "b = any(v > 1 for v in [1, 2])\ns = sum(v for v in [1, 2])\nn = s + 1\n",
-        "g = (x for x in [1, 2])\n",
         // In a method, `self` inside the comprehension is the receiver.
         "class C:\n\
          \x20   def __init__(self):\n\
@@ -2489,4 +2489,64 @@ fn unknown_names_in_aliases_are_reported() {
         let errs = check_program(src);
         assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
     }
+}
+
+// ---- review fixes ----
+
+#[test]
+fn generator_expressions_only_where_iterated() {
+    let ok = "xs = [1]\n\
+              b = any(x > 0 for x in xs)\n\
+              s = \", \".join(str(x) for x in xs)\n\
+              t = sum(x for x in xs) + 1\n";
+    let errs = check_program(ok);
+    assert!(errs.is_empty(), "rejected:\n{ok}\n{errs:?}");
+    // A generator can't be measured or indexed as a list can.
+    for src in [
+        "xs = [1]\ng = (x for x in xs)\n",
+        "xs = [1]\nn = len(x for x in xs)\n",
+    ] {
+        assert!(parse_source(src).is_err(), "accepted:\n{src}");
+    }
+}
+
+#[test]
+fn signature_comments_on_methods() {
+    // `self` may be left out of the comment, or given a type.
+    let bad = [
+        "class C:\n\
+         \x20   def m(self, x):\n\
+         \x20       # type: (int) -> str\n\
+         \x20       return x\n",
+        "class C:\n\
+         \x20   def m(self, x):\n\
+         \x20       # type: (C, int) -> int\n\
+         \x20       return x\n\
+         r = C().m(\"s\")\n",
+    ];
+    for src in bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+    let ok = "class C:\n\
+              \x20   def m(self, x):\n\
+              \x20       # type: (int) -> int\n\
+              \x20       return x + 1\n\
+              r = C().m(1) + 1\n";
+    let errs = check_program(ok);
+    assert!(errs.is_empty(), "rejected:\n{ok}\n{errs:?}");
+}
+
+#[test]
+fn slices_use_a_name_programs_cant_write() {
+    let src = "s = \"abc\".__slice__(1, None, None)\n";
+    assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+}
+
+#[test]
+fn alias_comment_spans_cover_the_name() {
+    // Trailing whitespace once inverted the span (a panic when rendered).
+    let src = "# type Rec = {a: int}          \n";
+    let program = parse_source(src).unwrap();
+    let alias = &program.type_aliases[0];
+    assert_eq!(&src[alias.span.start..alias.span.end], "Rec = {a: int}");
 }

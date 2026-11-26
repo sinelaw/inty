@@ -18,11 +18,13 @@
   without checking until they are declared. The CLI and the language
   server pick it from the extension.
 - Python: list comprehensions (several `for`/`if` clauses, tuple
-  targets), and a generator expression as a call's sole argument.
+  targets), and a generator expression as the sole argument of a call that
+  iterates it (`any`, `all`, `sum`, `sorted`, `join`, …).
 - Python: slices `xs[a:b:c]` of lists and strings.
 - Python: keyword-only parameters (`def f(a, *, b)`).
 - Python: PEP 484 type comments, `x = []  # type: list[str]` and
-  `# type: (int, str) -> bool` after a `def` header.
+  `# type: (int, str) -> bool` after a `def` header (a method's may leave
+  out `self`).
 - Python: a `dict[str, V]`'s methods (`get`, `keys`, `values`, `items`,
   `pop`, `popitem`, `setdefault`, `update`, `clear`, `copy`), and
   iterating it gives its keys. `d.get(k)` is `V | None`; `d.get(k, default)`

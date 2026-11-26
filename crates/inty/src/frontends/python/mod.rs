@@ -29,11 +29,13 @@
 //!   after a `def` header), declare types that inference checks.
 //! - `[e for x in xs if c]` → an immediately-called arrow function that
 //!   loops and appends, so the loop variables stay local to it; a
-//!   generator expression passed as a call's sole argument (`any(x > 0
-//!   for x in xs)`) is lowered the same way.
-//! - `xs[a:b:c]` → `xs.__slice__(a, b, c)` (`None` for an omitted
-//!   bound), a method of the `str` and `list` surfaces giving the
-//!   receiver's own type.
+//!   generator expression passed as the sole argument of a call that only
+//!   iterates it (`any(x > 0 for x in xs)`, `sum`, `sorted`, `join`, …) is
+//!   lowered the same way. Any other generator expression is rejected: it
+//!   can't be indexed or measured as a list can.
+//! - `xs[a:b:c]` → a call of an internal slice method (`None` for an
+//!   omitted bound), which the `str` and `list` surfaces give the
+//!   receiver's own type. A tuple can't be sliced.
 //! - `def f(a, *, b)`: parameters after the bare `*` are ordinary named
 //!   parameters (passing them by position isn't rejected).
 //!
