@@ -594,11 +594,13 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             params,
             body,
             return_type_ast,
+            type_annotation,
             proto,
             span,
         } => PropDef::Method {
             key: key.clone(),
             return_type_ast: return_type_ast.clone(),
+            type_annotation: type_annotation.clone(),
             proto: *proto,
             params: params
                 .iter()

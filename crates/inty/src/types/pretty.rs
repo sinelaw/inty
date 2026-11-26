@@ -63,6 +63,9 @@ pub struct PrettyContext {
     /// is generic over its instance's field row, so `c = Counter()`
     /// would otherwise read `Counter<{value: Number | a}>`.
     hide_row_args: bool,
+    /// Annotations: a function's parameters with their names, when they
+    /// are known (`(label: String, hint?: String) => R`).
+    param_names: bool,
 }
 
 impl PrettyContext {
@@ -82,7 +85,14 @@ impl PrettyContext {
             focus: HashSet::new(),
             aliases: Vec::new(),
             hide_row_args: false,
+            param_names: false,
         }
+    }
+
+    /// Print a function's parameters with their names, where known.
+    pub fn showing_param_names(mut self) -> Self {
+        self.param_names = true;
+        self
     }
 
     /// Print named types without their record arguments (see the
@@ -528,6 +538,17 @@ impl PrettyContext {
         for (i, param) in params.iter().enumerate() {
             if i > 0 {
                 write!(w, ", ")?;
+            }
+            if let Some(name) = param.name.as_ref().filter(|_| self.param_names) {
+                // `name?: T` for an optional one, as an annotation says.
+                let optional = if matches!(param.presence, Presence::Pre) {
+                    ""
+                } else {
+                    "?"
+                };
+                write!(w, "{}{}: ", name, optional)?;
+                self.write_type(w, &param.ty, false)?;
+                continue;
             }
             self.write_type(w, &param.ty, false)?;
             // Surface optionality on the type — `?` follows

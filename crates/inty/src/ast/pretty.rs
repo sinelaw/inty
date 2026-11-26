@@ -20,7 +20,72 @@ pub fn print_stmt(stmt: &Stmt) -> String {
 
 /// Pretty print a program to JavaScript source.
 pub fn print_program(program: &Program) -> String {
+    print_program_with(program, std::collections::HashMap::new())
+}
+
+thread_local! {
+    /// Text printed for a declaration in place of its AST, keyed by its
+    /// span: a class as written (a `class` is lowered to a function).
+    static AS_WRITTEN: std::cell::RefCell<std::collections::HashMap<Span, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The declaration at `span` as written, when it is to be printed so.
+fn as_written(span: Span) -> Option<String> {
+    AS_WRITTEN.with(|m| m.borrow().get(&span).cloned())
+}
+
+/// [`print_program`], printing each declaration whose span `as_written`
+/// has as the text it gives (each class as written, from
+/// [`crate::infer::decorate_with_classes`]).
+pub fn print_program_with(
+    program: &Program,
+    as_written: std::collections::HashMap<Span, String>,
+) -> String {
+    /// Puts back the texts in place before, however printing ends.
+    struct Restore(Option<std::collections::HashMap<Span, String>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                AS_WRITTEN.with(|m| m.replace(previous));
+            }
+        }
+    }
+    let _restore = Restore(Some(AS_WRITTEN.with(|m| m.replace(as_written))));
+    print_statements(program)
+}
+
+fn print_statements(program: &Program) -> String {
     let mut out = String::new();
+    // The program's type aliases, as declared (they are hoisted, so where
+    // they stand doesn't matter), for the annotations that name them.
+    let mut aliases: Vec<&TypeAlias> = program
+        .type_aliases
+        .iter()
+        .filter(|a| a.body_ast.is_none() && !a.body.trim().is_empty())
+        .collect();
+    aliases.sort_by_key(|a| a.span.start);
+    for alias in aliases {
+        let kind = if alias.nominal {
+            "nominal type"
+        } else {
+            "type"
+        };
+        let params = if alias.params.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", alias.params.join(", "))
+        };
+        writeln!(
+            out,
+            "/** {} {}{} = {} */",
+            kind,
+            alias.name,
+            params,
+            alias.body.trim()
+        )
+        .unwrap();
+    }
     for stmt in &program.statements {
         write_stmt(&mut out, stmt, 0).unwrap();
         writeln!(out).unwrap();
@@ -76,6 +141,7 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             params,
             body,
             type_annotation,
+            arrow,
             ..
         } => {
             // In expression contexts that need to start with a token
@@ -86,6 +152,26 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             // which fails with "missing name".
             if needs_parens {
                 write!(w, "(")?;
+            }
+            let (is_async, body) = async_body(body);
+            if is_async {
+                write!(w, "async ")?;
+            }
+            // An arrow, as written: it has no `this` of its own.
+            if *arrow {
+                write!(w, "(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    write!(w, "{}", p.name)?;
+                }
+                write!(w, ") => ")?;
+                write_stmt(w, body, 0)?;
+                if needs_parens {
+                    write!(w, ")")?;
+                }
+                return Ok(());
             }
             write!(w, "function")?;
             if let Some(n) = name {
@@ -507,8 +593,25 @@ fn write_prop_def(w: &mut impl Write, prop: &PropDef) -> fmt::Result {
             write_stmt(w, body, 0)
         }
         PropDef::Method {
-            key, params, body, ..
+            key,
+            params,
+            body,
+            type_annotation,
+            ..
         } => {
+            // Its annotation, as written: `/** function m(…) => R */`, or
+            // `/** @type {T} */` for one that names its type.
+            if let (Some(ann), PropKey::Ident(name)) = (type_annotation, key) {
+                if ann.content.trim_start().starts_with('(') {
+                    write!(w, "/** function {}{} */ ", name, ann.content.trim())?;
+                } else {
+                    write!(w, "/** @type {{{}}} */ ", ann.content.trim())?;
+                }
+            }
+            let (is_async, body) = async_body(body);
+            if is_async {
+                write!(w, "async ")?;
+            }
             write_prop_key(w, key)?;
             write!(w, "(")?;
             for (i, p) in params.iter().enumerate() {
@@ -690,13 +793,18 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                     params,
                     body,
                     type_annotation,
-                    ..
+                    span,
                 } => {
+                    if let Some(text) = as_written(*span) {
+                        return write!(w, "export {}", text);
+                    }
                     if let Some(ann) = type_annotation {
                         writeln!(w, "/** export function {}{} */", name, ann.content)?;
                         write!(w, "{}", ind)?;
                     }
-                    write!(w, "export function {}(", name)?;
+                    let (is_async, body) = async_body(body);
+                    let prefix = if is_async { "async " } else { "" };
+                    write!(w, "export {}function {}(", prefix, name)?;
                     for (i, p) in params.iter().enumerate() {
                         if i > 0 {
                             write!(w, ", ")?;
@@ -707,6 +815,12 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                     write_stmt(w, body, indent)
                 }
                 ExportDecl::Default { value, .. } => {
+                    if let Some(text) = match value {
+                        Expr::Function { span, .. } => as_written(*span),
+                        _ => None,
+                    } {
+                        return write!(w, "export default {}", text);
+                    }
                     write!(w, "export default ")?;
                     write_expr(w, value, false)?;
                     write!(w, ";")
@@ -961,8 +1075,12 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             params,
             body,
             type_annotation,
+            span,
             ..
         } => {
+            if let Some(text) = as_written(*span) {
+                return write!(w, "{}", text);
+            }
             if let Some(ann) = type_annotation {
                 // `(…) => R`, or a type the name can't run into
                 // (`new (…) => R`, `this: T => (…) => R`).
@@ -974,7 +1092,9 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                 writeln!(w, "/** function {}{}{} */", name, gap, ann.content)?;
                 write!(w, "{}", ind)?;
             }
-            write!(w, "function {}(", name)?;
+            let (is_async, body) = async_body(body);
+            let prefix = if is_async { "async " } else { "" };
+            write!(w, "{}function {}(", prefix, name)?;
             for (i, p) in params.iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
@@ -985,6 +1105,77 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             write_stmt(w, body, indent)
         }
     }
+}
+
+/// An `async` function's body, as written, when `body` is the one the
+/// parser lowers it to (`{ return Promise.resolve((() => { … })()); }`),
+/// with `true`; else `body`, with `false`. The lowering gives each of
+/// those nodes the same span (the function's), which no source text does
+/// (in `return Promise.resolve(…)` written out, `Promise` spans less than
+/// the call), so a body written that way is printed as written.
+fn async_body(body: &Stmt) -> (bool, &Stmt) {
+    if let Stmt::Block { body: stmts, .. } = body {
+        if let [Stmt::Return {
+            argument:
+                Some(Expr::Call {
+                    callee,
+                    arguments,
+                    span: call_span,
+                    ..
+                }),
+            span: return_span,
+        }] = stmts.as_slice()
+        {
+            if let (
+                Expr::Member {
+                    object,
+                    property,
+                    span: member_span,
+                },
+                [Expr::Call {
+                    callee: iife,
+                    arguments: none,
+                    span: iife_call_span,
+                    ..
+                }],
+            ) = (&**callee, arguments.as_slice())
+            {
+                if let (
+                    Expr::Ident {
+                        name,
+                        span: promise_span,
+                    },
+                    Expr::Function {
+                        params,
+                        body: inner,
+                        arrow: true,
+                        span: iife_span,
+                        ..
+                    },
+                ) = (&**object, &**iife)
+                {
+                    let one_span = [
+                        call_span,
+                        member_span,
+                        promise_span,
+                        iife_call_span,
+                        iife_span,
+                    ]
+                    .iter()
+                    .all(|s| *s == return_span);
+                    if one_span
+                        && name == "Promise"
+                        && property == "resolve"
+                        && none.is_empty()
+                        && params.is_empty()
+                    {
+                        return (true, inner);
+                    }
+                }
+            }
+        }
+    }
+    (false, body)
 }
 
 fn unary_op_str(op: UnaryOp) -> (bool, &'static str) {

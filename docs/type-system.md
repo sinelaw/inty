@@ -566,7 +566,7 @@ Type annotations are optional — every type is inferred — but can be written 
 
 Two forms of type annotations:
 
-- **Doc-comment statement** preceding a declaration: `/** var x: T */`, `/** function f(...) => T */`, `/** const c: T */`, `/** type Name = ... */`.
+- **Doc-comment statement** preceding a declaration: `/** var x: T */`, `/** function f(...) => T */`, `/** const c: T */`, `/** type Name = ... */`. A class's or object literal's method takes the `function` form, named for it (`/** function open(x: String) => Number */` above `open(x) { … }`): its body is checked against it and callers see its type. Its `this` is the object it is on, so the annotation doesn't say `this:`; and a method's type is the same at every call (it is a member of its instance), so the annotation has no type parameters (`<a>`), which on a function mean "for every type".
 - **Inline trailing comment** on a binder or parameter: `var x /*: T */ = 1`, `function f(x /*: Number */) { ... }`.
 
 JSDoc `/** @type {T} */` is also accepted, attached to the next object-literal field. The field is declared at `T`, and its initialiser is checked against `T` as a `const`'s is, `null` and `undefined` included: a field that starts as `null` and is filled in later is declared `T | Null`. `typeof Helper` inside `T` resolves to the value type of a binding in scope:
