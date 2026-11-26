@@ -126,8 +126,9 @@ fn nullable_return_has_no_vacuous_where_clause() {
     let out = js(concat!(
         "/** function find<a>(xs: a[], v: a) => a | Null */\n",
         "function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }\n",
+        "const g = find;\n",
     ));
-    assert!(out.contains("⟨-> Null | a⟩"), "{out}");
+    assert!(out.contains("const g⟨: <a>(a[], a) => Null | a⟩"), "{out}");
 }
 
 /// Prints every playground example with its hints, for eyeballing:
@@ -222,4 +223,43 @@ fn hints_and_hover_show_one_naming_whatever_is_asked() {
             hint.1
         );
     }
+}
+
+#[test]
+fn types_print_by_their_alias_names() {
+    // As diagnostics print them: a type that is an alias's body, its
+    // parameters instantiated, by the alias's name.
+    let out = js(
+        "/** type Item = {label: String, run: (() => Undefined) | Null} */\n\
+                  /** type Box<T> = {value: T} */\n\
+                  /** function matching(items: Item[], q: String) => Item[] */\n\
+                  function matching(items, q) { return items.filter((it) => it.label === q); }\n\
+                  const hits = matching([], \"x\");\n\
+                  const box = { value: hits };\n\
+                  /** function unbox(b: Box<Number>) => Number */\n\
+                  function unbox(b) { return b.value; }\n",
+    );
+    assert!(out.contains("filter((it⟨: Item⟩)"), "{out}");
+    assert!(out.contains("const hits⟨: Item[]⟩"), "{out}");
+    assert!(out.contains("const box⟨: Box<Item[]>⟩"), "{out}");
+}
+
+#[test]
+fn what_an_annotation_states_is_not_hinted_again() {
+    let out = js("/** function f(a: Number, s: String) => String */\n\
+                  function f(a, s) { const n = a + 1; return s; }\n\
+                  /** const k: Number */\n\
+                  const k = f(1, \"x\").length;\n\
+                  const xs = [k].map((v) => v);\n");
+    // The parameters and return type `f`'s annotation states, and `k`'s
+    // type, are in the source already; what inference worked out is not.
+    assert!(
+        out.contains("function f(a, s) { const n⟨: Number⟩"),
+        "{out}"
+    );
+    assert!(out.contains("const k = "), "{out}");
+    assert!(
+        out.contains("const xs⟨: Number[]⟩ = [k].map((v⟨: Number⟩) => v)"),
+        "{out}"
+    );
 }

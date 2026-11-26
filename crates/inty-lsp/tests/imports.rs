@@ -112,5 +112,5 @@ fn the_project_s_libs_declare_what_annotations_name() {
     let analysis = check(main, &project.path("main.js"));
     assert!(errors(&analysis).is_empty(), "{:?}", errors(&analysis));
     assert_eq!(hover(&analysis, main, "q) {"), "String");
-    assert_eq!(hover(&analysis, main, "hits ="), "{label: String}[]");
+    assert_eq!(hover(&analysis, main, "hits ="), "Item[]");
 }

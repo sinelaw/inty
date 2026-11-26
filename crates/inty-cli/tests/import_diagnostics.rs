@@ -153,3 +153,35 @@ fn timings_report_modules_and_declarations() {
     assert!(stderr.contains("function twice  (main.js:2)"), "{stderr}");
     assert!(stderr.contains("const r  (main.js:3)"), "{stderr}");
 }
+
+/// A project's `inty.json` is found from the file however it is named: a
+/// path relative to the working directory (`inty js/a.js`, run in a
+/// directory below the project's root) reaches the config above it.
+#[test]
+fn a_relative_entry_path_finds_the_project_config_above_it() {
+    let dir = tmp_dir();
+    std::fs::create_dir_all(dir.join("types")).unwrap();
+    std::fs::create_dir_all(dir.join("web/js")).unwrap();
+    write(
+        &dir,
+        "types/app.d.js",
+        "/** type Op = {t: String, pos: Number} */\n",
+    );
+    write(&dir, "inty.json", r#"{ "libs": ["./types/app.d.js"] }"#);
+    write(
+        &dir,
+        "web/js/a.js",
+        "/** function at(pos: Number) => Op */\nfunction at(pos) { return { t: \"ins\", pos }; }\n",
+    );
+    for args in [&["js/a.js"][..], &["js/a.js", "js/a.js"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_inty"))
+            .arg("--no-color")
+            .args(args)
+            .current_dir(dir.join("web"))
+            .output()
+            .expect("spawn inty");
+        let text = String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "inty {args:?}:\n{text}");
+    }
+}

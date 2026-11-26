@@ -50,8 +50,10 @@ pub struct Def {
     pub kind: DefKind,
     /// Span covering just the identifier text of this binding.
     pub name_span: Span,
-    /// The binding carries a declared type in the AST: a parameter or
-    /// variable annotation, or a function's return annotation.
+    /// The source states the binding's type: a variable's annotation
+    /// (`x: int`, `/** const x: T */`), a parameter's (`def f(x: int)`,
+    /// or its function's `/** function f(x: T) => R */`), or a function's
+    /// return type.
     pub annotated: bool,
 }
 
@@ -332,12 +334,15 @@ impl Resolution {
                     params,
                     body,
                     name_span,
+                    type_annotation,
                     span,
                     ..
                 } => {
                     let name_span = inty::ast::function_name_span(*name_span, *span, name);
                     self.declare(fn_scope, name, name_span, DefKind::Function);
-                    self.visit_function_body(*span, params, body, scope);
+                    self.mark_annotated(name_span, type_annotation.is_some());
+                    let typed = type_annotation.is_some();
+                    self.visit_function_body(*span, params, typed, body, scope);
                 }
                 ExportDecl::Default { value, .. } => {
                     // `export default <expr>` — walk the expression to
@@ -482,12 +487,14 @@ impl Resolution {
                 name: _,
                 params,
                 body,
+                type_annotation,
                 span,
                 ..
             } => {
                 // The decl was already hoisted into `fn_scope`; we
                 // still walk the body to record nested decls/uses.
-                self.visit_function_body(*span, params, body, scope);
+                let typed = type_annotation.is_some();
+                self.visit_function_body(*span, params, typed, body, scope);
             }
             Stmt::Empty { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
         }
@@ -515,7 +522,10 @@ impl Resolution {
         for d in decls {
             let name_span = d.name_span();
             self.declare(target, &d.name, name_span, def_kind);
-            self.mark_annotated(name_span, d.type_ast.is_some());
+            self.mark_annotated(
+                name_span,
+                d.type_ast.is_some() || d.type_annotation.is_some(),
+            );
             if let Some(init) = &d.init {
                 self.visit_expr(init, scope);
             }
@@ -545,12 +555,17 @@ impl Resolution {
                     match p {
                         PropDef::Property { value, .. } => self.visit_expr(value, scope),
                         PropDef::Method {
-                            params, body, span, ..
+                            params,
+                            body,
+                            type_annotation,
+                            span,
+                            ..
                         } => {
-                            self.visit_function_body(*span, params, body, scope);
+                            let typed = type_annotation.is_some();
+                            self.visit_function_body(*span, params, typed, body, scope);
                         }
                         PropDef::Getter { body, span, .. } => {
-                            self.visit_function_body(*span, &[], body, scope);
+                            self.visit_function_body(*span, &[], false, body, scope);
                         }
                         PropDef::Setter {
                             param, body, span, ..
@@ -561,7 +576,7 @@ impl Resolution {
                             // anchor at the start of the setter.
                             let params =
                                 vec![Param::new(param.clone(), Span::new(span.start, span.start))];
-                            self.visit_function_body(*span, &params, body, scope);
+                            self.visit_function_body(*span, &params, false, body, scope);
                         }
                         PropDef::Spread { argument, .. } => self.visit_expr(argument, scope),
                     }
@@ -571,13 +586,15 @@ impl Resolution {
                 name,
                 params,
                 body,
+                type_annotation,
                 span,
                 ..
             } => {
                 // Function expression: optional name binds *inside* the
                 // function only. Declare it in the function scope after
                 // we open it.
-                self.visit_function_body_named(*span, name.as_deref(), params, body, scope);
+                let typed = type_annotation.is_some();
+                self.visit_function_body_named(*span, name.as_deref(), params, typed, body, scope);
             }
             Expr::Member { object, .. } => self.visit_expr(object, scope),
             Expr::ComputedMember {
@@ -657,8 +674,16 @@ impl Resolution {
         }
     }
 
-    fn visit_function_body(&mut self, span: Span, params: &[Param], body: &Stmt, parent: ScopeId) {
-        self.visit_function_body_named(span, None, params, body, parent);
+    /// `typed`: the function's annotation states its parameters' types.
+    fn visit_function_body(
+        &mut self,
+        span: Span,
+        params: &[Param],
+        typed: bool,
+        body: &Stmt,
+        parent: ScopeId,
+    ) {
+        self.visit_function_body_named(span, None, params, typed, body, parent);
     }
 
     fn visit_function_body_named(
@@ -666,6 +691,7 @@ impl Resolution {
         span: Span,
         self_name: Option<&str>,
         params: &[Param],
+        typed: bool,
         body: &Stmt,
         parent: ScopeId,
     ) {
@@ -681,7 +707,7 @@ impl Resolution {
         // header — matching what users expect.
         for p in params {
             self.declare(func_scope, &p.name, p.span, DefKind::Param);
-            self.mark_annotated(p.span, p.type_ast.is_some());
+            self.mark_annotated(p.span, typed || p.type_ast.is_some());
         }
         // Hoist `var` and `function` declarations from anywhere in the
         // body that isn't itself inside a nested function.
@@ -732,12 +758,16 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
             name,
             name_span,
             return_type_ast,
+            type_annotation,
             span,
             ..
         } => {
             let name_span = inty::ast::function_name_span(*name_span, *span, name);
             r.declare(scope, name, name_span, DefKind::Function);
-            r.mark_annotated(name_span, return_type_ast.is_some());
+            r.mark_annotated(
+                name_span,
+                return_type_ast.is_some() || type_annotation.is_some(),
+            );
         }
         Stmt::Export { declaration, .. } => match declaration {
             ExportDecl::Var {

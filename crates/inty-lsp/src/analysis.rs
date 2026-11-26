@@ -562,14 +562,9 @@ impl Scope {
             if shown == "<error>" {
                 continue;
             }
-            // `x: int` already shows its type in the source. (A JSDoc
-            // annotation sits in a comment elsewhere, so those bindings
-            // still get a hint.)
-            if def.annotated
-                && text[def_span.end.min(text.len())..]
-                    .trim_start()
-                    .starts_with(':')
-            {
+            // The source states its type (`x: int`, `/** const x: T */`,
+            // its function's `/** function f(x: T) => R */`).
+            if def.annotated {
                 continue;
             }
             hints.push((
@@ -707,13 +702,13 @@ fn is_vacuous_inject(pred: &inty::types::TypePred) -> bool {
     }
 }
 
-/// A fresh `PrettyContext` for printing `ty`. Classes and other
-/// nominal types print by their declared names (`Counter`, not `μ0`),
-/// as diagnostics do. Anonymous recursive types have no name: a
-/// reference back to the object `ty` itself prints as `Self`
-/// (`setUrl: (this: Self, String) => Self`), any other as `{…}`.
+/// A fresh `PrettyContext` for printing `ty`: the one diagnostics use
+/// ([`InferState::printer`]), so classes, brands and aliases print by
+/// their declared names (`Counter`, `PaletteItem`). Anonymous recursive
+/// types have no name: a reference back to the object `ty` itself prints
+/// as `Self` (`setUrl: (this: Self, String) => Self`), any other as `{…}`.
 fn pretty_context(state: &InferState, ty: &Type) -> PrettyContext {
-    let mut names = state.nominal_names();
+    let mut ctx = state.printer();
     let own_fields = match ty {
         Type::Row(row) => Some(row.props.keys().collect::<Vec<_>>()),
         _ => None,
@@ -729,9 +724,9 @@ fn pretty_context(state: &InferState, ty: &Type) -> PrettyContext {
             (Some(own), Type::Row(body)) => body.props.keys().collect::<Vec<_>>() == *own,
             _ => false,
         };
-        names.insert(id, if is_self { "Self" } else { "{…}" }.to_string());
+        ctx = ctx.naming(id, if is_self { "Self" } else { "{…}" }.to_string());
     }
-    PrettyContext::with_nominal_names(names)
+    ctx
 }
 
 /// Format a tidied `Type` with a fresh `PrettyContext`. The context's

@@ -746,7 +746,10 @@ struct IntyConfig {
 /// real diagnostic rather than silent fallback to relative-only
 /// resolution.
 fn find_inty_config(base_dir: &Path) -> Result<Option<IntyConfig>, String> {
-    let mut here: Option<&Path> = Some(base_dir);
+    // From the directory itself, not as written: a relative one (`js`,
+    // from `inty js/a.js`) would end at the working directory.
+    let base_dir = std::path::absolute(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
+    let mut here: Option<&Path> = Some(&base_dir);
     while let Some(dir) = here {
         let candidate = dir.join("inty.json");
         if candidate.is_file() {

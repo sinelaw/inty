@@ -1323,29 +1323,13 @@ impl InferState {
         tidy.tidy_type(&flat)
     }
 
-    /// The printer diagnostics use: brands and recursive aliases by
-    /// name, other aliases by name when a type is one's body, records of
-    /// more than eight fields trimmed to `focus`.
+    /// The printer diagnostics use: [`InferState::printer`], with records
+    /// of more than eight fields trimmed to `focus`.
     fn diagnostic_printer(
         &self,
         focus: std::collections::HashSet<String>,
     ) -> crate::types::PrettyContext {
-        let mut aliases: Vec<(String, Vec<u32>, Type)> = self
-            .type_aliases
-            .iter()
-            .filter(|(_, d)| d.nominal_id.is_none() && d.rec_id.is_none() && !d.open_arity)
-            .filter(|(_, d)| matches!(d.body, Type::Row(_) | Type::Union(_) | Type::Maybe(..)))
-            .map(|(n, d)| (n.clone(), d.params.clone(), d.body.clone()))
-            .collect();
-        // Deterministic, and the first-declared of equal bodies wins
-        // (`DomEvent` over its synonyms `PointerEvent`, …): by name.
-        aliases.sort_by(|a, b| {
-            let rank = |n: &str| if n == "DomEvent" { 0 } else { 1 };
-            (rank(&a.0), &a.0).cmp(&(rank(&b.0), &b.0))
-        });
-        crate::types::PrettyContext::with_nominal_names(self.nominal_names())
-            .trimming_rows(8, focus)
-            .naming_aliases(aliases)
+        self.printer().trimming_rows(8, focus)
     }
 
     /// Two function types, `f1` and `f2`, disagree on `this` (`error`,

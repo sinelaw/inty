@@ -271,6 +271,19 @@ unterminated-comment error.
   a program's environment (prelude, imports, Starlark `load`s) with
   `frontends::program_env`; the language server now starts Python and Lua
   from the same stdlib as the CLI, and Python from stdin sees its prelude.
+- Hover and hints print types as diagnostics do, with one printer
+  (`InferState::printer`): a type that is an alias's body, its parameters
+  instantiated, by the alias's name (`items: PaletteItem[]`, `Box<Number>`),
+  where they printed the whole record. A function type matches an alias's
+  when it prints as the alias's: a checked annotation gives an unstated
+  `this` none, which kept a record with a method from matching its alias,
+  in diagnostics too.
+- Hints leave out what an annotation states: the parameters and return
+  type of a function with a `/** function f(x: T) => R */` annotation, and
+  a variable annotated `/** const x: T */`. They repeated it, at length.
+- `inty.json` is found from the file checked however it is named: `inty
+  js/a.js` looked from `js` up to the working directory only, so a config
+  above it (its `"libs"`, `"paths"`) was missed.
 - `inty.json` `"libs"`: declaration files every module under the config
   is checked with, as `--lib` loads them, found from the file checked (the
   nearest `inty.json` above it). The language server, which takes no

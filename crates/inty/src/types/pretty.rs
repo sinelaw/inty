@@ -89,6 +89,12 @@ impl PrettyContext {
         }
     }
 
+    /// Print the named type `id`, which has no declared name, as `name`.
+    pub fn naming(mut self, id: crate::types::TypeId, name: String) -> Self {
+        self.nominal_names.insert(id, name);
+        self
+    }
+
     /// Print a function's parameters with their names, where known.
     pub fn showing_param_names(mut self) -> Self {
         self.param_names = true;
@@ -380,14 +386,7 @@ impl PrettyContext {
                     write!(w, "(")?;
                 }
 
-                // Only show this_type if it's meaningful:
-                // - None (static function): don't show
-                // - Some(Undefined) or Some(Var(_)): don't show
-                // - Some(concrete_type): show "this: T =>"
-                let show_this = match this_type {
-                    None => false,
-                    Some(t) => !matches!(**t, Type::Undefined | Type::Var(_) | Type::ArrowThis),
-                };
+                let show_this = shows_this(this_type.as_deref());
                 if matches!(this_type.as_deref(), Some(Type::NewTarget)) {
                     // Called only by `new`: a class's constructor.
                     write!(w, "new ")?;
@@ -952,8 +951,17 @@ impl Display for ClassName {
     }
 }
 
+/// Whether a function's `this` is printed (`(this: T, …) => R`): not
+/// when it has none (`ArrowThis`, `Undefined`), doesn't say (`None`), or
+/// takes any (a variable).
+fn shows_this(this_type: Option<&Type>) -> bool {
+    this_type.is_some_and(|t| !matches!(t, Type::Undefined | Type::Var(_) | Type::ArrowThis))
+}
+
 /// Whether `ty` is `pattern` with its `params` (variable ids) replaced by
-/// some types — recorded in `bound`, consistently.
+/// some types — recorded in `bound`, consistently. It is when `ty` prints
+/// as `pattern` would, so a function's `this` that isn't printed matches
+/// one that isn't.
 fn match_alias(
     pattern: &Type,
     ty: &Type,
@@ -999,9 +1007,12 @@ fn match_alias(
                 ret: r2,
             },
         ) => {
+            // A `this` neither prints (the body's unstated one, and the
+            // none a checked annotation gives it) matches.
+            let (t1, t2) = (t1.as_deref(), t2.as_deref());
             p1.len() == p2.len()
                 && match (t1, t2) {
-                    (None, None) => true,
+                    _ if !shows_this(t1) && !shows_this(t2) => true,
                     (Some(a), Some(b)) => match_alias(a, b, params, bound),
                     _ => false,
                 }
