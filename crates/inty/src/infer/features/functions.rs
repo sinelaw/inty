@@ -460,6 +460,7 @@ impl InferState {
         // (Taken here, so that nothing inferred before the body, such as a
         // parameter's default, takes it.)
         let member = std::mem::take(&mut self.member_function);
+        let method = std::mem::take(&mut self.annotated_method);
         // A body says whether a function is a method: one that mentions
         // `this` reads it. Recorded, so that a call that met this
         // function's `this` before it was known calls it on its receiver
@@ -589,10 +590,16 @@ impl InferState {
 
             // Function annotation: pins the function's signature to
             // the declared one, which is called detached unless it says
-            // otherwise. Subsume rather than unify so a body annotated to
-            // return `String` can hold a literal.
+            // otherwise (a method's, with the method's `this`). Subsume
+            // rather than unify so a body annotated to return `String`
+            // can hold a literal.
+            let called_with = if method {
+                this_type.clone()
+            } else {
+                Type::ArrowThis
+            };
             let annotated_type =
-                crate::infer::lower::annotation_this(&annotated_type, &Type::ArrowThis);
+                crate::infer::lower::annotation_this(&annotated_type, &called_with);
             self.subsume(annotation_span, &func_type, &annotated_type)?;
         }
 

@@ -1583,6 +1583,13 @@ impl Parser {
                 continue;
             }
 
+            // A method's annotation, `/** function m(x: T) => R */`,
+            // written above it.
+            let method_annotation = if key_name == "constructor" {
+                None
+            } else {
+                self.try_get_type_annotation(self.current_span(), &key_name)
+            };
             self.expect(&Token::LParen)?;
             // Default and destructuring parameters, as a plain function
             // takes them: unpacked at the top of the body.
@@ -1628,6 +1635,7 @@ impl Parser {
                     params,
                     body: Box::new(body_stmt),
                     return_type_ast: None,
+                    type_annotation: method_annotation,
                     proto: true,
                     span: member_span,
                 });
@@ -1756,6 +1764,7 @@ impl Parser {
                         params,
                         body,
                         return_type_ast: None,
+                        type_annotation: None,
                         proto: false,
                         span: at,
                     },
@@ -3566,7 +3575,9 @@ impl Parser {
         // attach it to the NEXT named binding rather than the previous
         // one (the inline `/*: T */` form attaches backwards). Captured
         // here unconditionally so spreads and methods can still pick it
-        // up if needed; today we only thread it through Property nodes.
+        // up if needed. Looking for it passes over named annotations, so
+        // a method looks for its own from where this started.
+        let annotations_from = self.annotation_pos;
         let pending_jsdoc = self.try_get_jsdoc_type_annotation(self.current_span());
 
         // `...expr` spread element. Right-bias is implicit in the
@@ -3631,6 +3642,21 @@ impl Parser {
 
         // Check for method shorthand
         if is_async || self.check(&Token::LParen) {
+            // Its annotation: a `@type`, else one by name
+            // (`/** function m(x: T) => R */`) written above it.
+            let type_annotation = match (pending_jsdoc, &key) {
+                (Some(ann), _) => Some(ann),
+                (None, PropKey::Ident(name)) => {
+                    let after = self.annotation_pos;
+                    self.annotation_pos = annotations_from;
+                    let found = self.try_get_type_annotation(self.current_span(), name);
+                    if found.is_none() {
+                        self.annotation_pos = after;
+                    }
+                    found
+                }
+                (None, _) => None,
+            };
             self.expect(&Token::LParen)?;
             let (params, prefix) = self.parse_parameters_with_prefix()?;
             self.expect(&Token::RParen)?;
@@ -3652,6 +3678,7 @@ impl Parser {
                 params,
                 body,
                 return_type_ast: None,
+                type_annotation,
                 proto: false,
                 span: Span::new(start, self.prev_span().end),
             });

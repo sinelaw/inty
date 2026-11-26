@@ -433,6 +433,7 @@ impl InferState {
                 params,
                 body,
                 return_type_ast,
+                type_annotation,
                 proto,
                 span: method_span,
             } => {
@@ -448,17 +449,19 @@ impl InferState {
                     Type::ArrowThis
                 };
                 self.member_function = true;
+                self.annotated_method = type_annotation.is_some();
                 let method_type = self.infer_function_with_this(
                     env,
                     None,
                     params,
                     body,
-                    &None,
+                    type_annotation,
                     return_type_ast.as_ref(),
                     this,
                     *method_span,
                 );
                 self.member_function = false;
+                self.annotated_method = false;
                 let method_type = method_type?;
                 // A class's method is on its prototype; an object
                 // literal's is its own data property.
@@ -949,6 +952,7 @@ impl InferState {
                     params,
                     body,
                     return_type_ast,
+                    type_annotation,
                     proto: false,
                     span: method_span,
                 } => {
@@ -964,17 +968,19 @@ impl InferState {
                         Type::ArrowThis
                     };
                     self.member_function = true;
+                    self.annotated_method = type_annotation.is_some();
                     let method_type = self.infer_function_with_this(
                         env,
                         None,
                         params,
                         body,
-                        &None,
+                        type_annotation,
                         return_type_ast.as_ref(),
                         this,
                         *method_span,
                     );
                     self.member_function = false;
+                    self.annotated_method = false;
                     let method_type = method_type?;
                     self.subsume(*method_span, &method_type, &expected_prop_ty)?;
                     let slot = self.zonk_head(&expected_prop_ty);

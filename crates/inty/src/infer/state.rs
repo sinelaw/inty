@@ -324,6 +324,12 @@ pub struct InferState {
     /// not a type variable, as the object's type holds the member
     /// monomorphically (each use would otherwise fix it).
     pub(crate) member_function: bool,
+    /// Set just before a method with an annotation is inferred, and taken
+    /// by it: the annotation's type is called with the method's own
+    /// `this` unless it says (`this: T`), as a TypeScript method
+    /// signature is, where a function's annotation without `this:` says
+    /// the function uses none.
+    pub(crate) annotated_method: bool,
     /// The spans of the factory functions `class` declarations lowered to
     /// (`Program::class_decls`): typed where they stand, not hoisted.
     pub class_decls: std::collections::HashSet<crate::span::Span>,
@@ -599,6 +605,7 @@ impl InferState {
             class_brand_ids: HashMap::new(),
             exhaustive_switches: std::collections::HashSet::new(),
             member_function: false,
+            annotated_method: false,
             class_decls: std::collections::HashSet::new(),
             reserved_class_ids: HashMap::new(),
             promise_results: Vec::new(),

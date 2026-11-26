@@ -431,6 +431,10 @@ pub enum PropDef {
         /// shared [`crate::types::TypeAst`] IR. Only the Python frontend
         /// sets this; JS object/class methods leave it `None`.
         return_type_ast: Option<crate::types::TypeAst>,
+        /// A class method's annotation (`/** function m(x: T) => R */`):
+        /// the method's type, checked as a function's, its `this` the
+        /// one the class gives it unless the annotation says.
+        type_annotation: Option<TypeAnnotation>,
         /// A class's method, which is on the class's prototype: the
         /// instance has no own property for it (a spread doesn't copy
         /// it) and a store to it is rejected. An object literal's method

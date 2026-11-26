@@ -661,6 +661,7 @@ impl<'a> Decorator<'a> {
                 params,
                 body,
                 return_type_ast,
+                type_annotation,
                 proto,
                 span,
             } => PropDef::Method {
@@ -668,6 +669,7 @@ impl<'a> Decorator<'a> {
                 params: params.clone(),
                 body: Box::new(self.decorate_stmt(body, env).0),
                 return_type_ast: return_type_ast.clone(),
+                type_annotation: type_annotation.clone(),
                 proto: *proto,
                 span: *span,
             },
