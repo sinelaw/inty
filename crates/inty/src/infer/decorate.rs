@@ -75,12 +75,18 @@ impl<'a> Decorator<'a> {
                         let annotation = if decl.type_annotation.is_some() {
                             // Keep existing annotation
                             decl.type_annotation.clone()
+                        } else if decl.init.is_none() {
+                            // An annotated declaration without a value
+                            // declares one defined elsewhere, a constant
+                            // (`/** var x: T */ var x;`): an annotation
+                            // would make `var x; x = 1;` an error.
+                            None
                         } else if let Some(ty) = self.state.get_decl_type(decl.span) {
                             // Add inferred type annotation from decl_types map
-                            Some(self.type_to_annotation(ty, decl.span))
+                            self.type_to_annotation(ty, decl.span)
                         } else {
                             env.lookup(&decl.name)
-                                .map(|scheme| self.scheme_to_annotation(scheme, decl.span))
+                                .and_then(|scheme| self.scheme_to_annotation(scheme, decl.span))
                         };
 
                         // Update env for subsequent declarations
@@ -127,7 +133,7 @@ impl<'a> Decorator<'a> {
                     type_annotation.clone()
                 } else {
                     env.lookup(name)
-                        .map(|scheme| self.scheme_to_annotation(scheme, *span))
+                        .and_then(|scheme| self.scheme_to_annotation(scheme, *span))
                 };
 
                 self.note_class(name, body, *span, *name_span, env);
@@ -238,10 +244,12 @@ impl<'a> Decorator<'a> {
                             .map(|d| {
                                 let annotation = if d.type_annotation.is_some() {
                                     d.type_annotation.clone()
+                                } else if d.init.is_none() {
+                                    None
                                 } else {
                                     self.state
                                         .get_decl_type(d.span)
-                                        .map(|ty| self.type_to_annotation(ty, d.span))
+                                        .and_then(|ty| self.type_to_annotation(ty, d.span))
                                 };
                                 VarDeclarator {
                                     name: d.name.clone(),
@@ -288,7 +296,7 @@ impl<'a> Decorator<'a> {
                         } else {
                             self.state
                                 .get_decl_type(*decl_span)
-                                .map(|ty| self.type_to_annotation(ty, *decl_span))
+                                .and_then(|ty| self.type_to_annotation(ty, *decl_span))
                         };
                         ForInLhs::VarDecl(name.clone(), annotation, *decl_span, *kind)
                     }
@@ -322,7 +330,7 @@ impl<'a> Decorator<'a> {
                         } else {
                             self.state
                                 .get_decl_type(*decl_span)
-                                .map(|ty| self.type_to_annotation(ty, *decl_span))
+                                .and_then(|ty| self.type_to_annotation(ty, *decl_span))
                         };
                         ForInLhs::VarDecl(name.clone(), annotation, *decl_span, *kind)
                     }
@@ -716,7 +724,56 @@ impl<'a> Decorator<'a> {
         }
     }
 
-    fn scheme_to_annotation(&mut self, scheme: &TypeScheme, span: Span) -> TypeAnnotation {
+    /// The annotation `content`, when it reads back: it parses, and each
+    /// name in it is a type in scope taking the arguments it is given
+    /// (an instance's class by its name, `Menu<…>`). An annotation is
+    /// optional, so a type that can't be written (one too large to show,
+    /// or one only the checker can name) is left out rather than printed
+    /// in a form the checker would reject.
+    fn readable(&self, content: String, ty: &Type, span: Span) -> Option<TypeAnnotation> {
+        if !self.reads_back(&content, ty) {
+            return None;
+        }
+        Some(TypeAnnotation {
+            name: "".to_string(),
+            content,
+            span,
+            kind: crate::ast::AnnotationKind::Inline,
+            content_start: None,
+        })
+    }
+
+    /// Whether the annotation text `content`, written for `ty` (a
+    /// displayed type, or a scheme's body), reads back as `ty`: it parses,
+    /// each name in it is a type in scope taking the arguments it is
+    /// given, and the type it parses to prints as `ty` does. (Some types
+    /// print in a form that parses to another: an open record's tail,
+    /// `{x: T | a}`, reads as a field of type `T | a`.)
+    fn reads_back(&self, content: &str, ty: &Type) -> bool {
+        let Ok((parsed, _)) = crate::infer::type_parser::parse_type_annotation_with_aliases(
+            content,
+            Span::default(),
+            0,
+            &self.state.type_aliases,
+        ) else {
+            return false;
+        };
+        let print = |t: &Type| {
+            let t = crate::types::TidyEnv::new().tidy_type(t);
+            self.pretty().format_type(&t)
+        };
+        // A function annotation is of a function that uses no `this`.
+        let ty = crate::infer::lower::annotation_this(ty, &Type::ArrowThis);
+        let parsed = crate::infer::lower::annotation_this(&parsed, &Type::ArrowThis);
+        print(&parsed) == print(&ty)
+    }
+
+    /// Types printed with each class's instance by the class's name.
+    fn pretty(&self) -> PrettyContext {
+        PrettyContext::with_nominal_names(self.state.nominal_names())
+    }
+
+    fn scheme_to_annotation(&mut self, scheme: &TypeScheme, span: Span) -> Option<TypeAnnotation> {
         // `display_scheme` flattens *and* tidies, so the resulting
         // scheme carries canonical, traversal-ordered IDs. A fresh
         // `PrettyContext` per annotation now produces the same
@@ -727,32 +784,20 @@ impl<'a> Decorator<'a> {
             .map(|t| self.state.flattened_size(t))
             .fold(0usize, usize::saturating_add);
         if size > MAX_SHOWN_TYPE {
-            return too_large(span);
+            return None;
         }
         let displayed = self.state.display_scheme(scheme);
-        let mut ctx = PrettyContext::new();
-        TypeAnnotation {
-            name: "".to_string(),
-            content: ctx.format_scheme(&displayed),
-            span,
-            kind: crate::ast::AnnotationKind::Inline,
-            content_start: None,
-        }
+        let content = self.pretty().format_scheme(&displayed);
+        self.readable(content, &displayed.body.ty, span)
     }
 
-    fn type_to_annotation(&mut self, ty: &Type, span: Span) -> TypeAnnotation {
+    fn type_to_annotation(&mut self, ty: &Type, span: Span) -> Option<TypeAnnotation> {
         if self.state.flattened_size(ty) > MAX_SHOWN_TYPE {
-            return too_large(span);
+            return None;
         }
         let displayed = self.state.display_type(ty);
-        let mut ctx = PrettyContext::new();
-        TypeAnnotation {
-            name: "".to_string(),
-            content: ctx.format_type(&displayed),
-            span,
-            kind: crate::ast::AnnotationKind::Inline,
-            content_start: None,
-        }
+        let content = self.pretty().format_type(&displayed);
+        self.readable(content, &displayed, span)
     }
 }
 
@@ -947,15 +992,10 @@ impl Decorator<'_> {
         let mut ctx =
             PrettyContext::with_nominal_names(self.state.nominal_names()).showing_param_names();
         let content = ctx.format_scheme(&displayed);
-        // Shown only if it reads back: each name a type in scope, with
-        // its arguments.
-        crate::infer::type_parser::parse_type_annotation_with_aliases(
-            &content,
-            Span::default(),
-            0,
-            &self.state.type_aliases,
-        )
-        .ok()?;
+        // Shown only if it reads back as the method's type.
+        if !self.reads_back(&content, &displayed.body.ty) {
+            return None;
+        }
         let gap = if content.starts_with(['(', '<']) {
             ""
         } else {
@@ -1083,14 +1123,3 @@ pub fn decorate_with_types(program: &Program, env: &TypeEnv, state: &InferState)
 /// of its event handlers' events) written out whole would be unreadable
 /// and could take more memory than there is.
 const MAX_SHOWN_TYPE: usize = 20_000;
-
-/// The annotation of a declaration whose type is too large to show.
-fn too_large(span: Span) -> TypeAnnotation {
-    TypeAnnotation {
-        name: "".to_string(),
-        content: "… (a type too large to show)".to_string(),
-        span,
-        kind: crate::ast::AnnotationKind::Inline,
-        content_start: None,
-    }
-}

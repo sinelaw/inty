@@ -50,6 +50,35 @@ pub fn print_program_with(
 
 fn print_statements(program: &Program) -> String {
     let mut out = String::new();
+    // The program's type aliases, as declared (they are hoisted, so where
+    // they stand doesn't matter), for the annotations that name them.
+    let mut aliases: Vec<&TypeAlias> = program
+        .type_aliases
+        .iter()
+        .filter(|a| a.body_ast.is_none() && !a.body.trim().is_empty())
+        .collect();
+    aliases.sort_by_key(|a| a.span.start);
+    for alias in aliases {
+        let kind = if alias.nominal {
+            "nominal type"
+        } else {
+            "type"
+        };
+        let params = if alias.params.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", alias.params.join(", "))
+        };
+        writeln!(
+            out,
+            "/** {} {}{} = {} */",
+            kind,
+            alias.name,
+            params,
+            alias.body.trim()
+        )
+        .unwrap();
+    }
     for stmt in &program.statements {
         write_stmt(&mut out, stmt, 0).unwrap();
         writeln!(out).unwrap();
@@ -105,6 +134,7 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             params,
             body,
             type_annotation,
+            arrow,
             ..
         } => {
             // In expression contexts that need to start with a token
@@ -115,6 +145,26 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             // which fails with "missing name".
             if needs_parens {
                 write!(w, "(")?;
+            }
+            let (is_async, body) = async_body(body);
+            if is_async {
+                write!(w, "async ")?;
+            }
+            // An arrow, as written: it has no `this` of its own.
+            if *arrow {
+                write!(w, "(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    write!(w, "{}", p.name)?;
+                }
+                write!(w, ") => ")?;
+                write_stmt(w, body, 0)?;
+                if needs_parens {
+                    write!(w, ")")?;
+                }
+                return Ok(());
             }
             write!(w, "function")?;
             if let Some(n) = name {
@@ -538,6 +588,10 @@ fn write_prop_def(w: &mut impl Write, prop: &PropDef) -> fmt::Result {
         PropDef::Method {
             key, params, body, ..
         } => {
+            let (is_async, body) = async_body(body);
+            if is_async {
+                write!(w, "async ")?;
+            }
             write_prop_key(w, key)?;
             write!(w, "(")?;
             for (i, p) in params.iter().enumerate() {
@@ -728,7 +782,9 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                         writeln!(w, "/** export function {}{} */", name, ann.content)?;
                         write!(w, "{}", ind)?;
                     }
-                    write!(w, "export function {}(", name)?;
+                    let (is_async, body) = async_body(body);
+                    let prefix = if is_async { "async " } else { "" };
+                    write!(w, "export {}function {}(", prefix, name)?;
                     for (i, p) in params.iter().enumerate() {
                         if i > 0 {
                             write!(w, ", ")?;
@@ -1016,7 +1072,9 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                 writeln!(w, "/** function {}{}{} */", name, gap, ann.content)?;
                 write!(w, "{}", ind)?;
             }
-            write!(w, "function {}(", name)?;
+            let (is_async, body) = async_body(body);
+            let prefix = if is_async { "async " } else { "" };
+            write!(w, "{}function {}(", prefix, name)?;
             for (i, p) in params.iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
@@ -1027,6 +1085,53 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             write_stmt(w, body, indent)
         }
     }
+}
+
+/// An `async` function's body, as written, when `body` is the one the
+/// parser lowers it to (`{ return Promise.resolve((() => { … })()); }`),
+/// with `true`; else `body`, with `false`.
+fn async_body(body: &Stmt) -> (bool, &Stmt) {
+    if let Stmt::Block { body: stmts, .. } = body {
+        if let [Stmt::Return {
+            argument: Some(Expr::Call {
+                callee, arguments, ..
+            }),
+            ..
+        }] = stmts.as_slice()
+        {
+            if let (
+                Expr::Member {
+                    object, property, ..
+                },
+                [Expr::Call {
+                    callee: iife,
+                    arguments: none,
+                    ..
+                }],
+            ) = (&**callee, arguments.as_slice())
+            {
+                if let (
+                    Expr::Ident { name, .. },
+                    Expr::Function {
+                        params,
+                        body: inner,
+                        arrow: true,
+                        ..
+                    },
+                ) = (&**object, &**iife)
+                {
+                    if name == "Promise"
+                        && property == "resolve"
+                        && none.is_empty()
+                        && params.is_empty()
+                    {
+                        return (true, inner);
+                    }
+                }
+            }
+        }
+    }
+    (false, body)
 }
 
 fn unary_op_str(op: UnaryOp) -> (bool, &'static str) {

@@ -921,6 +921,11 @@ DESCRIPTION:
     - Full type inference with first-class polymorphism
     - Type annotations in doc comments using /** var x: T */ syntax
 
+    A JavaScript file that checks is printed with the types inferred for
+    it as annotations, each class as written with one above each method.
+    The printed program checks as written: a type that can't be written
+    as an annotation (or would read back as another) is left out.
+
     By default, inty auto-loads the embedded core and DOM declarations
     (stdlib/core.d.js and stdlib/dom.d.js). Pass --no-stdlib to disable
     them, or --lib <path> to load additional user-supplied declarations

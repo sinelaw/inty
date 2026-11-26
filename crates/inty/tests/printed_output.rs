@@ -1,5 +1,6 @@
-//! The checked program as printed: a class as written, with an
-//! annotation above each method that the checker reads back.
+//! The checked program as printed (`inty file.js`): it reads back, as
+//! JavaScript and in each annotation, and checks as written. A class is
+//! printed as written, with an annotation above each method.
 
 use inty::ast::pretty::print_program_with;
 use inty::frontends::javascript::parse;
@@ -80,4 +81,63 @@ fn an_exported_class_is_printed_as_written() {
         out.starts_with("export class P {\n  /** function go(x: Number) => Number */\n  go(x)"),
         "{out}"
     );
+}
+
+/// The printed program checks as written, and prints the same again.
+fn reads_back(src: &str) -> String {
+    let out = print(src);
+    assert!(checks(&out), "{out}");
+    out
+}
+
+#[test]
+fn an_instance_is_annotated_by_its_class_name() {
+    let out = reads_back(
+        "function make() {\n  class Inner { go(x) { return x * 2; } }\n  return new Inner();\n}\n",
+    );
+    assert!(out.contains("/** function make() => Inner */"), "{out}");
+}
+
+#[test]
+fn a_declaration_without_a_value_has_no_annotation() {
+    // `/** var x: T */ var x;` would declare a constant defined elsewhere.
+    let out = reads_back("function f() {\n  var x, y;\n  x = 1; y = 2;\n  return x + y;\n}\n");
+    assert!(!out.contains("var x:"), "{out}");
+}
+
+#[test]
+fn async_functions_and_arrows_are_printed_as_written() {
+    let out = reads_back(
+        "async function f(p) { const v = await p; return v + 1; }\n\
+         const g = async (x) => x;\n\
+         const o = { n: 1, get() { return [1].map((i) => i + this.n); } };\n",
+    );
+    assert!(out.contains("async function f(p)"), "{out}");
+    assert!(out.contains("async (x) =>"), "{out}");
+    assert!(out.contains("(i) =>"), "{out}");
+}
+
+#[test]
+fn type_aliases_are_printed() {
+    let out = reads_back(
+        "/** type Status = \"ok\" | \"err\" */\n\
+         /** function color(s: Status) => String */\n\
+         function color(s) { return s === \"ok\" ? \"green\" : \"red\"; }\n",
+    );
+    assert!(
+        out.starts_with("/** type Status = \"ok\" | \"err\" */\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_type_that_would_read_back_as_another_is_left_out() {
+    // A method taking a callback the class leaves open (`{(…) => R | a}`,
+    // an open record) has no annotation: written out, it would read as a
+    // callback returning `R | a`.
+    let out = reads_back(
+        "class Menu {\n  constructor() { this.items = [{ label: \"a\" }]; }\n  \
+         each(f) { this.items.forEach(f); }\n}\n",
+    );
+    assert!(!out.contains("function each"), "{out}");
 }
