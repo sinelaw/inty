@@ -443,6 +443,12 @@ pub struct InferState {
     pub(in crate::infer) unfold_assumptions: Vec<UnfoldAssumption>,
     /// Current nesting of [`Self::unify`] (see `MAX_UNIFY_DEPTH`).
     pub(in crate::infer) unify_depth: usize,
+    /// The properties [`Self::unify`] is inside, outermost first: the
+    /// field of a record it is comparing, and the field of that, … A
+    /// mismatch deep in two large types (a class's instance against what
+    /// its uses expect of it) is reported at the span of the whole
+    /// comparison; the path says which member it is.
+    pub(in crate::infer) unify_path: Vec<String>,
     /// Pairs of variables, each bound to a type, that the outermost
     /// [`Self::unify`] under way has unified (or is unifying): a pair met
     /// again is taken as unified (coinductively, as for recursive types).
@@ -616,6 +622,7 @@ impl InferState {
             language: crate::ast::SourceLanguage::JavaScript,
             unfold_assumptions: Vec::new(),
             unify_depth: 0,
+            unify_path: Vec::new(),
             unify_bound_pairs: std::collections::HashSet::new(),
             unified_bound_pairs: Vec::new(),
             unify_inexact: false,

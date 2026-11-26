@@ -585,6 +585,20 @@ fn write_error_with<W: Write>(
                 *span,
                 None,
             ),
+            e @ TypeError::ThisMismatch { member, span, .. } => (
+                e.to_string(),
+                *span,
+                Some(match member {
+                    Some(m) => format!(
+                        "the error is somewhere in the two types compared here; `{m}` is \
+                         the member whose function types disagree: one is used or declared \
+                         as a plain function, the other reads `this` as a method"
+                    ),
+                    None => "one function is used or declared as a plain function, the \
+                             other reads `this` as a method"
+                        .to_string(),
+                }),
+            ),
             e @ TypeError::DetachedThis { span, .. } => (
                 e.to_string(),
                 *span,

@@ -122,6 +122,7 @@ fn error_code(err: &IntyError) -> &'static str {
             TypeError::InvalidSyntax { .. } => "InvalidSyntax",
             TypeError::TypeMismatch { .. } => "TypeMismatch",
             TypeError::DetachedThis { .. } => "DetachedThis",
+            TypeError::ThisMismatch { .. } => "ThisMismatch",
             TypeError::BranchMismatch { .. } => "BranchMismatch",
             TypeError::ArrayElementMismatch { .. } => "ArrayElementMismatch",
             TypeError::RequiredBy { .. } => "RequiredBy",

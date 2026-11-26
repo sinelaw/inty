@@ -43,6 +43,24 @@ pub enum TypeOrigin {
     },
 }
 
+/// The text of [`TypeError::ThisMismatch`].
+fn this_mismatch_message(
+    member: Option<&str>,
+    reads_this: &str,
+    without_this: Option<&str>,
+    with_this: Option<&str>,
+) -> String {
+    let at = member
+        .map(|m| format!(" in member `{m}`"))
+        .unwrap_or_default();
+    let shown = |f: Option<&str>| f.map(|f| format!(" '{f}'")).unwrap_or_default();
+    format!(
+        "Type mismatch{at}: expected a function that doesn't use `this`{}, found one that reads `this` (a method of {reads_this}){}",
+        shown(without_this),
+        shown(with_this),
+    )
+}
+
 impl TypeOrigin {
     /// Get the primary span for this origin
     pub fn span(&self) -> Span {
@@ -465,6 +483,19 @@ pub enum TypeError {
     )]
     DetachedThis { callee: String, span: Span },
 
+    /// A function that doesn't use `this` and one that reads it met in
+    /// one slot. `member`: the property path (`editor.say`) of the two
+    /// types being compared where they are; `without_this` / `with_this`:
+    /// the two functions (none: only their `this` types were at hand).
+    #[error("{}", this_mismatch_message(member.as_deref(), reads_this, without_this.as_deref(), with_this.as_deref()))]
+    ThisMismatch {
+        member: Option<String>,
+        reads_this: String,
+        without_this: Option<String>,
+        with_this: Option<String>,
+        span: Span,
+    },
+
     #[error("Type mismatch: expected {expected}, found {found}")]
     TypeMismatch {
         expected: String,
@@ -549,6 +580,7 @@ impl TypeError {
             TypeError::Module { span, .. } => *span,
             TypeError::InvalidSyntax { span, .. } => *span,
             TypeError::TypeMismatch { span, .. } => *span,
+            TypeError::ThisMismatch { span, .. } => *span,
             TypeError::DetachedThis { span, .. } => *span,
             TypeError::BranchMismatch { span, .. } => *span,
             TypeError::ArrayElementMismatch { span, .. } => *span,

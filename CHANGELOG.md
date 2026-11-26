@@ -49,6 +49,14 @@
   (`f(xs = [o])`) was reported as undefined; scope resolution, and the
   language server's walks, now visit keyword arguments.
 
+### Diagnostics
+
+- A function that doesn't use `this` met by one that reads it, deep in two
+  types compared as a whole (a class's instance against what its uses
+  expect), names the member they are (`editor.say`) and shows both
+  function types; the error was reported at the whole class with
+  neither.
+
 ### DOM declarations
 
 - Nodes: `firstChild`, `lastChild`, `nextSibling`, `previousSibling`,
