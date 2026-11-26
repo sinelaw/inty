@@ -6556,3 +6556,212 @@ fn a_constraint_on_a_value_in_flight_survives_an_inner_generalisation() {
         assert!(check_with_stdlib(src, &[]).is_err(), "accepted:\n{src}");
     }
 }
+
+/// Spreads whose result flows back into their operand make rows whose
+/// tails are bound to rows: unifying them compares each as the one row it
+/// is, rather than extending a bound tail with a fresh one on every
+/// attempt. These diverged (and crashed once unification had no depth
+/// limit); they are well typed.
+#[test]
+fn spreads_flowing_back_into_their_operand_end() {
+    for src in [
+        "function f(o) { o = {...{...o, a: 1}, b: 1}; }",
+        "function f(o, p) { p = {...o, a: 1}; o = {...p, b: 1}; }",
+        "function f(o) { const p = {...o, a: 1}; const q = {...p, a: \"s\"}; o = q; return o; }\n\
+         f({a: \"x\"});",
+    ] {
+        assert!(
+            check_program(src, &[]).is_ok(),
+            "{src}: {:?}",
+            check_program(src, &[])
+        );
+    }
+}
+
+/// Two classes that hold each other, whose methods meet each other's
+/// rows (`this.doc.render(this)`): a method's `this` is its row, so
+/// comparing the rows flattened meets them again, which matches.
+#[test]
+fn mutually_recursive_classes_end() {
+    let src = "class Doc {\n\
+                 constructor() { this.views = []; this.title = \"t\"; }\n\
+                 add(v) { this.views.push(v); v.doc = this; }\n\
+                 render(v) { return v.conceals; }\n\
+               }\n\
+               class View {\n\
+                 constructor(d) { this.doc = d; this.conceals = 1; }\n\
+                 draw() { return this.doc.render(this) + 1; }\n\
+               }\n\
+               const d = new Doc();\n\
+               const v = new View(d);\n\
+               d.add(v);\n\
+               const n = v.draw();";
+    // (An error, if any, is the program's; the point is that it ends.)
+    let _ = check_program(src, &["n"]);
+}
+
+// ---- Recursive aliases' arguments --------------------------------------------
+
+/// Two recursive aliases compared are assumed equal, while compared, as
+/// the instances they are, arguments included. Keyed by their ids alone,
+/// `P<Number>` and `Q<Number>` agreeing let `P<String>` (`next`) and
+/// `Q<Number>` agree too, and `f(q)` returned a number as a string.
+#[test]
+fn recursive_aliases_compared_with_their_arguments() {
+    let unsound = "/** type P<A> = {v: A, next: P<String>} */\n\
+                   /** type Q<A> = {v: A, next: Q<Number>} */\n\
+                   /** function f(a: P<Number>) => String */\n\
+                   function f(a) { return a.next.v; }\n\
+                   /** function g(q: Q<Number>) => String */\n\
+                   function g(q) { return f(q); }";
+    assert!(check_program(unsound, &[]).is_err());
+    // The same with agreeing instances, and other regular recursive
+    // aliases (a parameter passed on, swapped, or a closed argument).
+    let ok = "/** type P<A> = {v: A, next: P<String>} */\n\
+              /** type Q<A> = {v: A, next: Q<String>} */\n\
+              /** function f(a: P<Number>) => String */\n\
+              function f(a) { return a.next.v; }\n\
+              /** function g(q: Q<Number>) => String */\n\
+              function g(q) { return f(q); }\n\
+              /** type L<A> = {head: A, tail: L<A> | Null} */\n\
+              /** type T<A, B> = {a: A, b: B, swap: T<B, A>} */\n\
+              /** function h(t: T<Number, String>) => Number */\n\
+              function h(t) { return t.swap.b; }";
+    assert!(
+        check_program(ok, &[]).is_ok(),
+        "{:?}",
+        check_program(ok, &[])
+    );
+}
+
+/// A recursive alias whose recursive use builds a larger argument from its
+/// own parameter has no finite set of instances: comparing two of its
+/// types could unroll new ones without end. It is rejected where it is
+/// declared, directly or through an alias it is defined with.
+#[test]
+fn expansive_recursive_aliases_are_rejected() {
+    for src in [
+        "/** type Nest<A> = {v: A, next: Nest<{w: A}>} */\n\
+         /** function f(n: Nest<Number>) => Number */\n\
+         function f(n) { return n.v; }",
+        "/** type A<X> = {b: B<X>} */\n\
+         /** type B<X> = {a: A<X[]>} */\n\
+         /** function f(a: A<Number>) => Number */\n\
+         function f(a) { return 1; }",
+        // Through a nominal alias of the group.
+        "/** nominal type M<X> = {m: P<{w: X}>} */\n\
+         /** type P<A> = {self: P<A> | Null, n: M<A>} */\n\
+         /** function f(p: P<Number>) => Number */\n\
+         function f(p) { return 1; }",
+    ] {
+        let err = check_program(src, &[]).unwrap_err();
+        assert!(
+            err.contains("an argument built from its parameter"),
+            "{src}: {err}"
+        );
+    }
+}
+
+/// A failure inside a member of two records that isn't a plain mismatch
+/// (an array lacks a property the other side reads) is a mismatch in that
+/// member, the innermost one, with its two types: the error used to show
+/// the two whole records only.
+#[test]
+fn a_failure_inside_a_member_names_the_member() {
+    let src = "/** type Pane = {title: String, rows: Number[]} */\n\
+               /** function show(p: {view: {title: String, rows: {size: Number}}}) => Number */\n\
+               function show(p) { return p.view.rows.size; }\n\
+               /** const pane: Pane */\n\
+               const pane = {title: \"a\", rows: [1, 2]};\n\
+               /** const w: {view: Pane} */\n\
+               const w = {view: pane};\n\
+               show(w);";
+    let err = check_program(src, &[]).unwrap_err();
+    assert!(err.contains("in member `view.rows`"), "{err}");
+    assert!(
+        err.contains("expected {size: Number}, found Number[]"),
+        "{err}"
+    );
+}
+
+// ---- Arrays against records ---------------------------------------------------
+
+/// A record made of reads (`holder.cursors.map(f)` while `holder` isn't
+/// known) later met by an array: each field it needs is the array's, of
+/// the type a read of it has. Only `length` was known, so any method read
+/// failed ("Property 'map' not found on type …[]").
+#[test]
+fn an_array_has_the_methods_a_record_of_reads_needs() {
+    let module = "let holder;\n\
+                  function attach(h) { holder = h; }\n\
+                  function firsts() { return holder.cursors.map((c) => c.pos).some((p) => p > 0); }";
+    let ok = "attach({ cursors: [{pos: 1}, {pos: 2}] });";
+    let mut state = InferState::new();
+    let program = crate::frontends::javascript::parse_source(module).unwrap();
+    let (_, env) = state
+        .infer_program_with_env(&initial_env(), &program)
+        .unwrap();
+    state.resolve_constraints().unwrap();
+    let program = crate::frontends::javascript::parse_at(ok, module.len() + 1).unwrap();
+    state.infer_program_with_env(&env, &program).unwrap();
+    assert!(state.errors.is_empty(), "{:?}", state.errors);
+    // An element of another type, and a property arrays don't have, fail.
+    for bad in [
+        "attach({ cursors: [{pos: \"x\"}] });",
+        "function sz() { return holder.cursors.size; } attach({ cursors: [1] });",
+    ] {
+        let (err, _) = first_error_across(module, bad);
+        assert!(
+            err.to_string().contains("cursors") || err.to_string().contains("size"),
+            "{bad}: {err}"
+        );
+    }
+}
+
+/// A member's flags (whether it can be assigned, or is the object's own)
+/// failing to agree is a mismatch in that member: the error named neither.
+#[test]
+fn a_flag_mismatch_names_the_member() {
+    let module = "let view;\n\
+                  function attach(v) { view = v; }\n\
+                  function pos() { return view.primary.pos + 1; }";
+    let user = "class View {\n\
+                  constructor() { this.cursors = [{pos: 1}]; }\n\
+                  get primary() { return this.cursors[0]; }\n\
+                }\n\
+                attach(new View());";
+    let (err, _) = first_error_across(module, user);
+    let text = err.to_string();
+    assert!(text.contains("in member `primary`"), "{text}");
+}
+
+/// An expansive alias is reported, and the rest of the program is still
+/// checked (the alias is an error type, which nothing unrolls).
+#[test]
+fn an_expansive_alias_does_not_stop_the_check() {
+    let src = "/** type Nest<A> = {v: A, next: Nest<{w: A}>} */\n\
+               const later = \"s\" * 2;";
+    let program = crate::frontends::javascript::parse_source(src).unwrap();
+    let mut state = InferState::new();
+    let _ = state.infer_program_with_env(&initial_env(), &program);
+    let text: Vec<String> = state.errors.iter().map(|e| e.to_string()).collect();
+    assert!(text.iter().any(|t| t.contains("Nest")), "{text:?}");
+    assert!(text.len() >= 2, "the later error is reported too: {text:?}");
+}
+
+/// A record whose fields arrays have, or may lack, is no array: a closed
+/// row is a value with just those fields.
+#[test]
+fn a_record_is_no_array() {
+    for src in [
+        "/** function first(xs: Number[]) => Number */\n\
+         function first(xs) { return xs.map((x) => x + 1)[0]; }\n\
+         /** function opts() => {verbose?: Boolean} */\n\
+         function opts() { return {}; }\n\
+         first(opts());",
+        "let cur = [1, 2];\ncur = {};\ncur.push(3);",
+        "let cur = [1, 2];\ncur = { length: 3 };\ncur.push(3);",
+    ] {
+        assert!(check_program(src, &[]).is_err(), "{src}");
+    }
+}

@@ -440,6 +440,36 @@ impl InferState {
             .collect();
         let sccs = crate::infer::features::functions::tarjan_scc(&deps);
         let mut recursive = vec![false; aliases.len()];
+        // The groups of aliases defined with each other, a nominal alias
+        // included (its body is unrolled too, against an open row): for
+        // the check that their recursion is non-expansive, below.
+        let deps_all: Vec<Vec<usize>> = aliases
+            .iter()
+            .map(|a| {
+                let names: Vec<&str> = match &a.body_ast {
+                    Some(ast) => ast.ref_names(),
+                    None => type_body_idents(&a.body).collect(),
+                };
+                let mut ds: Vec<usize> = names
+                    .into_iter()
+                    .filter_map(|n| index.get(n).copied())
+                    .collect();
+                ds.sort_unstable();
+                ds.dedup();
+                ds
+            })
+            .collect();
+        let mut group = vec![0usize; aliases.len()];
+        let mut cyclic = vec![false; aliases.len()];
+        for (g, scc) in crate::infer::features::functions::tarjan_scc(&deps_all)
+            .iter()
+            .enumerate()
+        {
+            for &i in scc {
+                group[i] = g;
+                cyclic[i] = scc.len() > 1 || deps_all[i].contains(&i);
+            }
+        }
         for scc in &sccs {
             if scc.len() > 1 || deps[scc[0]].contains(&scc[0]) {
                 for &i in scc {
@@ -572,6 +602,87 @@ impl InferState {
                     class: false,
                 },
             );
+        }
+
+        // A recursive alias may pass each alias of its group (itself
+        // included) one of its own parameters, or a type that mentions
+        // none, as an argument: then its unrollings meet finitely many
+        // instances (Kennedy and Pierce's non-expansive definitions), so
+        // comparing two recursive types, which assumes a pair met again
+        // matches, ends. `type Nest<A> = {next: Nest<{w: A}>}` meets
+        // `Nest<A>`, `Nest<{w: A}>`, `Nest<{w: {w: A}}>`, … without end:
+        // reported, and made an error type, which nothing unrolls.
+        let ids_of = |state: &Self, a: &crate::ast::TypeAlias| {
+            state
+                .type_aliases
+                .get(&a.name)
+                .map(|d| [d.rec_id, d.nominal_id])
+                .unwrap_or_default()
+        };
+        let in_group: std::collections::HashMap<crate::types::TypeId, usize> = aliases
+            .iter()
+            .enumerate()
+            .flat_map(|(i, a)| ids_of(self, a).into_iter().flatten().map(move |id| (id, i)))
+            .map(|(id, i)| (id, group[i]))
+            .collect();
+        for (i, alias) in aliases.iter().enumerate() {
+            if !cyclic[i] {
+                continue;
+            }
+            let Some(def) = self.type_aliases.get(&alias.name) else {
+                continue;
+            };
+            let mut expansive: Option<(String, usize)> = None;
+            def.body.for_each_named(&mut |id, args| {
+                if expansive.is_some() || in_group.get(&id) != Some(&group[i]) {
+                    return;
+                }
+                for a in args {
+                    if matches!(a, Type::Var(TVarName::Flex(p)) if def.params.contains(p)) {
+                        continue;
+                    }
+                    let free = a.free_vars();
+                    if let Some(k) = def
+                        .params
+                        .iter()
+                        .position(|p| free.contains(&TVarName::Flex(*p)))
+                    {
+                        let used = aliases
+                            .iter()
+                            .find(|b| ids_of(self, b).contains(&Some(id)))
+                            .map(|b| b.name.clone())
+                            .unwrap_or_default();
+                        expansive = Some((used, k));
+                        return;
+                    }
+                }
+            });
+            if let Some((used, k)) = expansive {
+                let param = alias.params.get(k).cloned().unwrap_or_default();
+                self.push_error(
+                    TypeError::InvalidSyntax {
+                        message: format!(
+                            "type alias '{}' passes `{used}` an argument built from its \
+                             parameter `{param}` (not `{param}` itself): each unrolling \
+                             would be a new, larger type, without end, so the alias can't \
+                             be used. Pass the parameter itself, or a type that doesn't \
+                             mention it",
+                            alias.name
+                        ),
+                        span: alias.span,
+                    }
+                    .into(),
+                );
+                let ids = ids_of(self, alias);
+                if let Some(def) = self.type_aliases.get_mut(&alias.name) {
+                    def.body = Type::Error;
+                }
+                for id in ids.into_iter().flatten() {
+                    if let Some(named) = self.named_types.get_mut(&id) {
+                        named.body = Type::Error;
+                    }
+                }
+            }
         }
     }
 

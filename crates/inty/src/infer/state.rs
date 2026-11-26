@@ -512,8 +512,9 @@ pub struct InferState {
 /// has closed and the unification is sound by coinduction.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(in crate::infer) enum UnfoldAssumption {
-    /// `Named(id_a) ↔ Named(id_b)` unfold in progress.
-    NamedPair(TypeId, TypeId),
+    /// `Named(id_a, args_a) ↔ Named(id_b, args_b)` unfold in progress
+    /// (smaller id first), arguments included.
+    NamedPair(TypeId, Vec<Type>, TypeId, Vec<Type>),
     /// `Named(id, args) ↔ other` unfold in progress, with both sides as
     /// they were (zonked) when the unfold began. Only the *same* goal
     /// recurring closes the cycle: keying by the id alone let

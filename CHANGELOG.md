@@ -51,6 +51,26 @@
 
 ### Diagnostics
 
+- An array met by a record of reads (`o.xs.map(f)` while `o` isn't known,
+  later given an array) has every field the record needs, of the type a
+  read of it has: only `length` was known, so any method read failed
+  ("Property 'map' not found on type …[]").
+- A member's flags not agreeing (assigned against read-only, own against
+  on the prototype) is a mismatch in that member: the error named neither
+  member nor types.
+- Writing out a type for a diagnostic stays within its budget: a part
+  written before (memoised) or stored in place was written whole, which
+  for a type sharing its parts (elements chained through `appendChild`)
+  ran out of memory.
+- A failure inside a member of two records (or a class instance and a
+  record) that isn't a plain mismatch (a property an array lacks, an
+  arity, an infinite type) names the innermost member it is in and shows
+  that member's two types, with the failure as the reason: ``Type mismatch
+  in member `view.pane.rows`: expected '{size: Number}', found
+  'Number[]'`` (help: `Property 'size' not found on type Number[]`). It
+  used to show the two whole types only. Unrolling a recursive or nominal
+  type keeps the two sides' order, so such a member's expected and found
+  aren't swapped.
 - A function that doesn't use `this` met by one that reads it, deep in two
   types compared as a whole (a class's instance against what its uses
   expect), names the member they are (`editor.say`) and shows both
@@ -191,6 +211,19 @@ unterminated-comment error.
 
 ### Fixes
 
+- Two recursive aliases being compared are assumed equal, while compared,
+  as the instances they are, arguments included. Keyed by their ids alone,
+  `P<Number>` agreeing with `Q<Number>` let `P<String>` agree with
+  `Q<Number>` too: with `type P<A> = {v: A, next: P<String>}` and `type
+  Q<A> = {v: A, next: Q<Number>}`, a `Q<Number>` passed as a `P<Number>`
+  was accepted, and its `next.v`, a number, read as a string.
+- A recursive alias whose recursive use builds a larger argument from its
+  own parameter (`type Nest<A> = {next: Nest<{w: A}>}`, directly or
+  through an alias it is defined with) is rejected where it is declared:
+  its unrollings are ever larger types, so comparing two of them, keyed by
+  their arguments, needn't end. A recursive use may pass the alias's own
+  parameters, in any order, or types that don't mention them
+  (non-expansive definitions, Kennedy and Pierce 2007).
 - Unifying recursive types always ends, with no depth limit: the "Type
   too complex: unifying these recursive types did not terminate" error is
   gone. Its cause was a row whose tail led back to itself (`ρ = {| ρ}`, met
@@ -198,11 +231,14 @@ unterminated-comment error.
   the recursive type `μX. {| X}`: a row that never ends, which extended
   any row it was unified with forever. A row ending in itself is now no
   recursive type: with no fields the equation says nothing, and
-  `ρ = {F | ρ}` gives `ρ` the fields `F` and a new tail. A recursive type
-  met by a variable is compared once, keyed by the variable, whatever its
-  type looks like by then; together with the pairs of bound variables
-  already compared once, unification visits finitely many pairs of nodes
-  (Huet's unification of rational trees).
+  `ρ = {F | ρ}` gives `ρ` the fields `F` and a new tail. Two rows whose
+  tails lead, through the rows they are bound to, to the same tail (spreads
+  whose result flows back into their operand: `o = {...{...o, a: 1}, b: 1}`)
+  are compared as the one row each is, the shared tail taking the fields
+  only one lists; taken a row at a time, each extended the other's bound
+  tail with a fresh one without end. A recursive type met by a variable is
+  compared once, keyed by the variable, whatever its type looks like by
+  then.
 - The language server answers hover, completion, and signature help in a
   file with a type error. A single error anywhere used to turn them off for
   the whole file, though inference had typed every other statement.

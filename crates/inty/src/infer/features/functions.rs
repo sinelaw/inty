@@ -1519,8 +1519,12 @@ impl InferState {
         arg: &Expr,
         mut err: crate::error::IntyError,
     ) -> crate::error::IntyError {
+        // Only an error at `arg` itself: one raised inside it (a call in
+        // a field's value) is about another value, and says so already.
         if let Some(e) = err.as_type_mut() {
-            self.locate_member_in_value(arg, e);
+            if e.span() == arg.span() {
+                self.locate_member_in_value(arg, e);
+            }
         }
         err
     }

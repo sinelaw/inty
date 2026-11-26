@@ -1,0 +1,22 @@
+
+Error: Type mismatch in member `rows`: expected '{size: Number}', found 'Number[]'
+   ╭─[ main.js:9:6 ]
+   │
+ 9 │ show(pane);
+   │      ──┬─  
+   │        ╰─── Type mismatch in member `rows`: expected '{size: Number}', found 'Number[]'
+   │ 
+   │ Note: `rows` is a member of the types compared: expected '{rows: {size: Number}, title: String}', found 'Pane'
+───╯
+
+
+Error: Type mismatch in member `view.pane.rows`: expected '{size: Number}', found 'Number[]'
+    ╭─[ main.js:17:6 ]
+    │
+ 17 │ draw(w);
+    │      ┬  
+    │      ╰── Type mismatch in member `view.pane.rows`: expected '{size: Number}', found 'Number[]'
+    │ 
+    │ Note: `view.pane.rows` is a member of the types compared: expected '{view: {name: String, pane: {rows: {size: Number}, title: String}}}', found '{view: View}'
+────╯
+

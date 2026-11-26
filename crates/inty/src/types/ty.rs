@@ -1006,6 +1006,64 @@ impl Type {
 }
 
 impl Type {
+    /// Whether the type is made of other types (a record, a function, an
+    /// array, …), not a primitive, a literal or a variable.
+    pub fn has_parts(&self) -> bool {
+        matches!(
+            self,
+            Type::Row(_)
+                | Type::Func { .. }
+                | Type::Array(_)
+                | Type::Maybe(..)
+                | Type::Promise(_)
+                | Type::Map(_)
+                | Type::Tuple(_)
+                | Type::Union(_)
+                | Type::Named(_, _)
+        )
+    }
+
+    /// Call `f` with each named type `self` mentions (a recursive or
+    /// nominal type's id and arguments, a recursive row tail's included),
+    /// outermost first.
+    pub fn for_each_named(&self, f: &mut dyn FnMut(crate::types::TypeId, &[Type])) {
+        match self {
+            Type::Named(id, args) => {
+                f(*id, args);
+                args.iter().for_each(|a| a.for_each_named(f));
+            }
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                if let Some(t) = this_type {
+                    t.for_each_named(f);
+                }
+                for p in params {
+                    p.ty.for_each_named(f);
+                }
+                ret.for_each_named(f);
+            }
+            Type::Row(row) => {
+                for e in row.props.values() {
+                    e.ty.for_each_named(f);
+                }
+                if let RowTail::Recursive(id, args) = &row.tail {
+                    f(*id, args);
+                    args.iter().for_each(|a| a.for_each_named(f));
+                }
+            }
+            Type::Array(t) | Type::Maybe(_, t) | Type::Promise(t) | Type::Map(t) => {
+                t.for_each_named(f)
+            }
+            Type::Tuple(ts) | Type::Union(ts) => ts.iter().for_each(|t| t.for_each_named(f)),
+            _ => {}
+        }
+    }
+}
+
+impl Type {
     // === Constructors ===
 
     /// Create a type variable.
