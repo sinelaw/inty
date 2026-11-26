@@ -1,7 +1,64 @@
 //! Error types for the inty type checker.
 
 use crate::span::Span;
+use crate::types::Type;
 use thiserror::Error;
+
+/// A type a diagnostic shows. Inference raises an error holding the
+/// types themselves ([`ShownType::Type`]): rendering one (resolving it
+/// against the substitution, tidying its variables, trimming large
+/// records) is costly, and most errors are raised by speculative
+/// attempts and dropped. An error that is reported is rendered once
+/// ([`crate::infer::InferState::render_error`]), which makes its types
+/// [`ShownType::Text`]. Unrendered, a type prints as it is.
+#[derive(Debug, Clone)]
+pub enum ShownType {
+    Type(Box<Type>),
+    Text(String),
+}
+
+impl ShownType {
+    pub fn ty(t: &Type) -> Self {
+        ShownType::Type(Box::new(t.clone()))
+    }
+
+    /// The rendered text (the type's plain form if not rendered).
+    pub fn text(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            ShownType::Text(s) => s.as_str().into(),
+            ShownType::Type(t) => t.to_string().into(),
+        }
+    }
+}
+
+impl std::fmt::Display for ShownType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShownType::Type(t) => write!(f, "{t}"),
+            ShownType::Text(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<String> for ShownType {
+    fn from(s: String) -> Self {
+        ShownType::Text(s)
+    }
+}
+
+impl From<&str> for ShownType {
+    fn from(s: &str) -> Self {
+        ShownType::Text(s.to_string())
+    }
+}
+
+/// Where a mismatch is, in the larger types compared: " in member `m`"
+/// (nothing at their top).
+pub fn in_member(member: Option<&str>) -> String {
+    member
+        .map(|m| format!(" in member `{m}`"))
+        .unwrap_or_default()
+}
 
 /// Describes where a type came from in the source code
 #[derive(Debug, Clone)]
@@ -46,14 +103,12 @@ pub enum TypeOrigin {
 /// The text of [`TypeError::ThisMismatch`].
 fn this_mismatch_message(
     member: Option<&str>,
-    reads_this: &str,
-    without_this: Option<&str>,
-    with_this: Option<&str>,
+    reads_this: &ShownType,
+    without_this: Option<&ShownType>,
+    with_this: Option<&ShownType>,
 ) -> String {
-    let at = member
-        .map(|m| format!(" in member `{m}`"))
-        .unwrap_or_default();
-    let shown = |f: Option<&str>| f.map(|f| format!(" '{f}'")).unwrap_or_default();
+    let at = in_member(member);
+    let shown = |f: Option<&ShownType>| f.map(|f| format!(" '{f}'")).unwrap_or_default();
     format!(
         "Type mismatch{at}: expected a function that doesn't use `this`{}, found one that reads `this` (a method of {reads_this}){}",
         shown(without_this),
@@ -372,10 +427,16 @@ impl ParseError {
 /// Type checking errors.
 #[derive(Debug, Clone, Error)]
 pub enum TypeError {
-    #[error("Cannot unify types: expected {expected}, found {found}")]
+    /// Two types that don't unify. `member`: the property path
+    /// (`editor.ask`) of the larger types being compared where they are,
+    /// when the mismatch is inside them (`expected` and `found` are then
+    /// that member's types, and `whole`, when known, the larger types).
+    #[error("Cannot unify types{}: expected {expected}, found {found}", in_member(member.as_deref()))]
     UnificationError {
-        expected: String,
-        found: String,
+        expected: ShownType,
+        found: ShownType,
+        member: Option<String>,
+        whole: Option<Box<(ShownType, ShownType)>>,
         span: Span,
         context: Option<String>,
         expected_origin: Option<TypeOrigin>,
@@ -487,12 +548,12 @@ pub enum TypeError {
     /// one slot. `member`: the property path (`editor.say`) of the two
     /// types being compared where they are; `without_this` / `with_this`:
     /// the two functions (none: only their `this` types were at hand).
-    #[error("{}", this_mismatch_message(member.as_deref(), reads_this, without_this.as_deref(), with_this.as_deref()))]
+    #[error("{}", this_mismatch_message(member.as_deref(), reads_this, without_this.as_ref(), with_this.as_ref()))]
     ThisMismatch {
         member: Option<String>,
-        reads_this: String,
-        without_this: Option<String>,
-        with_this: Option<String>,
+        reads_this: ShownType,
+        without_this: Option<ShownType>,
+        with_this: Option<ShownType>,
         span: Span,
     },
 
@@ -523,19 +584,21 @@ pub enum TypeError {
     /// doesn't guess that they form a union; an annotation says so.
     #[error("Branches have different types: {left} and {right}")]
     BranchMismatch {
-        left: String,
-        right: String,
+        left: ShownType,
+        right: ShownType,
         span: Span,
     },
 
     /// A field one record type has and the other lacks (or has only
     /// optionally): `field` is present in `with` and absent from
-    /// `without`.
-    #[error("Field '{field}' is present in {with} but missing from {without}")]
+    /// `without`. `member`: where the two records are in the larger
+    /// types compared (as for `UnificationError`).
+    #[error("Field '{field}' is present in {with} but missing from {without}{}", in_member(member.as_deref()))]
     FieldPresenceMismatch {
         field: String,
-        with: String,
-        without: String,
+        with: ShownType,
+        without: ShownType,
+        member: Option<String>,
         span: Span,
     },
 
@@ -550,8 +613,8 @@ pub enum TypeError {
     /// (`[String, Number]`) or a record.
     #[error("Array elements have different types: {left} and {right}")]
     ArrayElementMismatch {
-        left: String,
-        right: String,
+        left: ShownType,
+        right: ShownType,
         span: Span,
     },
 }

@@ -236,6 +236,8 @@ fn write_error_with<W: Write>(
     if let Some(TypeError::UnificationError {
         expected,
         found,
+        member,
+        whole,
         span,
         context,
         expected_origin,
@@ -247,8 +249,9 @@ fn write_error_with<W: Write>(
         let found_color = colors.next();
         let error_color = Color::Red;
 
+        let at = crate::error::in_member(member.as_deref());
         let msg = format!(
-            "Type mismatch: {} '{}', {} '{}'",
+            "Type mismatch{at}: {} '{}', {} '{}'",
             tint("expected", expected_color),
             expected,
             tint("found", found_color),
@@ -296,14 +299,24 @@ fn write_error_with<W: Write>(
             );
         }
 
-        // Add footer note explaining why this is an error
-        report.add_note(format!(
-            "Cannot unify {} '{}' with {} '{}'",
-            tint("expected", expected_color),
-            expected,
-            tint("found", found_color),
-            found
-        ));
+        // Add footer note explaining why this is an error: the larger
+        // types the member is in, when known.
+        report.add_note(match (member, whole.as_deref()) {
+            (Some(m), Some((whole_expected, whole_found))) => format!(
+                "`{m}` is a member of the types compared: {} '{}', {} '{}'",
+                tint("expected", expected_color),
+                whole_expected,
+                tint("found", found_color),
+                whole_found
+            ),
+            _ => format!(
+                "Cannot unify {} '{}' with {} '{}'",
+                tint("expected", expected_color),
+                expected,
+                tint("found", found_color),
+                found
+            ),
+        });
 
         writeln!(writer)?;
         report.finish().write(files.cache(), &mut writer)?;
@@ -462,11 +475,15 @@ fn write_error_with<W: Write>(
                 field,
                 with,
                 without,
+                member,
                 span,
             } => (
                 format!(
-                    "Field '{}' is present in '{}' but missing from '{}'",
-                    field, with, without
+                    "Field '{}' is present in '{}' but missing from '{}'{}",
+                    field,
+                    with,
+                    without,
+                    crate::error::in_member(member.as_deref())
                 ),
                 *span,
                 Some(format!(
@@ -719,8 +736,10 @@ mod tests {
         let span = Span::new(x_start, x_start + 1);
 
         let error = IntyError::from(TypeError::UnificationError {
-            expected: "String".to_string(),
-            found: "Number".to_string(),
+            expected: "String".into(),
+            found: "Number".into(),
+            member: None,
+            whole: None,
             span,
             context: None,
             expected_origin: None,
