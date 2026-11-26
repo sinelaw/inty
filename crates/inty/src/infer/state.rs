@@ -2904,18 +2904,6 @@ impl InferState {
             let mut scheme_preds = Vec::new();
             let mut remaining: Vec<PendingConstraint> =
                 std::mem::take(&mut self.pending_constraints);
-            // An `Iterable` on a container nothing else mentions (not the
-            // type, the environment or another constraint) is vacuous: it
-            // was posed for an argument a call left out (`new Set()`), and
-            // no value of that type is ever iterated. Kept, it would show
-            // in the scheme as a requirement on a variable no caller sees.
-            let container_var = |c: &PendingConstraint, s: &mut Self| match (
-                c.pred.class,
-                c.pred.types.first().map(|t| s.zonk_head(t)),
-            ) {
-                (crate::types::ClassName::Iterable, Some(Type::Var(v))) if v.is_flex() => Some(v),
-                _ => None,
-            };
             // Each constraint's variables through the substitution
             // (`reach`: a flattened copy can be far larger).
             let reach_of = |s: &Self, c: &PendingConstraint| {
@@ -2925,25 +2913,6 @@ impl InferState {
                 }
                 r
             };
-            let all_vars: Vec<std::collections::HashSet<TVarName>> =
-                remaining.iter().map(|c| reach_of(self, c).vars).collect();
-            let ty_free = ty.free_vars();
-            let mut vacuous = vec![false; remaining.len()];
-            for (i, c) in remaining.iter().enumerate() {
-                if let Some(v) = container_var(c, self) {
-                    vacuous[i] = !ty_free.contains(&v)
-                        && !fixed_vars.contains(&v)
-                        && all_vars
-                            .iter()
-                            .enumerate()
-                            .all(|(j, vars)| j == i || !vars.contains(&v));
-                }
-            }
-            let mut i = 0;
-            remaining.retain(|_| {
-                i += 1;
-                !vacuous[i - 1]
-            });
             loop {
                 let mut rest = Vec::new();
                 let mut took = false;
@@ -3026,6 +2995,52 @@ impl InferState {
                     false
                 })
                 .collect();
+            // Of what the scheme took, a constraint whose subject (see
+            // `constraint_subjects`) nothing in the scheme reaches — not
+            // its type, nor a constraint the type reaches — is vacuous in
+            // every instance: there its subject is a fresh variable that
+            // can be whatever meets it, and no caller sees it. Left in, it
+            // shows as a requirement on a variable nothing mentions (an
+            // instance of a generalised `const` relating to a placeholder
+            // nothing used, an `Iterable` posed for an argument a call
+            // left out). Only the scheme loses it: what stays pending is
+            // what it would be with it, so a variable still to be decided
+            // elsewhere (an enclosing function's `return`s) is still
+            // checked when it is.
+            let mut reached: std::collections::HashSet<TVarName> = ty.free_vars();
+            reached.extend(extra.iter().cloned());
+            reached.extend(fixed_vars.iter().cloned());
+            let mut kept = vec![false; scheme_preds.len()];
+            loop {
+                let mut changed = false;
+                for (i, pred) in scheme_preds.iter().enumerate() {
+                    let subject_reached = constraint_subjects(pred.class, pred.types.len())
+                        .iter()
+                        .any(|&k| match &pred.types[k] {
+                            Type::Var(v) if v.is_flex() => reached.contains(v),
+                            // A known subject decides the constraint (or
+                            // fails it at an instance): it isn't vacuous.
+                            _ => true,
+                        });
+                    if !kept[i] && subject_reached {
+                        kept[i] = true;
+                        changed = true;
+                        for t in &pred.types {
+                            reached.extend(t.free_vars());
+                        }
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+            let scheme_preds: Vec<TypePred> = scheme_preds
+                .into_iter()
+                .zip(kept)
+                .filter_map(|(pred, kept)| kept.then_some(pred))
+                .collect();
+            // A variable only a dropped constraint mentioned is nobody's.
+            gen_vars.retain(|v| reached.contains(v));
             gen_vars.sort_by_key(|v| v.id());
             gen_pvars.sort_by_key(|p| p.id());
 
@@ -3681,6 +3696,29 @@ fn collect_literal_fields(
             }),
             _ => {}
         }
+    }
+}
+
+/// The positions of a constraint's subjects: the types that, while free
+/// variables, leave it satisfiable whatever its other types are (a
+/// receiver can be a record with the property, a container one of the
+/// element, a `Plus` operand a `Number`). One reached makes the
+/// constraint matter; none reached, it is vacuous in a scheme (see
+/// `generalize_seeded`).
+/// A `Spread` result can't be just anything, so all its types are its
+/// subjects.
+pub(in crate::infer) fn constraint_subjects(class: ClassName, arity: usize) -> &'static [usize] {
+    match class {
+        ClassName::HasProp
+        | ClassName::FieldWrite
+        | ClassName::IndexWrite
+        | ClassName::Indexable
+        | ClassName::Iterable
+        | ClassName::Strip
+        | ClassName::Inject
+        | ClassName::Plus
+        | ClassName::Testable => &[0],
+        ClassName::Spread => &[0, 1, 2][..arity.min(3)],
     }
 }
 
