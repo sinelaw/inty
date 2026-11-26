@@ -211,6 +211,11 @@ unterminated-comment error.
 
 ### Fixes
 
+- A value of a type not known yet that is both iterated and read from
+  (`for (const o of xs) …` and `xs.find(…)`) is a record of what its uses
+  read, `[Symbol.iterator]` among them: an array fits it. Iterating such a
+  record was an error ("an object isn't iterable"). A closed record, or one
+  known to lack an iterator, still isn't iterable.
 - A field written after a spread in an object literal is checked against
   the expected record's field, as it is without the spread: a callback
   given to `{ ...ui.BUTTON, onClick: () => { … } }` may take fewer

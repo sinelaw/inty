@@ -6799,3 +6799,41 @@ fn a_field_after_a_spread_is_checked_against_its_slot() {
         assert!(check_program(&src, &[]).is_err(), "{bad} is accepted");
     }
 }
+
+/// A value of unknown type that is both iterated and given `.find(…)`
+/// is a record of what its uses read, `[Symbol.iterator]` among them: an
+/// array fits it, a record without an iterator doesn't.
+#[test]
+fn a_record_of_reads_can_be_iterated() {
+    let f = "function f(o) {\n\
+               let n = 0;\n\
+               for (const x of o) n = n + x;\n\
+               return o.find((y) => y > n);\n\
+             }\n";
+    for ok in [
+        "",
+        "f([1, 2]);",
+        "let buf;\n\
+         function attach(b) { buf = b; }\n\
+         function draw() {\n\
+           for (const o of buf.items(1)) o.start + 1;\n\
+           return buf.items(2).find((o) => o.start > 0);\n\
+         }",
+    ] {
+        let src = format!("{f}{ok}");
+        assert!(
+            check_program(&src, &[]).is_ok(),
+            "{ok}: {:?}",
+            check_program(&src, &[])
+        );
+    }
+    for bad in [
+        "f([\"a\"]);",
+        "f({ find: (p) => 1 });",
+        "f({ length: 2, find: (p) => 1 });",
+        "const r = { a: 1 }; for (const x of r) x;",
+    ] {
+        let src = format!("{f}{bad}");
+        assert!(check_program(&src, &[]).is_err(), "{bad} is accepted");
+    }
+}
