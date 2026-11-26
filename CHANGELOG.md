@@ -198,11 +198,14 @@ unterminated-comment error.
   the recursive type `μX. {| X}`: a row that never ends, which extended
   any row it was unified with forever. A row ending in itself is now no
   recursive type: with no fields the equation says nothing, and
-  `ρ = {F | ρ}` gives `ρ` the fields `F` and a new tail. A recursive type
-  met by a variable is compared once, keyed by the variable, whatever its
-  type looks like by then; together with the pairs of bound variables
-  already compared once, unification visits finitely many pairs of nodes
-  (Huet's unification of rational trees).
+  `ρ = {F | ρ}` gives `ρ` the fields `F` and a new tail. Two rows whose
+  tails lead, through the rows they are bound to, to the same tail (spreads
+  whose result flows back into their operand: `o = {...{...o, a: 1}, b: 1}`)
+  are compared as the one row each is, the shared tail taking the fields
+  only one lists; taken a row at a time, each extended the other's bound
+  tail with a fresh one without end. A recursive type met by a variable is
+  compared once, keyed by the variable, whatever its type looks like by
+  then.
 - The language server answers hover, completion, and signature help in a
   file with a type error. A single error anywhere used to turn them off for
   the whole file, though inference had typed every other statement.
