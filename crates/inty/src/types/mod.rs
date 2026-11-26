@@ -9,7 +9,7 @@ mod tidy;
 mod ty;
 mod type_ast;
 
-pub use pretty::PrettyContext;
+pub use pretty::{displayed_vars_of_scheme, PrettyContext};
 pub use subst::{Subst, Substitutable};
 pub use tidy::TidyEnv;
 pub use ty::{

@@ -6464,7 +6464,7 @@ fn a_scheme_has_no_constraint_on_an_unreachable_variable() {
         loop {
             let mut changed = false;
             for (i, p) in preds.iter().enumerate() {
-                let subjects = super::state::constraint_subjects(p.class, p.types.len());
+                let subjects = p.class.subject_positions(p.types.len());
                 if !kept[i]
                     && subjects
                         .iter()

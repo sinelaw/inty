@@ -440,7 +440,7 @@ impl Server {
         // returning None.
         let start = position_to_byte(&doc.text, range.start).unwrap_or(0);
         let end = position_to_byte(&doc.text, range.end).unwrap_or(doc.text.len());
-        let raw = doc.analysis.inlay_hints_in(start, end, &doc.text);
+        let raw = doc.analysis.inlay_hints_in(start, end);
         Some(
             raw.into_iter()
                 .map(|h| InlayHint {

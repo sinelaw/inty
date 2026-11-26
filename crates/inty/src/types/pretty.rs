@@ -285,13 +285,42 @@ impl PrettyContext {
     /// empty.
     pub fn format_preds(&mut self, preds: &[TypePred]) -> String {
         let mut s = String::new();
-        for (i, pred) in preds.iter().enumerate() {
-            if i > 0 {
-                let _ = write!(s, ", ");
-            }
-            self.write_pred(&mut s, pred).unwrap();
-        }
+        self.write_preds(&mut s, preds).unwrap();
         s
+    }
+
+    /// Write `preds` comma-separated. `HasProp` predicates on the same
+    /// receiver print together, in first-appearance order: `a has {x:
+    /// b, y: c}`.
+    fn write_preds<W: Write>(&mut self, w: &mut W, preds: &[TypePred]) -> fmt::Result {
+        let mut groups: Vec<(&Type, Vec<(&str, &Type)>)> = Vec::new();
+        let mut first = true;
+        for pred in preds {
+            if let Some((recv, name, result)) = pred.as_has_prop() {
+                match groups.iter_mut().find(|(r, _)| *r == recv) {
+                    Some((_, fields)) => {
+                        if !fields.contains(&(name, result)) {
+                            fields.push((name, result));
+                        }
+                    }
+                    None => groups.push((recv, vec![(name, result)])),
+                }
+                continue;
+            }
+            if !first {
+                write!(w, ", ")?;
+            }
+            first = false;
+            self.write_pred(w, pred)?;
+        }
+        for (recv, fields) in groups {
+            if !first {
+                write!(w, ", ")?;
+            }
+            first = false;
+            self.write_has_props(w, recv, &fields)?;
+        }
+        Ok(())
     }
 
     /// Write a type to the given writer.
@@ -718,35 +747,7 @@ impl PrettyContext {
 
         if !scheme.body.preds.is_empty() {
             write!(w, " where ")?;
-            // `HasProp` predicates on the same receiver print together,
-            // in first-appearance order: `a has {x: b, y: c}`.
-            let mut groups: Vec<(&Type, Vec<(&str, &Type)>)> = Vec::new();
-            let mut first = true;
-            for pred in &scheme.body.preds {
-                if let Some((recv, name, result)) = pred.as_has_prop() {
-                    match groups.iter_mut().find(|(r, _)| *r == recv) {
-                        Some((_, fields)) => {
-                            if !fields.contains(&(name, result)) {
-                                fields.push((name, result));
-                            }
-                        }
-                        None => groups.push((recv, vec![(name, result)])),
-                    }
-                    continue;
-                }
-                if !first {
-                    write!(w, ", ")?;
-                }
-                first = false;
-                self.write_pred(w, pred)?;
-            }
-            for (recv, fields) in groups {
-                if !first {
-                    write!(w, ", ")?;
-                }
-                first = false;
-                self.write_has_props(w, recv, &fields)?;
-            }
+            self.write_preds(w, &scheme.body.preds)?;
             write!(w, " => ")?;
         }
 
@@ -877,7 +878,7 @@ fn collect_hidden_this_vars(ty: &Type, hidden: &mut HashSet<TVarName>) {
 /// `scheme` — i.e. the free vars of body and predicates, minus the
 /// hidden `this` vars. `write_scheme` filters the quantifier list
 /// against this set.
-fn displayed_vars_of_scheme(scheme: &TypeScheme) -> HashSet<TVarName> {
+pub fn displayed_vars_of_scheme(scheme: &TypeScheme) -> HashSet<TVarName> {
     let mut used = scheme.body.ty.free_vars();
     for p in &scheme.body.preds {
         used.extend(p.free_vars());

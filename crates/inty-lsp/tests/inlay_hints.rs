@@ -14,7 +14,7 @@ fn annotate(src: &str, lang: Language) -> String {
         "expected a clean check, got {:?}",
         analysis.errors
     );
-    let mut hints = analysis.inlay_hints_in(0, src.len(), src);
+    let mut hints = analysis.inlay_hints_in(0, src.len());
     hints.sort_by_key(|h| h.after_byte);
     let mut out = String::new();
     let mut last = 0;
@@ -150,7 +150,7 @@ fn dump_playground() {
             Language::JavaScript
         };
         let analysis = Analysis::check_lang(&src, lang);
-        let mut hints = analysis.inlay_hints_in(0, src.len(), &src);
+        let mut hints = analysis.inlay_hints_in(0, src.len());
         hints.sort_by_key(|h| h.after_byte);
         let mut out = String::new();
         let mut last = 0;
@@ -167,5 +167,59 @@ fn dump_playground() {
         for e in &analysis.errors {
             println!("  -> error: {e:?}");
         }
+    }
+}
+
+/// What a type is shown as is the document's, decided once: hints asked
+/// for any part of it are the whole document's hints there, and hover on
+/// a binding names its type variables as its hint does.
+#[test]
+fn hints_and_hover_show_one_naming_whatever_is_asked() {
+    let src = "function other(o) { return o.k; }\n\
+               function matching(items, q) {\n\
+               \x20 const t = q.toLowerCase().split(/\\s+/).filter(Boolean);\n\
+               \x20 const hits = items.filter((it) => t.every((x) => it.label.includes(x)));\n\
+               \x20 if (!t.length) return hits;\n\
+               \x20 const lead = (it) => (it.label.startsWith(t[0]) ? 0 : 1);\n\
+               \x20 return hits.map((it, i) => ({ lead: lead(it), i, it })).map((x) => x.it);\n\
+               }\n";
+    let analysis = Analysis::check(src);
+    let hints = |start, end| -> Vec<(usize, String)> {
+        analysis
+            .inlay_hints_in(start, end)
+            .into_iter()
+            .map(|h| (h.after_byte, h.label))
+            .collect()
+    };
+    let all = hints(0, src.len());
+    let body = src.find("const t").unwrap();
+    for (start, end) in [
+        (body, src.len()),
+        (src.find("const hits").unwrap(), body + 120),
+    ] {
+        let part = hints(start, end);
+        assert!(!part.is_empty());
+        for hint in &part {
+            assert!(
+                all.contains(hint),
+                "{hint:?} differs from the document's hints"
+            );
+        }
+    }
+    for name in ["t", "hits", "lead"] {
+        let at = src.find(&format!("const {name} ")).unwrap() + "const ".len();
+        let hint = all
+            .iter()
+            .find(|(after, _)| *after == at + name.len())
+            .unwrap_or_else(|| panic!("hint on `{name}`"));
+        let hint_type = hint.1.trim_start_matches(": ");
+        let hint_type = hint_type.split(" where ").next().unwrap();
+        let hover = analysis.hover_at(at).expect("hover");
+        assert!(
+            hover.type_str.starts_with(hint_type),
+            "`{name}`: hover `{}`, hint `{}`",
+            hover.type_str,
+            hint.1
+        );
     }
 }

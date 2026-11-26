@@ -2996,7 +2996,7 @@ impl InferState {
                 })
                 .collect();
             // Of what the scheme took, a constraint whose subject (see
-            // `constraint_subjects`) nothing in the scheme reaches — not
+            // `ClassName::subject_positions`) nothing in the scheme reaches — not
             // its type, nor a constraint the type reaches — is vacuous in
             // every instance: there its subject is a fresh variable that
             // can be whatever meets it, and no caller sees it. Left in, it
@@ -3014,7 +3014,9 @@ impl InferState {
             loop {
                 let mut changed = false;
                 for (i, pred) in scheme_preds.iter().enumerate() {
-                    let subject_reached = constraint_subjects(pred.class, pred.types.len())
+                    let subject_reached = pred
+                        .class
+                        .subject_positions(pred.types.len())
                         .iter()
                         .any(|&k| match &pred.types[k] {
                             Type::Var(v) if v.is_flex() => reached.contains(v),
@@ -3696,29 +3698,6 @@ fn collect_literal_fields(
             }),
             _ => {}
         }
-    }
-}
-
-/// The positions of a constraint's subjects: the types that, while free
-/// variables, leave it satisfiable whatever its other types are (a
-/// receiver can be a record with the property, a container one of the
-/// element, a `Plus` operand a `Number`). One reached makes the
-/// constraint matter; none reached, it is vacuous in a scheme (see
-/// `generalize_seeded`).
-/// A `Spread` result can't be just anything, so all its types are its
-/// subjects.
-pub(in crate::infer) fn constraint_subjects(class: ClassName, arity: usize) -> &'static [usize] {
-    match class {
-        ClassName::HasProp
-        | ClassName::FieldWrite
-        | ClassName::IndexWrite
-        | ClassName::Indexable
-        | ClassName::Iterable
-        | ClassName::Strip
-        | ClassName::Inject
-        | ClassName::Plus
-        | ClassName::Testable => &[0],
-        ClassName::Spread => &[0, 1, 2][..arity.min(3)],
     }
 }
 

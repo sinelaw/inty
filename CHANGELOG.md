@@ -244,6 +244,15 @@ unterminated-comment error.
 - Hover on a member's property (`s.startsWith`, `o.a.b`) shows its type.
   It showed nothing: hover knew only names, and a method call's callee
   (`obj.m`) wasn't among the expression types inference records.
+- Hints and hover name type variables one way, decided once per
+  document: per top-level declaration, in reading order (`matching(items:
+  a, q: b) -> c`). Hints were named across whatever range the editor asked
+  for, so the same binding read `hits: b1` in one view and `hits: c` in
+  another, and hover named its own (`hits: a`). Hover shows a binding as
+  its hint does, with the constraints its type reaches (`hits: c where c
+  has {map: …}`), and a generic binding's own variables (`<a>(a) => a`);
+  a variable's `has` constraints print as one (`o has {label: u, detail:
+  v}`).
 - Hover shows what inference recorded for the word under the cursor: a
   name's declared type, or else the type of the innermost expression the
   word begins or ends (or the literal it is in) — `this`, a literal, a
