@@ -381,8 +381,8 @@ pub struct InferState {
     /// The `this` of a callee called as a method (`o.f()`) that wasn't
     /// known at the call, with the receiver and the call's span: settled
     /// when it is (`settle_receivers`), at the latest as a function that
-    /// uses no `this`.
-    pub(crate) pending_receivers: Vec<(Type, Type, Span)>,
+    /// uses no `this`, or a method of the receiver (`PendingReceiver`).
+    pub(crate) pending_receivers: Vec<PendingReceiver>,
     /// The `this` variables of functions whose bodies mention `this`
     /// (methods, by the rule that a body says whether a function is
     /// one): see `settle_receivers`.
@@ -2686,7 +2686,13 @@ impl InferState {
             .into_iter()
             .filter_map(|id| self.var_table.find_if_present(id))
             .collect();
-        for (this, receiver, span) in std::mem::take(&mut self.pending_receivers) {
+        for pending in std::mem::take(&mut self.pending_receivers) {
+            let PendingReceiver {
+                this,
+                receiver,
+                span,
+                unknown_is_method,
+            } = pending.clone();
             let result = match self.zonk_head(&this) {
                 Type::Var(TVarName::Flex(id))
                     if self
@@ -2704,11 +2710,20 @@ impl InferState {
                     self.unify_this(span, &this, &receiver)
                 }
                 Type::Var(v) if v.is_flex() => {
-                    if reached.is_some_and(|r| !r.contains(&v)) {
-                        keep.push((this, receiver, span));
+                    // (A call on a value an importer decides waits for the
+                    // importers: at the end of an imported module, the one
+                    // that decides it may still be to come.)
+                    if reached.is_some_and(|r| !r.contains(&v))
+                        || (unknown_is_method && reached.is_none() && self.module_depth > 0)
+                    {
+                        keep.push(pending);
                         continue;
                     }
-                    self.unify(span, &Type::Var(v), &Type::ArrowThis)
+                    if unknown_is_method {
+                        self.unify_this(span, &this, &receiver)
+                    } else {
+                        self.unify(span, &Type::Var(v), &Type::ArrowThis)
+                    }
                 }
                 _ => self.unify_this(span, &this, &receiver),
             };
@@ -3887,4 +3902,17 @@ mod tests {
         assert!(skolems[0].is_skolem());
         assert!(ty.is_var());
     }
+}
+
+/// A method call whose callee's `this` wasn't known at the call (see
+/// `InferState::settle_receivers`): its `this`, the receiver, and where.
+/// One still unknown when settled is, unless `unknown_is_method`, a
+/// function that uses no `this`; if it is, a method of the receiver (a
+/// call on a value an importer decided, whose callee was read off it).
+#[derive(Debug, Clone)]
+pub(crate) struct PendingReceiver {
+    pub(crate) this: Type,
+    pub(crate) receiver: Type,
+    pub(crate) span: Span,
+    pub(crate) unknown_is_method: bool,
 }

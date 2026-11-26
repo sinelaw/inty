@@ -211,6 +211,16 @@ unterminated-comment error.
 
 ### Fixes
 
+- A method call on a value an importing module decides
+  (`editor.say("hi")` on a `let editor` an importer sets) takes a
+  function that uses no `this` as well as a method of the receiver, as
+  JavaScript does (an arrow function ignores the receiver). The callee
+  became a method of the receiver as the module ended, so an importer's
+  `{ say: (t) => … }` was "a function that doesn't use `this`" where
+  "one that reads `this`" was expected. Its `this` now waits for the
+  importers and is still settled as a method of the receiver when
+  nothing else decides it (also when a function the importer generalises
+  first reaches it).
 - A value of a type not known yet that is both iterated and read from
   (`for (const o of xs) …` and `xs.find(…)`) is a record of what its uses
   read, `[Symbol.iterator]` among them: an array fits it. Iterating such a
