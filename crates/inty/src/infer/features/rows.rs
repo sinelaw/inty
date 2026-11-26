@@ -1389,6 +1389,7 @@ impl InferState {
         // shapes unification can unroll): pose the property access as a
         // row constraint and let unification resolve it.
         let row_var = self.fresh_flex();
+        self.note_field_read(&row_var, property, &result_type);
         let entry = self.read_entry(result_type.clone());
         let expected_row = Type::Row(RowType::open_entries(
             BTreeMap::from([(PropName(property.to_string()), entry)]),

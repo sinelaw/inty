@@ -16,6 +16,12 @@ Error: Type mismatch in member `xs`: expected '(Number | String)[]', found 'Numb
  15 │ g(w);
     │   ┬  
     │   ╰── Type mismatch in member `xs`: expected '(Number | String)[]', found 'Number[]'
+    │
+    ├─[ main.js:15:3 ]
+    │
+ 14 │ const w = {xs: ys};
+    │            ───┬──  
+    │               ╰──── Found type: from field 'xs' of the object literal
     │ 
     │ Help: a record's fields can be assigned, so each field's type must match exactly (an assignment through the expected type could store a value this record doesn't allow). If it's a function parameter whose fields are only read, make it generic: `function f<a>(r: {x: a}) => …`. Otherwise declare the record with the wider type
     │ 

@@ -106,6 +106,16 @@ pub enum TypeOrigin {
         compared_to: String,
         span: Span,
     },
+
+    /// A call of a method on its object (`o.method(…)`): it reads the
+    /// member `method` and passes the object as its `this`.
+    MethodCall { method: String, span: Span },
+
+    /// A `this` in a function's body: the function reads it.
+    ThisInBody { span: Span },
+
+    /// A field of an object literal (`name: value`).
+    Field { name: String, span: Span },
 }
 
 /// The text of [`TypeError::ThisMismatch`].
@@ -135,7 +145,10 @@ impl TypeOrigin {
             | TypeOrigin::BinaryOp { span, .. }
             | TypeOrigin::FunctionCall { span, .. }
             | TypeOrigin::Inferred { span, .. }
-            | TypeOrigin::Comparison { span, .. } => *span,
+            | TypeOrigin::Comparison { span, .. }
+            | TypeOrigin::MethodCall { span, .. }
+            | TypeOrigin::ThisInBody { span }
+            | TypeOrigin::Field { span, .. } => *span,
         }
     }
 
@@ -166,6 +179,43 @@ impl TypeOrigin {
             } => {
                 format!("comparison '{}' with {}", operator, compared_to)
             }
+            TypeOrigin::MethodCall { method, .. } if method.is_empty() => "method call".to_string(),
+            TypeOrigin::MethodCall { method, .. } => format!("method call '.{method}(…)'"),
+            TypeOrigin::ThisInBody { .. } => "a function that reads `this`".to_string(),
+            TypeOrigin::Field { name, .. } => format!("field '{name}' of the object literal"),
+        }
+    }
+
+    /// Whether this origin says why a function reads `this` (it is
+    /// called as a method, or its body mentions `this`).
+    pub fn makes_method(&self) -> bool {
+        matches!(
+            self,
+            TypeOrigin::MethodCall { .. } | TypeOrigin::ThisInBody { .. }
+        )
+    }
+
+    /// The label of a [`TypeError::ThisMismatch`] at this origin of the
+    /// function that reads `this` (`reads`) or of the one that doesn't;
+    /// `side` is "expected" or "found".
+    pub fn this_label(&self, side: &str, reads: bool) -> String {
+        match (self, reads) {
+            (TypeOrigin::MethodCall { method, .. }, true) if method.is_empty() => format!(
+                "{side} because of this call: it calls the function on an object, as a method that reads `this`"
+            ),
+            (TypeOrigin::MethodCall { method, .. }, true) => format!(
+                "{side} because of this call: it calls `{method}` on its object, as a method that reads `this`"
+            ),
+            (TypeOrigin::ThisInBody { .. }, true) => {
+                format!("{side} because of this `this`: the function reads it")
+            }
+            (TypeOrigin::Field { name, .. }, false) => {
+                format!("{side} because of this field: `{name}` is a function that doesn't use `this`")
+            }
+            (TypeOrigin::Field { name, .. }, true) => {
+                format!("{side} because of this field: `{name}` is a function that reads `this`")
+            }
+            (o, _) => format!("{side} because of {}", o.description()),
         }
     }
 
@@ -192,6 +242,12 @@ impl TypeOrigin {
             } => {
                 format!("from '{}' comparison with {}", operator, compared_to)
             }
+            TypeOrigin::MethodCall { method, .. } if method.is_empty() => {
+                "from method call".to_string()
+            }
+            TypeOrigin::MethodCall { method, .. } => format!("from call '.{method}(…)'"),
+            TypeOrigin::ThisInBody { .. } => "from a `this` in the body".to_string(),
+            TypeOrigin::Field { name, .. } => format!("from field '{name}'"),
         }
     }
 
@@ -206,6 +262,9 @@ impl TypeOrigin {
             TypeOrigin::Variable { .. } => 1,   // Generic
             TypeOrigin::Parameter { .. } => 1,  // Generic
             TypeOrigin::Inferred { .. } => 0,   // Least specific - fallback
+            TypeOrigin::MethodCall { .. } => 3, // A use of the member
+            TypeOrigin::ThisInBody { .. } => 3, // Where `this` is read
+            TypeOrigin::Field { .. } => 3,      // Where the value is written
         }
     }
 }
@@ -556,12 +615,17 @@ pub enum TypeError {
     /// one slot. `member`: the property path (`editor.say`) of the two
     /// types being compared where they are; `without_this` / `with_this`:
     /// the two functions (none: only their `this` types were at hand).
+    /// `without_origins` / `with_origins`: where each side's function got
+    /// its `this` (a field written as an arrow function; a call that
+    /// passes its object as `this`, a body that reads it), as found.
     #[error("{}", this_mismatch_message(member.as_deref(), reads_this, without_this.as_ref(), with_this.as_ref()))]
     ThisMismatch {
         member: Option<String>,
         reads_this: ShownType,
         without_this: Option<ShownType>,
         with_this: Option<ShownType>,
+        without_origins: Vec<TypeOrigin>,
+        with_origins: Vec<TypeOrigin>,
         span: Span,
     },
 

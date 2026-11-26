@@ -93,6 +93,8 @@ impl InferState {
                 reads_this: ShownType::ty(other),
                 without_this: None,
                 with_this: None,
+                without_origins: Vec::new(),
+                with_origins: Vec::new(),
                 span,
             }
             .into()),
@@ -1056,7 +1058,11 @@ impl InferState {
         self.register_named_type(def);
 
         // Bind the original variable to the recursive type
-        self.extend_subst(span, TVarName::Flex(var), rec_ref)
+        self.extend_subst(span, TVarName::Flex(var), rec_ref)?;
+        // A function's `this` bound to its object makes one: it keeps
+        // what made the function a method.
+        self.note_rec_origins(type_id);
+        Ok(())
     }
 
     /// Two types as a diagnostic shows them side by side: variables
@@ -1175,6 +1181,8 @@ impl InferState {
             without_this: Some(self.error_type(without, &member)),
             with_this: Some(self.error_type(with, &member)),
             member,
+            without_origins: Vec::new(),
+            with_origins: Vec::new(),
             span,
         }
         .into()
@@ -1211,13 +1219,100 @@ impl InferState {
                 *found = ShownType::ty(t2);
                 *member = here;
             }
-            Some(
-                TypeError::ThisMismatch { member, .. }
-                | TypeError::FieldPresenceMismatch { member, .. },
-            ) if member.is_none() => *member = here,
+            Some(TypeError::ThisMismatch {
+                member,
+                with_origins,
+                ..
+            }) if member.is_none() => {
+                *member = here;
+                // The member as its record holds it: a variable a method
+                // call read it as (`o.m(…)`) says where it was used so.
+                for t in [t1, t2] {
+                    if let Type::Var(v) = t {
+                        match self.type_origins.get(v) {
+                            Some(o) if o.makes_method() && self.reads_this(t) == Some(true) => {
+                                with_origins.push(o.clone())
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Some(TypeError::FieldPresenceMismatch { member, .. }) if member.is_none() => {
+                *member = here
+            }
             _ => {}
         }
         err
+    }
+
+    /// The `this` of the function type `f` (a callable record's), as `f`
+    /// holds it; `None` if `f` isn't (yet) a function.
+    fn fn_this_slot<'a>(&'a self, f: &'a Type) -> Option<&'a Type> {
+        match self.bound_head(f) {
+            Type::Func { this_type, .. } => this_type.as_deref(),
+            Type::Row(row) => row
+                .props
+                .get(&PropName(crate::types::CALLABLE_KEY.to_string()))
+                .and_then(|e| self.fn_this_slot(&e.ty)),
+            _ => None,
+        }
+    }
+
+    /// Whether the function type `f` reads `this` (`None`: not known).
+    fn reads_this(&self, f: &Type) -> Option<bool> {
+        match self.bound_head(self.fn_this_slot(f)?) {
+            Type::ArrowThis => Some(false),
+            Type::Var(_) => None,
+            _ => Some(true),
+        }
+    }
+
+    /// `t`'s head through the variables it is bound to, read without
+    /// compressing paths (for `&self` readers).
+    fn bound_head<'a>(&'a self, mut t: &'a Type) -> &'a Type {
+        for _ in 0..64 {
+            match t {
+                Type::Var(v) => match self.main_subst.get(v) {
+                    Some(next) => t = next,
+                    None => return t,
+                },
+                _ => return t,
+            }
+        }
+        t
+    }
+
+    /// Where a member mismatch's two sides got their types, when the
+    /// types themselves don't say (a generalised record's field types have
+    /// no variables left): a property read that added the member to an
+    /// open record, found from the whole types it is in (see
+    /// [`Self::row_member_origin`]).
+    fn add_member_origins(
+        &self,
+        member: &Option<String>,
+        whole: &(ShownType, ShownType),
+        expected_origin: &mut Option<crate::error::TypeOrigin>,
+        found_origin: &mut Option<crate::error::TypeOrigin>,
+    ) {
+        let Some(member) = member else { return };
+        for (side, origin) in [(&whole.0, expected_origin), (&whole.1, found_origin)] {
+            if let (ShownType::Type(t), None) = (side, &*origin) {
+                *origin = self.row_member_origin(t, member);
+            }
+        }
+    }
+
+    /// Where the function of a [`TypeError::ThisMismatch`] that reads
+    /// `this`, `with`, got it, added to `origins`: see
+    /// [`Self::method_origins`].
+    fn add_method_origins(&self, with: &ShownType, origins: &mut Vec<crate::error::TypeOrigin>) {
+        if let ShownType::Type(f) = with {
+            if let Some(this) = self.fn_this_slot(f) {
+                origins.extend(self.method_origins(this));
+                super::state::tidy_origins(origins);
+            }
+        }
     }
 
     /// The member [`Self::unify`] is comparing, as a property path
@@ -1341,12 +1436,14 @@ impl InferState {
             TypeError::UnificationError {
                 expected,
                 found,
+                member,
                 whole,
                 expected_origin,
                 found_origin,
                 ..
             } => {
                 if let Some(w) = whole.as_deref_mut() {
+                    self.add_member_origins(member, w, expected_origin, found_origin);
                     settle(&mut w.0);
                     settle(&mut w.1);
                 }
@@ -1363,8 +1460,12 @@ impl InferState {
                 reads_this,
                 without_this,
                 with_this,
+                with_origins,
                 ..
             } => {
+                if let Some(with) = with_this {
+                    self.add_method_origins(with, with_origins);
+                }
                 settle(reads_this);
                 without_this.iter_mut().for_each(settle);
                 with_this.iter_mut().for_each(settle);
@@ -1435,6 +1536,7 @@ impl InferState {
                 ..
             } => {
                 if let Some(w) = whole.as_deref_mut() {
+                    self.add_member_origins(member, w, expected_origin, found_origin);
                     if let (ShownType::Type(t1), ShownType::Type(t2)) = (&w.0, &w.1) {
                         // Trimmed to the member's field, at their top.
                         let field = member.as_deref().and_then(|m| m.split('.').next());
@@ -1466,8 +1568,12 @@ impl InferState {
                 reads_this,
                 without_this,
                 with_this,
+                with_origins,
                 ..
             } => {
+                if let Some(with) = with_this {
+                    self.add_method_origins(with, with_origins);
+                }
                 if let ShownType::Type(t) = &*reads_this {
                     *reads_this = ShownType::Text(
                         self.main_subst

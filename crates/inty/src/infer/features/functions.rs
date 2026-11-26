@@ -466,8 +466,12 @@ impl InferState {
         // function's `this` before it was known calls it on its receiver
         // (`settle_receivers`).
         if let Type::Var(TVarName::Flex(id)) = &this_type {
-            if crate::ast::free_idents::mentions_this_in_stmt(body) {
+            if let Some(at) = crate::ast::free_idents::first_this_in_stmt(body) {
                 self.method_this_vars.push(*id);
+                self.record_origin(
+                    TVarName::Flex(*id),
+                    crate::error::TypeOrigin::ThisInBody { span: at },
+                );
             }
         }
         let param_types: Vec<Type> = params
@@ -803,6 +807,20 @@ impl InferState {
                     // the call's `this` both wait for it (`HasProp`).
                     let method_type = self.fresh_type_var();
                     let this = self.fresh_type_var();
+                    // Where the member was read as a method, and where
+                    // its `this` was bound to the object (when the
+                    // constraint is resolved).
+                    for v in [&method_type, &this] {
+                        if let Type::Var(v) = v {
+                            self.record_origin(
+                                v.clone(),
+                                crate::error::TypeOrigin::MethodCall {
+                                    method: property.clone(),
+                                    span: *member_span,
+                                },
+                            );
+                        }
+                    }
                     self.add_constraint(
                         TypePred::has_method(
                             obj_type_applied.clone(),
@@ -961,18 +979,21 @@ impl InferState {
                         Some(keys) => self.fill_optional_fields(param, &keys, arg.span()),
                         None => param.clone(),
                     };
-                    self.check_expr(env, arg, &param)?;
+                    self.check_expr(env, arg, &param)
+                        .map_err(|e| self.locate_in_value(arg, e))?;
                 }
                 _ if self.closed_row_keys(env, arg).is_some() => {
                     // So does a value of a known record type (an options
                     // object bound to a `const`).
                     let keys = self.closed_row_keys(env, arg).unwrap_or_default();
                     let param = self.fill_optional_fields(param, &keys, arg.span());
-                    self.check_expr(env, arg, &param)?;
+                    self.check_expr(env, arg, &param)
+                        .map_err(|e| self.locate_in_value(arg, e))?;
                 }
                 _ => {
                     // `check_expr` resolves what it is checked against.
-                    self.check_expr(env, arg, param)?;
+                    self.check_expr(env, arg, param)
+                        .map_err(|e| self.locate_in_value(arg, e))?;
                 }
             }
         }
@@ -1012,7 +1033,28 @@ impl InferState {
                     self.pending_receivers
                         .push((Type::Var(v), obj_for_this.into_owned(), span))
                 }
-                _ => self.unify_this(span, &this_type, &obj_for_this)?,
+                this => {
+                    // A `this` not known yet: this call makes the callee
+                    // a method of the receiver.
+                    if let (
+                        Type::Var(v @ TVarName::Flex(_)),
+                        Expr::Member {
+                            property,
+                            span: member_span,
+                            ..
+                        },
+                    ) = (this, callee)
+                    {
+                        self.record_origin(
+                            v,
+                            crate::error::TypeOrigin::MethodCall {
+                                method: property.clone(),
+                                span: *member_span,
+                            },
+                        );
+                    }
+                    self.unify_this(span, &this_type, &obj_for_this)?
+                }
             }
         } else {
             self.detached_this(span, &this_type, Some(callee))?;
@@ -1463,6 +1505,65 @@ impl InferState {
         }
     }
 
+    /// An error checking the value `arg` (an argument) against what it is
+    /// expected to be, at a member of the two (`member`): where the member
+    /// is written, when `arg` is an object literal or a `const` bound to
+    /// one, is where the value's side of the mismatch comes from.
+    pub(in crate::infer) fn locate_in_value(
+        &self,
+        arg: &Expr,
+        mut err: crate::error::IntyError,
+    ) -> crate::error::IntyError {
+        if let Some(e) = err.as_type_mut() {
+            self.locate_member_in_value(arg, e);
+        }
+        err
+    }
+
+    fn locate_member_in_value(&self, arg: &Expr, err: &mut crate::error::TypeError) {
+        use crate::error::{TypeError, TypeOrigin};
+        let field = |path: &str| {
+            self.literal_field(arg, path).map(|f| {
+                let origin = TypeOrigin::Field {
+                    name: f.path.clone(),
+                    span: f.span,
+                };
+                (origin, f.reads_this)
+            })
+        };
+        match err {
+            // Subsumption's (`whole`): the value's side is `found`.
+            TypeError::UnificationError {
+                member: Some(m),
+                whole: Some(_),
+                found_origin,
+                ..
+            } => {
+                if let Some((origin, _)) = field(m) {
+                    *found_origin = Some(origin);
+                }
+            }
+            TypeError::ThisMismatch {
+                member: Some(m),
+                without_origins,
+                with_origins,
+                ..
+            } => {
+                let side = match field(m) {
+                    Some((origin, Some(false))) => Some((origin, without_origins)),
+                    Some((origin, Some(true))) => Some((origin, with_origins)),
+                    _ => None,
+                };
+                if let Some((origin, origins)) = side {
+                    origins.push(origin);
+                    crate::infer::state::tidy_origins(origins);
+                }
+            }
+            TypeError::RequiredBy { inner, .. } => self.locate_member_in_value(arg, inner),
+            _ => {}
+        }
+    }
+
     /// Infer the type of a new expression.
     pub(in crate::infer) fn infer_new(
         &mut self,
@@ -1511,7 +1612,8 @@ impl InferState {
                     self.unify(*spread_span, &inner, &Type::Array(Box::new(param.clone())))?;
                 }
                 _ => {
-                    self.check_expr(env, arg, param)?;
+                    self.check_expr(env, arg, param)
+                        .map_err(|e| self.locate_in_value(arg, e))?;
                 }
             }
         }

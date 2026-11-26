@@ -115,16 +115,22 @@ pub fn free_identifiers_in_expr(expr: &Expr) -> HashSet<String> {
 pub fn mentions_this(expr: &Expr) -> bool {
     let mut state = State::new();
     state.visit_expr(expr);
-    state.saw_this
+    state.first_this.is_some()
 }
 
 /// Whether `this` occurs anywhere in `stmt`, inside nested functions too.
 pub fn mentions_this_in_stmt(stmt: &Stmt) -> bool {
+    first_this_in_stmt(stmt).is_some()
+}
+
+/// Where `this` first occurs in `stmt` (in source order), inside nested
+/// functions too.
+pub fn first_this_in_stmt(stmt: &Stmt) -> Option<crate::span::Span> {
     let mut state = State::new();
     state.enter_block();
     state.collect_block_bindings(std::slice::from_ref(stmt));
     state.visit_stmt(stmt);
-    state.saw_this
+    state.first_this
 }
 
 // ---------------------------------------------------------------------------
@@ -147,8 +153,8 @@ struct State {
     free: HashSet<String>,
     /// How many references each free name has.
     counts: HashMap<String, usize>,
-    /// Whether a `this` occurs anywhere, nested functions included.
-    saw_this: bool,
+    /// The first `this` (in source order), nested functions included.
+    first_this: Option<crate::span::Span>,
 }
 
 impl State {
@@ -157,7 +163,7 @@ impl State {
             scopes: Vec::new(),
             free: HashSet::new(),
             counts: HashMap::new(),
-            saw_this: false,
+            first_this: None,
         }
     }
 
@@ -605,7 +611,11 @@ impl State {
 
     fn visit_expr(&mut self, expr: &Expr) {
         match expr {
-            Expr::This { .. } => self.saw_this = true,
+            Expr::This { span } => {
+                if self.first_this.is_none_or(|s| span.start < s.start) {
+                    self.first_this = Some(*span);
+                }
+            }
             Expr::Lit { .. } | Expr::NewTarget { .. } => {}
             Expr::Ident { name, .. } => self.record_ref(name),
             Expr::Array { elements, .. } => {

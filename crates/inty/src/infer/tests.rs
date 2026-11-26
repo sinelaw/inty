@@ -6211,3 +6211,118 @@ fn a_nullable_operand_is_what_is_found() {
         );
     }
 }
+
+// ---- Where each side of a mismatch came from ---------------------------------
+
+/// Check `module` (a module whose pending reads are defaulted at its end,
+/// as an imported one's are), then `user` in its environment; the error
+/// `user` raises, and the two sources as one text that its spans index
+/// (`user`'s spans follow `module`'s).
+fn first_error_across(module: &str, user: &str) -> (crate::error::IntyError, String) {
+    let mut state = InferState::new();
+    let program = crate::frontends::javascript::parse_source(module).unwrap();
+    let (_, env) = state
+        .infer_program_with_env(&initial_env(), &program)
+        .unwrap();
+    assert!(state.errors.is_empty(), "{:?}", state.errors);
+    state.resolve_constraints().unwrap();
+    let text = format!("{module}\n{user}");
+    let program = crate::frontends::javascript::parse_at(user, module.len() + 1).unwrap();
+    let err = match state.infer_program_with_env(&env, &program) {
+        Err(e) => e,
+        Ok(_) => state
+            .errors
+            .first()
+            .cloned()
+            .unwrap_or_else(|| state.resolve_constraints().unwrap_err()),
+    };
+    (state.render_error(err), text)
+}
+
+#[test]
+fn this_mismatch_points_at_the_call_that_made_a_method() {
+    // `editor` isn't known while its module is checked: its reads become
+    // an object's fields, and the first `editor.ask(w)` passes the object
+    // as `ask`'s `this`. An object whose `ask` is an arrow function then
+    // doesn't fit: both are located.
+    let module = "let editor;\n\
+                  function attach(e) { editor = e; }\n\
+                  function rename(w) { const n = editor.ask(w); editor.say(n); }";
+    let user = "attach({ say: (t) => {}, ask: (t) => t + 1 });";
+    let (err, text) = first_error_across(module, user);
+    let Some(crate::error::TypeError::ThisMismatch {
+        member,
+        without_origins,
+        with_origins,
+        ..
+    }) = err.as_type()
+    else {
+        panic!("expected a ThisMismatch, got {err:?}");
+    };
+    assert_eq!(member.as_deref(), Some("ask"));
+    let at = |o: &crate::error::TypeOrigin| &text[o.span().start..o.span().end];
+    let with: Vec<&str> = with_origins.iter().map(at).collect();
+    assert_eq!(with, ["editor.ask"], "{with_origins:?}");
+    assert!(with_origins[0]
+        .this_label("found", true)
+        .contains("calls `ask`"));
+    let without: Vec<&str> = without_origins.iter().map(at).collect();
+    assert_eq!(without, ["ask: (t) => t + 1"], "{without_origins:?}");
+}
+
+#[test]
+fn member_mismatch_through_subsume_locates_both_sides() {
+    // An object literal passed (by the `const` bound to it) to a class's
+    // constructor: the class read `count` as a number, the literal's is a
+    // string. The read and the field are where the two types came from.
+    let module = "let source;\n\
+                  class Counter {\n\
+                    constructor(s) { source = s; }\n\
+                    total() { return source.count * 2; }\n\
+                  }";
+    let user = "const src = { count: \"three\" };\nconst c = new Counter(src);";
+    let (err, text) = first_error_across(module, user);
+    let Some(crate::error::TypeError::UnificationError {
+        member,
+        expected_origin: Some(expected),
+        found_origin: Some(found),
+        ..
+    }) = err.as_type()
+    else {
+        panic!("expected a located member mismatch, got {err:?}");
+    };
+    assert_eq!(member.as_deref(), Some("count"));
+    let at = |o: &crate::error::TypeOrigin| &text[o.span().start..o.span().end];
+    assert_eq!(at(expected), "source.count");
+    assert!(matches!(
+        expected,
+        crate::error::TypeOrigin::PropertyAccess { .. }
+    ));
+    assert_eq!(at(found), "count: \"three\"");
+    assert!(matches!(found, crate::error::TypeOrigin::Field { .. }));
+}
+
+#[test]
+fn this_mismatch_locates_a_method_field() {
+    // A literal's method that reads `this`, where a plain function is
+    // declared: the field is the side that reads `this`.
+    let src = "/** function run(editor: {n: String, say: (String) => Undefined}) => Undefined */\n\
+               function run(editor) { editor.say(\"hi\"); }\n\
+               const editor = { n: \"\", say(text) { this.n = text; } };\n\
+               run(editor);";
+    let program = crate::frontends::javascript::parse_source(src).unwrap();
+    let mut state = InferState::new();
+    let err = match state.infer_program_with_env(&initial_env(), &program) {
+        Err(e) => e,
+        Ok(_) => state.errors.first().cloned().expect("an error"),
+    };
+    let err = state.render_error(err);
+    let Some(crate::error::TypeError::ThisMismatch { with_origins, .. }) = err.as_type() else {
+        panic!("expected a ThisMismatch, got {err:?}");
+    };
+    let at: Vec<&str> = with_origins
+        .iter()
+        .map(|o| &src[o.span().start..o.span().end])
+        .collect();
+    assert_eq!(at, ["say(text) { this.n = text; }"], "{with_origins:?}");
+}

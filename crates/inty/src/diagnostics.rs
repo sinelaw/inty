@@ -658,6 +658,29 @@ fn write_error_with<W: Write>(
                 .with_color(Color::Cyan),
         );
     }
+    // Where each side of a `this` mismatch got its `this`.
+    if let Some(TypeError::ThisMismatch {
+        without_origins,
+        with_origins,
+        ..
+    }) = error.as_type()
+    {
+        let mut colors = ColorGenerator::new();
+        let (expected_color, found_color) = (colors.next(), colors.next());
+        let sides = [
+            (without_origins, "expected", false, expected_color),
+            (with_origins, "found", true, found_color),
+        ];
+        for (origins, side, reads, side_color) in sides {
+            for origin in origins.iter() {
+                report = report.with_label(
+                    Label::new(files.loc(origin.span()))
+                        .with_message(origin.this_label(&tint(side, side_color), reads))
+                        .with_color(side_color),
+                );
+            }
+        }
+    }
 
     report.finish().write(files.cache(), &mut writer)?;
     Ok(())
