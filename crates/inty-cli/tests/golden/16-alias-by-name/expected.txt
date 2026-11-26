@@ -1,11 +1,11 @@
 
-Error: Type mismatch: expected '{name: String, volume: String}', found 'Channel'
+Error: Type mismatch in member `volume`: expected 'String', found 'Number'
    ╭─[ main.js:5:11 ]
    │
  5 │ const c = mk();
    │           ──┬─  
-   │             ╰─── Type mismatch: expected '{name: String, volume: String}', found 'Channel'
+   │             ╰─── Type mismatch in member `volume`: expected 'String', found 'Number'
    │ 
-   │ Note: Cannot unify expected '{name: String, volume: String}' with found 'Channel'
+   │ Note: `volume` is a member of the types compared: expected '{name: String, volume: String}', found 'Channel'
 ───╯
 

@@ -777,6 +777,7 @@ impl InferState {
                     self.unify_field_flags(span, prop, e1, e2)?;
                     self.unify_path.push(prop.0.clone());
                     let unified = self.unify(span, &e1.ty, &e2.ty);
+                    let unified = unified.map_err(|e| self.at_member(e, &e1.ty, &e2.ty));
                     self.unify_path.pop();
                     unified?;
                 }
@@ -1150,6 +1151,26 @@ impl InferState {
             span,
         }
         .into()
+    }
+
+    /// A mismatch inside the member being compared (`unify_path`), not in
+    /// a member of its own: the error shows the member's two types,
+    /// `t1` and `t2` (`ask: (String) => String` against `(Number) =>
+    /// Number`, not the parameters `String` and `Number`).
+    fn at_member(&self, mut err: IntyError, t1: &Type, t2: &Type) -> IntyError {
+        if let Some(TypeError::UnificationError {
+            expected,
+            found,
+            member,
+            ..
+        }) = err.as_type_mut()
+        {
+            if *member == self.member_path() {
+                *expected = ShownType::ty(t1);
+                *found = ShownType::ty(t2);
+            }
+        }
+        err
     }
 
     /// The member [`Self::unify`] is comparing, as a property path
@@ -1669,8 +1690,11 @@ mod tests {
         assert!(state.unify_path.is_empty(), "the path is unwound on errors");
         let (member, e, f) = member_mismatch(state.render_error(err));
         assert_eq!(member.as_deref(), Some("editor.ask"));
-        // The parameters differ: the error is at them, in `ask`.
-        assert_eq!((e.as_str(), f.as_str()), ("String", "Number"));
+        // The parameters differ: `ask`'s two types are shown.
+        assert_eq!(
+            (e.as_str(), f.as_str()),
+            ("(String) => Number", "(Number) => Number")
+        );
     }
 
     /// The same through `subsume` (a value passed where a type is
@@ -1684,7 +1708,10 @@ mod tests {
         let err = state.subsume(span, &found, &expected).unwrap_err();
         let (member, e, f) = member_mismatch(state.render_error(err));
         assert_eq!(member.as_deref(), Some("editor.ask"));
-        assert_eq!((e.as_str(), f.as_str()), ("String", "Number"));
+        assert_eq!(
+            (e.as_str(), f.as_str()),
+            ("(String) => Number", "(Number) => Number")
+        );
         let err = state.subsume(span, &found, &expected).unwrap_err();
         let shown = state.render_error(err).to_string();
         assert!(shown.contains("in member `editor.ask`"), "{shown}");
