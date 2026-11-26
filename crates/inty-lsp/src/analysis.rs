@@ -562,14 +562,9 @@ impl Scope {
             if shown == "<error>" {
                 continue;
             }
-            // `x: int` already shows its type in the source. (A JSDoc
-            // annotation sits in a comment elsewhere, so those bindings
-            // still get a hint.)
-            if def.annotated
-                && text[def_span.end.min(text.len())..]
-                    .trim_start()
-                    .starts_with(':')
-            {
+            // The source states its type (`x: int`, `/** const x: T */`,
+            // its function's `/** function f(x: T) => R */`).
+            if def.annotated {
                 continue;
             }
             hints.push((

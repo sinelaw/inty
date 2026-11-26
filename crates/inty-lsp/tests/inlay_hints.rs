@@ -126,8 +126,9 @@ fn nullable_return_has_no_vacuous_where_clause() {
     let out = js(concat!(
         "/** function find<a>(xs: a[], v: a) => a | Null */\n",
         "function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }\n",
+        "const g = find;\n",
     ));
-    assert!(out.contains("⟨-> Null | a⟩"), "{out}");
+    assert!(out.contains("const g⟨: <a>(a[], a) => Null | a⟩"), "{out}");
 }
 
 /// Prints every playground example with its hints, for eyeballing:
@@ -238,11 +239,27 @@ fn types_print_by_their_alias_names() {
                   /** function unbox(b: Box<Number>) => Number */\n\
                   function unbox(b) { return b.value; }\n",
     );
-    assert!(
-        out.contains("function matching(items⟨: Item[]⟩, q⟨: String⟩)⟨-> Item[]⟩"),
-        "{out}"
-    );
+    assert!(out.contains("filter((it⟨: Item⟩)"), "{out}");
     assert!(out.contains("const hits⟨: Item[]⟩"), "{out}");
     assert!(out.contains("const box⟨: Box<Item[]>⟩"), "{out}");
-    assert!(out.contains("unbox(b⟨: Box<Number>⟩)"), "{out}");
+}
+
+#[test]
+fn what_an_annotation_states_is_not_hinted_again() {
+    let out = js("/** function f(a: Number, s: String) => String */\n\
+                  function f(a, s) { const n = a + 1; return s; }\n\
+                  /** const k: Number */\n\
+                  const k = f(1, \"x\").length;\n\
+                  const xs = [k].map((v) => v);\n");
+    // The parameters and return type `f`'s annotation states, and `k`'s
+    // type, are in the source already; what inference worked out is not.
+    assert!(
+        out.contains("function f(a, s) { const n⟨: Number⟩"),
+        "{out}"
+    );
+    assert!(out.contains("const k = "), "{out}");
+    assert!(
+        out.contains("const xs⟨: Number[]⟩ = [k].map((v⟨: Number⟩) => v)"),
+        "{out}"
+    );
 }
