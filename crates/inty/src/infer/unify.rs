@@ -84,9 +84,11 @@ impl InferState {
             (Type::ArrowThis, Type::Var(_)) | (Type::Var(_), Type::ArrowThis) => {
                 self.unify(span, &z1, &z2)
             }
-            (Type::ArrowThis, other) | (other, Type::ArrowThis) => Err(TypeError::TypeMismatch {
-                expected: "a function that doesn't use `this`".to_string(),
-                found: format!("one that reads `this` (a method of {})", self.zonk(other)),
+            (Type::ArrowThis, other) | (other, Type::ArrowThis) => Err(TypeError::ThisMismatch {
+                member: None,
+                reads_this: self.zonk(other).to_string(),
+                without_this: None,
+                with_this: None,
                 span,
             }
             .into()),
@@ -363,7 +365,11 @@ impl InferState {
                         self.unify_inexact = true;
                         // One is static - compatible with any this
                     }
-                    (Some(t1), Some(t2)) => self.unify_fn_this(span, t1, t2)?,
+                    (Some(this_a), Some(this_b)) => {
+                        if let Err(e) = self.unify_fn_this(span, this_a, this_b) {
+                            return Err(self.fn_this_error(span, e, t1, t2));
+                        }
+                    }
                 }
 
                 // Unify parameters position-wise. Per-param presence
@@ -769,7 +775,10 @@ impl InferState {
                         return Err(self.field_presence_error(span, prop, r1, r2));
                     }
                     self.unify_field_flags(span, prop, e1, e2)?;
-                    self.unify(span, &e1.ty, &e2.ty)?;
+                    self.unify_path.push(prop.0.clone());
+                    let unified = self.unify(span, &e1.ty, &e2.ty);
+                    self.unify_path.pop();
+                    unified?;
                 }
                 (Some(e1), None) => match &r2.tail {
                     RowTail::Closed => {
@@ -1107,6 +1116,49 @@ impl InferState {
             .naming_aliases(aliases)
     }
 
+    /// Two function types, `f1` and `f2`, disagree on `this` (`error`,
+    /// from `unify_fn_this`): one doesn't use it, the other reads it. The
+    /// error says which member of the types being compared they are (the
+    /// comparison may span a whole class) and shows both functions.
+    fn fn_this_error(&mut self, span: Span, error: IntyError, f1: &Type, f2: &Type) -> IntyError {
+        if self.quiet > 0 {
+            return error;
+        }
+        let Some(TypeError::ThisMismatch { reads_this, .. }) = error.as_type() else {
+            return error;
+        };
+        let reads_this = reads_this.clone();
+        let f1_arrow = match f1 {
+            Type::Func {
+                this_type: Some(t), ..
+            } => matches!(self.zonk(t), Type::ArrowThis),
+            _ => false,
+        };
+        let (without, with) = if f1_arrow { (f1, f2) } else { (f2, f1) };
+        let (without, with) = self.show_pair(without, with);
+        TypeError::ThisMismatch {
+            member: self.member_path(),
+            reads_this,
+            without_this: Some(without),
+            with_this: Some(with),
+            span,
+        }
+        .into()
+    }
+
+    /// The member [`Self::unify`] is comparing, as a property path
+    /// (`editor.say`; a function's call signature, an internal key, is
+    /// left out): none at the top of the types compared.
+    fn member_path(&self) -> Option<String> {
+        let names: Vec<&str> = self
+            .unify_path
+            .iter()
+            .map(String::as_str)
+            .filter(|p| *p != crate::types::CALLABLE_KEY)
+            .collect();
+        (!names.is_empty()).then(|| names.join("."))
+    }
+
     /// `prop` is present in one of `r1`, `r2` and absent from the other.
     fn field_presence_error(
         &self,
@@ -1384,6 +1436,44 @@ mod tests {
             state.unify(span, &callee, &call_shape).is_err(),
             "1-arg call against (a, b) => c must error — second param is required"
         );
+    }
+
+    /// A function that doesn't use `this` against one that reads it, deep
+    /// in two records: the error names the member and shows both.
+    #[test]
+    fn this_mismatch_names_the_member() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let plain = Type::func(Type::ArrowThis, vec![Type::Number], Type::Number);
+        let method = Type::func(
+            Type::object([("n", Type::Number)]),
+            vec![Type::Number],
+            Type::Number,
+        );
+        let a = Type::object([("editor", Type::object([("say", plain)]))]);
+        let b = Type::object([("editor", Type::object([("say", method)]))]);
+        let err = state.unify(span, &a, &b).unwrap_err();
+        match err.as_type() {
+            Some(TypeError::ThisMismatch {
+                member,
+                without_this,
+                with_this,
+                ..
+            }) => {
+                assert_eq!(member.as_deref(), Some("editor.say"));
+                assert_eq!(without_this.as_deref(), Some("(Number) => Number"));
+                assert!(
+                    with_this
+                        .as_deref()
+                        .is_some_and(|f| f.starts_with("(this: ")),
+                    "{with_this:?}"
+                );
+            }
+            other => panic!("expected ThisMismatch, got {other:?}"),
+        }
+        assert!(state.unify_path.is_empty(), "the path is unwound on errors");
+        let text = err.to_string();
+        assert!(text.contains("in member `editor.say`"), "{text}");
     }
 
     #[test]
