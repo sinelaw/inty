@@ -103,13 +103,12 @@ impl InferState {
     }
 
     pub fn unify(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
-        // A cycle in the substitution that `zonk` cuts (it shows a bound
-        // row tail as free) can make unification re-bind the same tails
-        // with fresh variables forever. Give up with a type error at a
-        // depth no real type reaches, instead of overflowing the stack.
-        if self.unify_depth >= super::MAX_UNIFY_DEPTH {
-            return Err(TypeError::UnifyDepth { span }.into());
-        }
+        // Types are regular trees: unification visits finitely many pairs
+        // of their nodes, a variable's binding or a recursive type's body
+        // being a node. A pair met again while (or after) it is compared is
+        // taken to match (coinduction; Huet's unification of rational
+        // trees), so unification always ends.
+        //
         // Two variables both bound to types: compared once per outermost
         // unification (see `unify_bound_pairs`).
         let pair = self.bound_pair(t1, t2);
@@ -118,6 +117,46 @@ impl InferState {
                 return Ok(());
             }
         }
+        // A recursive type against a variable bound to a type: the same
+        // two nodes, whatever the variable's type looks like by then.
+        if let Some(goal) = self.var_named_goal(t1, t2) {
+            if self.unfold_assumptions.contains(&goal) {
+                return Ok(());
+            }
+            // (Not two variables: no `pair`.)
+            self.unfold_assumptions.push(goal);
+            let result = self.unify_resolved_pair(span, t1, t2, None);
+            self.unfold_assumptions.pop();
+            return result;
+        }
+        self.unify_resolved_pair(span, t1, t2, pair)
+    }
+
+    /// The goal of a recursive type met by a variable bound to a type
+    /// (see [`UnfoldAssumption::VarNamed`]).
+    fn var_named_goal(&mut self, t1: &Type, t2: &Type) -> Option<UnfoldAssumption> {
+        let (var, id, args) = match (t1, t2) {
+            (Type::Var(TVarName::Flex(v)), Type::Named(id, args))
+            | (Type::Named(id, args), Type::Var(TVarName::Flex(v))) => (*v, *id, args),
+            _ => return None,
+        };
+        if self.is_nominal_type(id) {
+            return None;
+        }
+        let root = self.var_table.find_if_present(var)?;
+        self.var_table.bound(root)?;
+        Some(UnfoldAssumption::VarNamed(root, id, args.clone()))
+    }
+
+    /// [`Self::unify`] once the pairs it has already met are ruled out;
+    /// `pair`: the bound variables `t1` and `t2` are, if they are.
+    fn unify_resolved_pair(
+        &mut self,
+        span: Span,
+        t1: &Type,
+        t2: &Type,
+        pair: Option<(TVarId, TVarId)>,
+    ) -> UnifyResult<()> {
         let t1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
         let t2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
         // Two variables bound to the very same type (one binding, or a
@@ -617,6 +656,17 @@ impl InferState {
             }
         }
 
+        // A row ending in `var` itself (`ρ = {F | ρ}`): `ρ` has the fields
+        // `F`, and the rest is a new tail.
+        if let Some(fields) = self.row_ends_in(var, ty) {
+            if fields.is_empty() {
+                return Ok(());
+            }
+            let rest = self.fresh_flex();
+            let row = Type::Row(RowType::open_entries(fields, rest));
+            return self.var_bind(span, var, &row);
+        }
+
         // Check if this would create a recursive type inside a row
         if self.is_inside_row_type(var, ty) {
             // Create a recursive type
@@ -944,17 +994,7 @@ impl InferState {
                 if root1 == root2 {
                     return Ok(());
                 }
-                // Coinductive: re-entering the unification of the same
-                // two tails assumes it succeeds (the rows are regular
-                // trees; see `UnfoldAssumption::RowTails`).
-                let assumption = UnfoldAssumption::RowTails(root1.min(root2), root1.max(root2));
-                if self.unfold_assumptions.contains(&assumption) {
-                    return Ok(());
-                }
-                self.unfold_assumptions.push(assumption);
-                let result = self.unify_open_tails(span, r1, r2, root1, root2);
-                self.unfold_assumptions.pop();
-                result
+                self.unify_open_tails(span, r1, r2, root1, root2)
             }
 
             (RowTail::Recursive(id1, args1), RowTail::Recursive(id2, args2)) if id1 == id2 => {

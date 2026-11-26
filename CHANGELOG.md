@@ -191,6 +191,18 @@ unterminated-comment error.
 
 ### Fixes
 
+- Unifying recursive types always ends, with no depth limit: the "Type
+  too complex: unifying these recursive types did not terminate" error is
+  gone. Its cause was a row whose tail led back to itself (`ρ = {| ρ}`, met
+  where two mutually recursive classes' rows meet), which inty made into
+  the recursive type `μX. {| X}`: a row that never ends, which extended
+  any row it was unified with forever. A row ending in itself is now no
+  recursive type: with no fields the equation says nothing, and
+  `ρ = {F | ρ}` gives `ρ` the fields `F` and a new tail. A recursive type
+  met by a variable is compared once, keyed by the variable, whatever its
+  type looks like by then; together with the pairs of bound variables
+  already compared once, unification visits finitely many pairs of nodes
+  (Huet's unification of rational trees).
 - `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
   string literal type (`"a, b"`) or after an arrow inside type arguments
   (`Pair<() => A, B>`).

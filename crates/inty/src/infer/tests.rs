@@ -6326,3 +6326,77 @@ fn this_mismatch_locates_a_method_field() {
         .collect();
     assert_eq!(at, ["say(text) { this.n = text; }"], "{with_origins:?}");
 }
+
+// ---- Rows that end in themselves --------------------------------------------
+
+/// A row whose tail leads back to itself: `ρ₀ ~ {| ρ₂}` where `ρ₂ ↦ {| ρ₁}`
+/// and `ρ₁ ↦ {| ρ₀}` (the fresh client's `this.doc.render(v)`, where a
+/// view's row met a document view's recursive one). It used to make the
+/// recursive type `μX. {| X}`, a row that never ends: unified with
+/// `{conceals: T | ρ}`, it extended that row's tail without end, and
+/// inty gave up ("Type too complex"). A tail stands for the fields a row
+/// doesn't list, so the equation says nothing, and the later unification
+/// gives the row its field.
+#[test]
+fn a_row_ending_in_itself_is_no_recursive_type() {
+    use crate::types::{RowTail, RowType};
+    let mut state = InferState::new();
+    let span = crate::span::Span::new(0, 0);
+    let tail = |v: &crate::types::TVarName| Type::Row(RowType::empty_open(v.clone()));
+    let (r0, r1, r2) = (state.fresh_flex(), state.fresh_flex(), state.fresh_flex());
+    let named = state.named_types.len();
+    state
+        .unify(span, &Type::Var(r1.clone()), &tail(&r0))
+        .unwrap();
+    state
+        .unify(span, &Type::Var(r2.clone()), &tail(&r1))
+        .unwrap();
+    state
+        .unify(span, &Type::Var(r0.clone()), &tail(&r2))
+        .unwrap();
+    assert_eq!(state.named_types.len(), named, "no recursive type is made");
+    // The row takes a field, through the chain.
+    let t = state.fresh_type_var();
+    let rest = state.fresh_flex();
+    let conceals = Type::object_open([("conceals", t)], rest);
+    state.unify(span, &tail(&r2), &conceals).unwrap();
+    let row = state.zonk(&Type::Var(r0.clone()));
+    match row {
+        Type::Row(RowType {
+            props,
+            tail: RowTail::Open(_),
+        }) => {
+            assert!(props.keys().any(|k| k.0 == "conceals"), "{props:?}")
+        }
+        other => panic!("expected an open row with `conceals`, got {other}"),
+    }
+}
+
+/// `ρ = {a: T | ρ}`: the row has the field `a` (and a new tail); the
+/// equation is no recursive type (`x = {...{a: ""}, ...x}`).
+#[test]
+fn a_row_with_fields_ending_in_itself_has_them() {
+    use crate::types::{RowTail, RowType};
+    let mut state = InferState::new();
+    let span = crate::span::Span::new(0, 0);
+    let r = state.fresh_flex();
+    let row = Type::object_open([("a", Type::String)], r.clone());
+    state.unify(span, &Type::Var(r.clone()), &row).unwrap();
+    match state.zonk(&Type::Var(r.clone())) {
+        Type::Row(RowType {
+            props,
+            tail: RowTail::Open(rest),
+        }) => {
+            assert_eq!(
+                props.keys().map(|k| k.0.as_str()).collect::<Vec<_>>(),
+                ["a"]
+            );
+            assert_ne!(rest, r, "a new tail");
+        }
+        other => panic!("expected `{{a: String | ρ'}}`, got {other}"),
+    }
+    // Unifying it with another record ends.
+    let rest = state.fresh_flex();
+    let other = Type::object_open([("b", Type::Number)], rest);
+    state.unify(span, &row, &other).unwrap();
+}

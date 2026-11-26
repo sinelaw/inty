@@ -101,7 +101,6 @@ fn error_code(err: &IntyError) -> &'static str {
         IntyError::Type(e) => match &**e {
             TypeError::UnificationError { .. } => "UnificationError",
             TypeError::OccursCheck { .. } => "OccursCheck",
-            TypeError::UnifyDepth { .. } => "UnifyDepth",
             TypeError::UndefinedVariable { .. } => "UndefinedVariable",
             TypeError::PropertyNotFound { .. } => "PropertyNotFound",
             TypeError::PropertyOfNullable { .. } => "PropertyOfNullable",
