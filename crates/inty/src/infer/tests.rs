@@ -6428,3 +6428,65 @@ fn an_error_in_a_body_does_not_stop_its_function() {
     let n = env.lookup("n").unwrap();
     assert_eq!(state.apply_subst(&n.body.ty), Type::Number);
 }
+
+/// A generalised function's scheme constrains only what its type reaches:
+/// each constraint's subject (a receiver, a container) is the type's, or
+/// another kept constraint's. One on a variable nothing reaches is
+/// vacuous, and leaving it in shows a requirement no caller sees.
+#[test]
+fn a_scheme_has_no_constraint_on_an_unreachable_variable() {
+    for src in [
+        // A generalised `const` (related to its hoisting placeholder, an
+        // instance) whose constraint mentions a variable of the enclosing
+        // function's.
+        "function m(q) { const t = q.x; const lead = (it) => it.y(t); return 1; }",
+        // The same, used through a callback (palette.js's `matching`).
+        "function m(items, q) {\n\
+           const t = q.split(\" \");\n\
+           const lead = (it) => it.label.startsWith(t[0]);\n\
+           return items.map((it) => lead(it));\n\
+         }",
+        // A discarded function's parameter.
+        "function m(q) { ((o) => o.z(q)); return q; }",
+    ] {
+        let program = crate::frontends::javascript::parse_source(src).unwrap();
+        let (env, mut state) = crate::stdlib::initial_env_with_stdlib().unwrap();
+        let (_, env) = state.infer_program_with_env(&env, &program).unwrap();
+        let scheme = env.lookup("m").unwrap().clone();
+        let preds: Vec<_> = scheme
+            .body
+            .preds
+            .iter()
+            .map(|p| state.apply_subst_pred(p))
+            .collect();
+        let mut reached = state.apply_subst(&scheme.body.ty).free_vars();
+        let mut kept = vec![false; preds.len()];
+        loop {
+            let mut changed = false;
+            for (i, p) in preds.iter().enumerate() {
+                let subjects = super::state::constraint_subjects(p.class, p.types.len());
+                if !kept[i]
+                    && subjects
+                        .iter()
+                        .any(|&k| !p.types[k].free_vars().is_disjoint(&reached))
+                {
+                    kept[i] = true;
+                    changed = true;
+                    for t in &p.types {
+                        reached.extend(t.free_vars());
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let vacuous: Vec<String> = preds
+            .iter()
+            .zip(&kept)
+            .filter(|(_, k)| !**k)
+            .map(|(p, _)| format!("{p:?}"))
+            .collect();
+        assert!(vacuous.is_empty(), "{src}\nunreachable: {vacuous:?}");
+    }
+}

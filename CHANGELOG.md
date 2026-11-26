@@ -258,6 +258,15 @@ unterminated-comment error.
   fails and goes on, at every depth, not only a program's top level. One
   error early in a class used to leave every method after it unchecked
   (no types, no hover).
+- A generalised function's scheme no longer carries constraints on
+  variables its type doesn't reach. A local generic `const` that read a
+  variable of the enclosing function (`const lead = (it) =>
+  it.label.startsWith(t[0])`) left a copy of its own constraints in the
+  enclosing function's scheme (`y1 has {label: v1}, v1 has {toLowerCase:
+  …}, …`), over variables no caller sees; so did a discarded function's
+  parameter. Generalisation now drops any constraint whose subject (a
+  receiver, a container) nothing reaches, as it already did for an
+  `Iterable` a call left out: such a variable can be whatever meets it.
 - `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
   string literal type (`"a, b"`) or after an arrow inside type arguments
   (`Pair<() => A, B>`).
