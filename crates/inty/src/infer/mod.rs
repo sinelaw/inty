@@ -1640,6 +1640,18 @@ impl InferState {
             if let Some(ty) = self.try_check_object(env, properties, *span, &expected)? {
                 return Ok(ty);
             }
+            // With a spread, the fields written out are still checked
+            // against their slots (then the whole object is fitted below).
+            if properties
+                .iter()
+                .any(|p| matches!(p, crate::ast::PropDef::Spread { .. }))
+            {
+                if let Type::Row(row) = self.zonk_head(&expected) {
+                    let ty = self.infer_object_expecting(env, properties, *span, Some(&row))?;
+                    self.subsume(*span, &ty, &expected)?;
+                    return Ok(ty);
+                }
+            }
         }
         // Branches checked against a known expected type separately, not
         // joined first: the annotation is what makes `b ? 1 : "a"` a

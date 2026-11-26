@@ -111,6 +111,22 @@ impl InferState {
         properties: &[PropDef],
         span: Span,
     ) -> InferResult<Type> {
+        self.infer_object_expecting(env, properties, span, None)
+    }
+
+    /// [`Self::infer_object`], with each field written out (not
+    /// annotated) that `expected` has checked against that field's type,
+    /// as `try_check_object` checks a literal without spreads: so a
+    /// callback written after a spread may take fewer parameters than its
+    /// slot passes. The field's type is the slot's. (The object is then
+    /// fitted to the expected type as a whole by the caller.)
+    pub(in crate::infer) fn infer_object_expecting(
+        &mut self,
+        env: &TypeEnv,
+        properties: &[PropDef],
+        span: Span,
+        expected: Option<&RowType>,
+    ) -> InferResult<Type> {
         // Create a shared 'this' type for all methods in this object
         // This ensures that when one method's 'this' is unified with the object type,
         // all methods are connected, avoiding infinite types during method chaining.
@@ -159,10 +175,22 @@ impl InferState {
                     span: prop_span,
                 } => {
                     let prop_name = self.prop_key_to_name(key);
+                    let slot = expected
+                        .filter(|_| type_annotation.is_none() && type_ast.is_none())
+                        .and_then(|row| row.props.get(&prop_name))
+                        .map(|e| e.ty.clone());
                     self.member_function = matches!(value, Expr::Function { .. });
-                    let value_type = self.infer_expr(env, value);
+                    let value_type = match &slot {
+                        Some(slot) => self.check_expr(env, value, slot),
+                        None => self.infer_expr(env, value),
+                    };
                     self.member_function = false;
                     let value_type = value_type?;
+                    if let Some(slot) = slot {
+                        let slot = self.zonk_head(&slot);
+                        props.insert(prop_name, FieldEntry::pre(slot));
+                        continue;
+                    }
                     // IR-channel annotation (Python `field: T`): lower the
                     // shared `TypeAst` to a `Type` through the canonical
                     // bridge — the same path params and method returns use

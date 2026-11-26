@@ -6765,3 +6765,37 @@ fn a_record_is_no_array() {
         assert!(check_program(src, &[]).is_err(), "{src}");
     }
 }
+
+/// A field written after a spread is checked against the expected
+/// record's field, as it is without the spread: a callback may take
+/// fewer parameters than its slot passes. What doesn't fit the slot is
+/// still rejected.
+#[test]
+fn a_field_after_a_spread_is_checked_against_its_slot() {
+    let head = "/** type P = {f: (String, Number) => Undefined} */\n\
+                /** function g(p: P) => Undefined */\n\
+                function g(p) { p.f(\"a\", 1); }\n\
+                const base = { f: (_s, _i) => {} };\n";
+    for ok in [
+        "g({ f: (s) => { s.length; } });",
+        "g({ ...base, f: (s) => { s.length; } });",
+        "g({ ...base, f: () => {} });",
+    ] {
+        let src = format!("{head}{ok}");
+        assert!(
+            check_program(&src, &[]).is_ok(),
+            "{ok}: {:?}",
+            check_program(&src, &[])
+        );
+    }
+    for bad in [
+        "g({ ...base, f: (s) => { s * 2; } });",
+        "g({ ...base, f: 5 });",
+        "g({ ...base, f: (s, i, j) => { j.x; } });",
+        "g({ f: (s) => {}, ...{ f: 1 } });",
+        "g({ ...{}, h: 1 });",
+    ] {
+        let src = format!("{head}{bad}");
+        assert!(check_program(&src, &[]).is_err(), "{bad} is accepted");
+    }
+}
