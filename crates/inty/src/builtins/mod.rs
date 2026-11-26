@@ -873,7 +873,16 @@ impl InferState {
     /// aren't defaulted: an imported module's, which the bindings it
     /// leaves for its importers reach. Their uses there decide them, as
     /// in a single file.
+    /// Its error is rendered (`render_error`).
     pub fn resolve_constraints_keeping(
+        &mut self,
+        keep: &std::collections::HashSet<TVarName>,
+    ) -> Result<(), IntyError> {
+        self.resolve_constraints_unrendered(keep)
+            .map_err(|e| self.render_error(e))
+    }
+
+    fn resolve_constraints_unrendered(
         &mut self,
         keep: &std::collections::HashSet<TVarName>,
     ) -> Result<(), IntyError> {

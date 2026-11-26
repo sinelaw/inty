@@ -648,6 +648,8 @@ impl InferState {
     /// `infer_program*` API returns via `Err`; later errors are only
     /// visible to callers that drain `errors` after the run.
     pub fn push_error(&mut self, err: IntyError) {
+        // Reported: render the types it holds.
+        let err = self.render_error(err);
         // A statement list re-raises the first error it recorded (see
         // `infer_stmt_list`), and the recovery around it (a function
         // group, an enclosing statement) records what it catches: keep
@@ -1261,14 +1263,14 @@ impl InferState {
                 self.restore_snapshot(snap);
             }
         }
-        // Classes by name, variables renamed `a`, `b`, … (a failed
-        // speculative join isn't shown, so it skips the rendering).
-        let (left, right) = if self.quiet > 0 {
-            (String::new(), String::new())
-        } else {
-            self.show_pair(&t1, &t2)
-        };
-        Err(crate::error::TypeError::BranchMismatch { left, right, span }.into())
+        // Rendered (classes by name, variables renamed `a`, `b`, …) if
+        // reported: see `render_error`.
+        Err(crate::error::TypeError::BranchMismatch {
+            left: self.error_type(&t1, &None),
+            right: self.error_type(&t2, &None),
+            span,
+        }
+        .into())
     }
 
     /// The union of two types (normalised), or their unification when
@@ -1404,9 +1406,38 @@ impl InferState {
 
         // Rule 1: try unify with rollback so a failed attempt has
         // no observable side-effect on the substitution.
+        // Its error is the precise one: in two records, the member that
+        // doesn't fit (see `unify_path`). Kept, it is resolved before the
+        // restore undoes the bindings it was raised under (speculating,
+        // it is dropped anyway).
         let snap = self.snapshot_inference();
-        if self.quietly(|s| s.unify(span, sub, sup)).is_ok() {
-            return Ok(());
+        let mut first_err = match self.quietly(|s| s.unify(span, sub, sup)) {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        // Reported (not speculating), the error is resolved under the
+        // attempt's bindings, and so are the two whole types it is in.
+        if self.quiet == 0 && names_member(&first_err) {
+            // The attempt was `unify(sub, sup)`: its expected side is
+            // `sub`'s, the value supplied; the whole types are `sup`
+            // and `sub`.
+            if let Some(crate::error::TypeError::UnificationError {
+                expected,
+                found,
+                whole,
+                expected_origin,
+                found_origin,
+                ..
+            }) = first_err.as_type_mut()
+            {
+                std::mem::swap(expected, found);
+                std::mem::swap(expected_origin, found_origin);
+                *whole = Some(Box::new((
+                    crate::error::ShownType::ty(sup),
+                    crate::error::ShownType::ty(sub),
+                )));
+            }
+            self.settle_error(&mut first_err);
         }
         self.restore_snapshot(snap);
         let sub = self.zonk_head(sub);
@@ -1543,18 +1574,19 @@ impl InferState {
             // the original sub/sup pair so the user sees the union.
         }
 
-        // Direction matters for the error labels. `subsume(sub, sup)`
-        // is "the value of type `sub` flows into a slot of type `sup`"
-        // — so the natural reading is `expected = sup` (what the slot
-        // wants) and `found = sub` (what was supplied). `unify` itself
-        // is symmetric, but its rendered error uses its arg order as
-        // `(expected, found)`; passing `(sup, sub)` here matches the
-        // call-site semantics. The internal `unify` attempt above used
-        // `(sub, sup)` for the constraint direction (literal-vs-base
-        // is one-directional in `unify`), but its error was discarded
-        // on rollback, so the only user-visible label comes from this
-        // line.
-        let mut err = self.unification_error(span, &sup, &sub);
+        // Inside two records (an object passed where a class's uses
+        // expect one): the member that doesn't fit, and its types, rather
+        // than the two whole records (prepared above). Speculating, the
+        // error is dropped: the plain one below will do.
+        //
+        // Otherwise, `expected = sup` (what the slot wants) and `found =
+        // sub` (what was supplied).
+        let member_err = self.quiet == 0 && names_member(&first_err);
+        let mut err = if member_err || self.quiet > 0 {
+            first_err
+        } else {
+            self.unification_error(span, &sup, &sub)
+        };
         if self.quiet == 0 {
             let note = match self.row_difference(&sup, &sub) {
                 Some(note) => Some(note),
@@ -3172,6 +3204,20 @@ fn plural(n: usize) -> &'static str {
         ""
     } else {
         "s"
+    }
+}
+
+/// Whether `err` is a mismatch inside the types compared, at a member
+/// of theirs (`UnificationError::member` and the like).
+fn names_member(err: &IntyError) -> bool {
+    use crate::error::TypeError;
+    match err.as_type() {
+        Some(
+            TypeError::UnificationError { member, .. }
+            | TypeError::ThisMismatch { member, .. }
+            | TypeError::FieldPresenceMismatch { member, .. },
+        ) => member.is_some(),
+        _ => false,
     }
 }
 

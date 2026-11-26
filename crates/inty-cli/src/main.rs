@@ -284,6 +284,7 @@ fn check_many(state: &mut InferState, env: TypeEnv, files: &[String], color: boo
             // The statement list re-raises the first error it recorded:
             // report it once.
             Err(e) => {
+                let e = state.render_error(e);
                 let shown = format!("{e:?}");
                 if !errors.iter().any(|l| format!("{:?}", l.error) == shown) {
                     errors.push(LocatedError {
@@ -977,6 +978,26 @@ fn parse_javascript(source: &str) -> Result<inty::ast::Program, IntyError> {
 }
 
 fn run_inference(
+    state: &mut InferState,
+    env: TypeEnv,
+    source: &str,
+    filename: &str,
+    lang: Language,
+) -> Result<Summary, Vec<LocatedError>> {
+    // Errors recorded in the state are rendered already; one returned
+    // past it (a constraint that fails, an import's) is rendered here.
+    check_source(state, env, source, filename, lang).map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|l| LocatedError {
+                error: state.render_error(l.error),
+                source: l.source,
+            })
+            .collect()
+    })
+}
+
+fn check_source(
     state: &mut InferState,
     env: TypeEnv,
     source: &str,

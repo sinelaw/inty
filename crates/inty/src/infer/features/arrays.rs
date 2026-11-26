@@ -78,10 +78,9 @@ impl InferState {
                     // `[String, 0.5]`, and variables renamed `a`, `b`, ….
                     let base = |t: &Type| t.widen_fresh_literals();
                     let (l, r) = (self.zonk(&acc), self.zonk(&elem_ty));
-                    let (left, right) = self.show_pair(&base(&l), &base(&r));
                     return Err(IntyError::from(TypeError::ArrayElementMismatch {
-                        left,
-                        right,
+                        left: crate::error::ShownType::ty(&base(&l)),
+                        right: crate::error::ShownType::ty(&base(&r)),
                         span: elem.span(),
                     }));
                 }

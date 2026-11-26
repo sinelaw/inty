@@ -56,7 +56,8 @@ named here that inty hasn't, or an inference function of inty's
 
 Beside the rules: `Expr.assignsMutable` is `check_assignment_target`;
 `infer`/`inferProgram` are `infer_expr`, `infer_expr_inner`, `infer_stmt`,
-`infer_program` and `infer_program_with_env`.
+`infer_program`, `infer_program_with_env` and `infer_program_unrendered`
+(the former renders the latter's error).
 
 ## inty's functions the model doesn't have
 

@@ -1,12 +1,12 @@
 
-Error: Type mismatch: expected '{a: String, b: Number}', found '{a: Number, b: Number}'
+Error: Type mismatch in member `a`: expected 'String', found 'Number'
    ╭─[ main.js:4:11 ]
    │
  4 │ const p = pair(1, 2);
    │           ─────┬────  
-   │                ╰────── Type mismatch: expected '{a: String, b: Number}', found '{a: Number, b: Number}'
+   │                ╰────── Type mismatch in member `a`: expected 'String', found 'Number'
    │ 
-   │ Note: Cannot unify expected '{a: String, b: Number}' with found '{a: Number, b: Number}'
+   │ Note: `a` is a member of the types compared: expected '{a: String, b: Number}', found '{a: Number, b: Number}'
 ───╯
 
 

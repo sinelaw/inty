@@ -1,0 +1,17 @@
+
+Error: Type mismatch in member `ask`: expected '(String) => String', found '(Number) => Number'
+    ╭─[ main.js:21:24 ]
+    │
+ 21 │ const p = new Prompter(editor);
+    │                        ───┬──  
+    │                           ╰──── Type mismatch in member `ask`: expected '(String) => String', found '(Number) => Number'
+    │
+    ├─[ main.js:21:24 ]
+    │
+ 19 │   ask: (n) => n * 2,
+    │        ──────┬─────  
+    │              ╰─────── Found type: from parameter 'n' (position 0)
+    │ 
+    │ Note: `ask` is a member of the types compared: expected 'Editor', found '{ask: (Number) => Number, … and 9 more}'
+────╯
+

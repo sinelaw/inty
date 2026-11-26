@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::error::{IntyError, TypeError};
+use crate::error::{IntyError, ShownType, TypeError};
 use crate::span::Span;
 use crate::types::{
     FieldEntry, PropName, RowTail, RowType, Subst, TVarId, TVarName, Type, TypeDef,
@@ -21,6 +21,10 @@ pub type UnifyResult<T> = Result<T, IntyError>;
 /// How much of a type (in nodes) a diagnostic writes out before leaving
 /// the rest out (`…`).
 const DIAGNOSTIC_TYPE_BUDGET: usize = 4_000;
+
+/// In `unify_path`: where the path stops being a property path (a
+/// function's parameters, an array's elements, a type's arguments).
+const PATH_STOP: &str = "\0";
 
 impl InferState {
     /// Unify two types, updating the substitution.
@@ -86,7 +90,7 @@ impl InferState {
             }
             (Type::ArrowThis, other) | (other, Type::ArrowThis) => Err(TypeError::ThisMismatch {
                 member: None,
-                reads_this: self.zonk(other).to_string(),
+                reads_this: ShownType::ty(other),
                 without_this: None,
                 with_this: None,
                 span,
@@ -238,6 +242,28 @@ impl InferState {
     }
 
     fn unify_impl(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
+        // A function's parameters and result, an array's elements, a
+        // type's arguments: no longer a property path (`unify_path`). A
+        // mismatch in them is the enclosing member's (see `at_member`).
+        let opaque = matches!(
+            (t1, t2),
+            (Type::Func { .. }, Type::Func { .. })
+                | (Type::Array(_), Type::Array(_) | Type::Row(_))
+                | (Type::Row(_), Type::Array(_))
+                | (Type::Promise(_), Type::Promise(_))
+                | (Type::Map(_), Type::Map(_))
+                | (Type::Tuple(_), Type::Tuple(_))
+        ) || matches!((t1, t2), (Type::Named(a, _), Type::Named(b, _)) if a == b);
+        if opaque && self.unify_path.last().is_some_and(|p| p != PATH_STOP) {
+            self.unify_path.push(PATH_STOP.to_string());
+            let result = self.unify_shapes(span, t1, t2);
+            self.unify_path.pop();
+            return result;
+        }
+        self.unify_shapes(span, t1, t2)
+    }
+
+    fn unify_shapes(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
         match (t1, t2) {
             // Error sentinel absorbs anything. A binding whose
             // inference failed gets `Type::Error`; we don't want
@@ -777,6 +803,7 @@ impl InferState {
                     self.unify_field_flags(span, prop, e1, e2)?;
                     self.unify_path.push(prop.0.clone());
                     let unified = self.unify(span, &e1.ty, &e2.ty);
+                    let unified = unified.map_err(|e| self.at_member(e, &e1.ty, &e2.ty));
                     self.unify_path.pop();
                     unified?;
                 }
@@ -1038,11 +1065,21 @@ impl InferState {
     /// a type is by name; big records trimmed to the fields where the
     /// two differ.
     pub(crate) fn show_pair(&self, t1: &Type, t2: &Type) -> (String, String) {
+        self.show_pair_focused(t1, t2, None)
+    }
+
+    /// [`Self::show_pair`], a large record trimmed to the field `focus`
+    /// when given (else to the fields the two differ in).
+    fn show_pair_focused(&self, t1: &Type, t2: &Type, focus: Option<&str>) -> (String, String) {
         let mut tidy = crate::types::TidyEnv::new();
         let (a, b) = (
             self.display_form(&mut tidy, t1),
             self.display_form(&mut tidy, t2),
         );
+        if let Some(field) = focus {
+            let mut ctx = self.diagnostic_printer([field.to_string()].into());
+            return (ctx.format_type(&a), ctx.format_type(&b));
+        }
         // The fields a mismatch of two records is about: those both have,
         // with different types; else those the smaller has and the larger
         // lacks.
@@ -1119,11 +1156,8 @@ impl InferState {
     /// Two function types, `f1` and `f2`, disagree on `this` (`error`,
     /// from `unify_fn_this`): one doesn't use it, the other reads it. The
     /// error says which member of the types being compared they are (the
-    /// comparison may span a whole class) and shows both functions.
+    /// comparison may span a whole class) and holds both functions.
     fn fn_this_error(&mut self, span: Span, error: IntyError, f1: &Type, f2: &Type) -> IntyError {
-        if self.quiet > 0 {
-            return error;
-        }
         let Some(TypeError::ThisMismatch { reads_this, .. }) = error.as_type() else {
             return error;
         };
@@ -1131,27 +1165,73 @@ impl InferState {
         let f1_arrow = match f1 {
             Type::Func {
                 this_type: Some(t), ..
-            } => matches!(self.zonk(t), Type::ArrowThis),
+            } => matches!(self.zonk_head(t), Type::ArrowThis),
             _ => false,
         };
         let (without, with) = if f1_arrow { (f1, f2) } else { (f2, f1) };
-        let (without, with) = self.show_pair(without, with);
+        let member = self.member_path();
         TypeError::ThisMismatch {
-            member: self.member_path(),
             reads_this,
-            without_this: Some(without),
-            with_this: Some(with),
+            without_this: Some(self.error_type(without, &member)),
+            with_this: Some(self.error_type(with, &member)),
+            member,
             span,
         }
         .into()
+    }
+
+    /// A mismatch inside the member being compared (`unify_path`), not in
+    /// a member of its own: the error shows the member's two types,
+    /// `t1` and `t2` (`ask: (String) => String` against `(Number) =>
+    /// Number`, not the parameters `String` and `Number`).
+    ///
+    /// A mismatch with no member of its own is in this member, past where
+    /// the path stops (a parameter of its function, its array's
+    /// elements): it is this member's too.
+    fn at_member(&self, mut err: IntyError, t1: &Type, t2: &Type) -> IntyError {
+        let Some(here) = self.member_path() else {
+            return err;
+        };
+        let here = Some(here);
+        match err.as_type_mut() {
+            Some(TypeError::UnificationError {
+                expected,
+                found,
+                member,
+                context,
+                ..
+            }) if member.is_none() || *member == here => {
+                // What the replaced types were, if it needs saying.
+                if let (ShownType::Type(a), ShownType::Type(b)) = (&*expected, &*found) {
+                    if let Some(note) = self.caught_note(a, b) {
+                        context.get_or_insert(note);
+                    }
+                }
+                *expected = ShownType::ty(t1);
+                *found = ShownType::ty(t2);
+                *member = here;
+            }
+            Some(
+                TypeError::ThisMismatch { member, .. }
+                | TypeError::FieldPresenceMismatch { member, .. },
+            ) if member.is_none() => *member = here,
+            _ => {}
+        }
+        err
     }
 
     /// The member [`Self::unify`] is comparing, as a property path
     /// (`editor.say`; a function's call signature, an internal key, is
     /// left out): none at the top of the types compared.
     fn member_path(&self) -> Option<String> {
-        let names: Vec<&str> = self
-            .unify_path
+        // At a member's function, array, … (the path stops last): that
+        // member. Past a record in them (a parameter's field): none.
+        let path = match self.unify_path.iter().position(|p| p == PATH_STOP) {
+            Some(stop) if stop + 1 == self.unify_path.len() => &self.unify_path[..stop],
+            Some(_) => return None,
+            None => &self.unify_path[..],
+        };
+        let names: Vec<&str> = path
             .iter()
             .map(String::as_str)
             .filter(|p| *p != crate::types::CALLABLE_KEY)
@@ -1167,9 +1247,6 @@ impl InferState {
         r1: &RowType,
         r2: &RowType,
     ) -> IntyError {
-        if self.quiet > 0 {
-            return self.unification_error(span, &Type::Undefined, &Type::Undefined);
-        }
         let present = |r: &RowType| {
             r.props
                 .get(prop)
@@ -1182,63 +1259,258 @@ impl InferState {
                 .unwrap_or(false)
         };
         let (with, without) = if present(r1) { (r1, r2) } else { (r2, r1) };
-        let focus: std::collections::HashSet<String> = [prop.0.clone()].into();
-        let mut tidy = crate::types::TidyEnv::new();
-        let with = self.display_form(&mut tidy, &Type::Row(with.clone()));
-        let without = self.display_form(&mut tidy, &Type::Row(without.clone()));
-        let mut ctx = self.diagnostic_printer(focus);
+        let member = self.member_path();
+        let row = |r: &RowType| {
+            if self.keeps_error_types(&member) {
+                ShownType::Type(Box::new(Type::Row(r.clone())))
+            } else {
+                ShownType::Elided
+            }
+        };
         TypeError::FieldPresenceMismatch {
             field: prop.0.clone(),
-            with: ctx.format_type(&with),
-            without: ctx.format_type(&without),
+            with: row(with),
+            without: row(without),
+            member,
             span,
         }
         .into()
     }
 
-    /// Create a unification error.
+    /// Create a unification error: `t1` expected, `t2` found. It holds
+    /// the two types as they are; [`Self::settle_error`] resolves them
+    /// (an error kept past a snapshot's restore) and
+    /// [`Self::render_error`] renders them (an error reported).
     pub(crate) fn unification_error(&self, span: Span, t1: &Type, t2: &Type) -> IntyError {
-        // Speculating: the error is discarded, so don't render it.
-        if self.quiet > 0 {
-            return TypeError::UnificationError {
-                expected: String::new(),
-                found: String::new(),
-                span,
-                context: None,
-                expected_origin: None,
-                found_origin: None,
-            }
-            .into();
+        let member = self.member_path();
+        TypeError::UnificationError {
+            expected: self.error_type(t1, &member),
+            found: self.error_type(t2, &member),
+            member,
+            whole: None,
+            span,
+            context: None,
+            expected_origin: None,
+            found_origin: None,
         }
-        // Only a type's own origin: searching the substitution for any
-        // variable bound to an equal type (as this once did) labelled a
-        // `Number` with wherever some unrelated `Number` came from — and
-        // scanned the whole substitution on every failed unification,
-        // speculative ones included.
-        let expected_origin = self.get_origin(t1).cloned();
-        let found_origin = self.get_origin(t2).cloned();
+        .into()
+    }
 
-        let (expected, found) = self.show_pair(t1, t2);
-        // A caught exception's type is rigid on purpose: say why.
+    /// A type an error at `member` holds: none ([`ShownType::Elided`])
+    /// where the error won't be seen with it, which is where it isn't at a
+    /// member and either speculating (`subsume` keeps only an error at a
+    /// member) or past where the member path stops (`at_member` gives it
+    /// its member's types).
+    pub(crate) fn error_type(&self, t: &Type, member: &Option<String>) -> ShownType {
+        if self.keeps_error_types(member) {
+            ShownType::ty(t)
+        } else {
+            ShownType::Elided
+        }
+    }
+
+    /// See [`Self::error_type`].
+    fn keeps_error_types(&self, member: &Option<String>) -> bool {
+        // A member that `at_member` will name, enclosing this comparison.
+        let enclosed = self
+            .unify_path
+            .iter()
+            .take_while(|p| *p != PATH_STOP)
+            .any(|p| p != crate::types::CALLABLE_KEY);
+        member.is_some() || (self.quiet == 0 && !enclosed)
+    }
+
+    /// Resolve the types `err` holds against the substitution as it is
+    /// now, with their origins, for an error that outlives the bindings
+    /// it was raised under (a speculative attempt's, kept after its
+    /// snapshot is restored). The resolved types may still hold
+    /// variables, which rendering resolves as they are then.
+    pub(crate) fn settle_error(&self, err: &mut IntyError) {
+        if let Some(e) = err.as_type_mut() {
+            self.settle_type_error(e);
+        }
+    }
+
+    fn settle_type_error(&self, err: &mut TypeError) {
+        let settle = |t: &mut ShownType| {
+            if let ShownType::Type(ty) = t {
+                **ty = self.main_subst.flatten_bounded(ty, DIAGNOSTIC_TYPE_BUDGET);
+            }
+        };
+        match err {
+            TypeError::UnificationError {
+                expected,
+                found,
+                whole,
+                expected_origin,
+                found_origin,
+                ..
+            } => {
+                if let Some(w) = whole.as_deref_mut() {
+                    settle(&mut w.0);
+                    settle(&mut w.1);
+                }
+                if let (ShownType::Type(t), None) = (&*expected, &*expected_origin) {
+                    *expected_origin = self.get_origin(t).cloned();
+                }
+                if let (ShownType::Type(t), None) = (&*found, &*found_origin) {
+                    *found_origin = self.get_origin(t).cloned();
+                }
+                settle(expected);
+                settle(found);
+            }
+            TypeError::ThisMismatch {
+                reads_this,
+                without_this,
+                with_this,
+                ..
+            } => {
+                settle(reads_this);
+                without_this.iter_mut().for_each(settle);
+                with_this.iter_mut().for_each(settle);
+            }
+            TypeError::FieldPresenceMismatch { with, without, .. }
+            | TypeError::BranchMismatch {
+                left: with,
+                right: without,
+                ..
+            }
+            | TypeError::ArrayElementMismatch {
+                left: with,
+                right: without,
+                ..
+            } => {
+                settle(with);
+                settle(without);
+            }
+            TypeError::RequiredBy { inner, .. } => self.settle_type_error(inner),
+            _ => {}
+        }
+    }
+
+    /// A caught exception's type is rigid on purpose: say why, when it
+    /// is one of the two types that don't unify.
+    fn caught_note(&self, t1: &Type, t2: &Type) -> Option<String> {
+        if self.caught_exceptions.is_empty() {
+            return None;
+        }
         let caught = |t: &Type| {
             matches!(self.main_subst.flatten_bounded(t, 64), Type::Var(TVarName::Skolem(id))
                 if self.caught_exceptions.contains(&id))
         };
-        let context = (caught(t1) || caught(t2)).then(|| {
+        (caught(t1) || caught(t2)).then(|| {
             "a caught exception may be any value that was thrown, so it can be passed on, \
              tested and rethrown, but not used as a number, string or record; `String(e)` \
              gives its text"
                 .to_string()
-        });
-        TypeError::UnificationError {
-            expected,
-            found,
-            span,
-            context,
-            expected_origin,
-            found_origin,
+        })
+    }
+
+    /// Render the types `err` holds, as a diagnostic shows them (see
+    /// [`Self::show_pair`]), with their origins and what a type that
+    /// can't be used as asked is (a caught exception). Done once, when
+    /// the error is reported ([`Self::push_error`]); an error already
+    /// rendered is left as it is.
+    pub fn render_error(&self, mut err: IntyError) -> IntyError {
+        debug_assert!(
+            !format!("{err:?}").contains("Elided"),
+            "a reported error lost its types: {err:?}"
+        );
+        if let Some(e) = err.as_type_mut() {
+            self.render_type_error(e);
         }
-        .into()
+        err
+    }
+
+    fn render_type_error(&self, err: &mut TypeError) {
+        match err {
+            TypeError::UnificationError {
+                expected,
+                found,
+                member,
+                whole,
+                context,
+                expected_origin,
+                found_origin,
+                ..
+            } => {
+                if let Some(w) = whole.as_deref_mut() {
+                    if let (ShownType::Type(t1), ShownType::Type(t2)) = (&w.0, &w.1) {
+                        // Trimmed to the member's field, at their top.
+                        let field = member.as_deref().and_then(|m| m.split('.').next());
+                        let (a, b) = self.show_pair_focused(t1, t2, field);
+                        *w = (ShownType::Text(a), ShownType::Text(b));
+                    }
+                }
+                let (ShownType::Type(t1), ShownType::Type(t2)) = (&*expected, &*found) else {
+                    return;
+                };
+                // Only a type's own origin: searching the substitution
+                // for any variable bound to an equal type (as this once
+                // did) labelled a `Number` with wherever some unrelated
+                // `Number` came from.
+                if expected_origin.is_none() {
+                    *expected_origin = self.get_origin(t1).cloned();
+                }
+                if found_origin.is_none() {
+                    *found_origin = self.get_origin(t2).cloned();
+                }
+                if let Some(note) = self.caught_note(t1, t2) {
+                    context.get_or_insert(note);
+                }
+                let (a, b) = self.show_pair(t1, t2);
+                *expected = ShownType::Text(a);
+                *found = ShownType::Text(b);
+            }
+            TypeError::ThisMismatch {
+                reads_this,
+                without_this,
+                with_this,
+                ..
+            } => {
+                if let ShownType::Type(t) = &*reads_this {
+                    *reads_this = ShownType::Text(
+                        self.main_subst
+                            .flatten_bounded(t, DIAGNOSTIC_TYPE_BUDGET)
+                            .to_string(),
+                    );
+                }
+                if let (Some(ShownType::Type(f1)), Some(ShownType::Type(f2))) =
+                    (&*without_this, &*with_this)
+                {
+                    let (a, b) = self.show_pair(f1, f2);
+                    *without_this = Some(ShownType::Text(a));
+                    *with_this = Some(ShownType::Text(b));
+                }
+            }
+            TypeError::FieldPresenceMismatch {
+                field,
+                with,
+                without,
+                ..
+            } => {
+                let (ShownType::Type(w), ShownType::Type(wo)) = (&*with, &*without) else {
+                    return;
+                };
+                let focus: std::collections::HashSet<String> = [field.clone()].into();
+                let mut tidy = crate::types::TidyEnv::new();
+                let w = self.display_form(&mut tidy, w);
+                let wo = self.display_form(&mut tidy, wo);
+                let mut ctx = self.diagnostic_printer(focus);
+                *with = ShownType::Text(ctx.format_type(&w));
+                *without = ShownType::Text(ctx.format_type(&wo));
+            }
+            TypeError::BranchMismatch { left, right, .. }
+            | TypeError::ArrayElementMismatch { left, right, .. } => {
+                if let (ShownType::Type(l), ShownType::Type(r)) = (&*left, &*right) {
+                    let (a, b) = self.show_pair(l, r);
+                    *left = ShownType::Text(a);
+                    *right = ShownType::Text(b);
+                }
+            }
+            TypeError::RequiredBy { inner, .. } => self.render_type_error(inner),
+            _ => {}
+        }
     }
 }
 
@@ -1453,6 +1725,8 @@ mod tests {
         let a = Type::object([("editor", Type::object([("say", plain)]))]);
         let b = Type::object([("editor", Type::object([("say", method)]))]);
         let err = state.unify(span, &a, &b).unwrap_err();
+        let err = state.render_error(err);
+        let text_of = |f: &Option<ShownType>| f.as_ref().map(|f| f.text().into_owned());
         match err.as_type() {
             Some(TypeError::ThisMismatch {
                 member,
@@ -1461,11 +1735,9 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(member.as_deref(), Some("editor.say"));
-                assert_eq!(without_this.as_deref(), Some("(Number) => Number"));
+                assert_eq!(text_of(without_this).as_deref(), Some("(Number) => Number"));
                 assert!(
-                    with_this
-                        .as_deref()
-                        .is_some_and(|f| f.starts_with("(this: ")),
+                    text_of(with_this).is_some_and(|f| f.starts_with("(this: ")),
                     "{with_this:?}"
                 );
             }
@@ -1474,6 +1746,164 @@ mod tests {
         assert!(state.unify_path.is_empty(), "the path is unwound on errors");
         let text = err.to_string();
         assert!(text.contains("in member `editor.say`"), "{text}");
+    }
+
+    /// The member and its two types, of a mismatch deep in two records
+    /// (rendered: `expected`, `found`).
+    fn member_mismatch(err: IntyError) -> (Option<String>, String, String) {
+        match err.as_type() {
+            Some(TypeError::UnificationError {
+                member,
+                expected,
+                found,
+                ..
+            }) => (
+                member.clone(),
+                expected.text().into_owned(),
+                found.text().into_owned(),
+            ),
+            other => panic!("expected UnificationError, got {other:?}"),
+        }
+    }
+
+    /// Two large records alike but for one member's type, nested: the
+    /// error names that member and holds its types, not the records'.
+    fn records_differing_in_one_member() -> (Type, Type) {
+        let fields = |ask: Type| {
+            let mut fields: Vec<(String, Type)> =
+                (0..12).map(|i| (format!("f{i}"), Type::Number)).collect();
+            fields.push(("ask".to_string(), ask));
+            Type::object([(
+                "editor",
+                Type::object(fields.iter().map(|(n, t)| (n.as_str(), t.clone()))),
+            )])
+        };
+        (
+            fields(Type::simple_func(vec![Type::String], Type::Number)),
+            fields(Type::simple_func(vec![Type::Number], Type::Number)),
+        )
+    }
+
+    #[test]
+    fn unification_error_names_the_member() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let (expected, found) = records_differing_in_one_member();
+        let err = state.unify(span, &expected, &found).unwrap_err();
+        assert!(state.unify_path.is_empty(), "the path is unwound on errors");
+        let (member, e, f) = member_mismatch(state.render_error(err));
+        assert_eq!(member.as_deref(), Some("editor.ask"));
+        // The parameters differ: `ask`'s two types are shown.
+        assert_eq!(
+            (e.as_str(), f.as_str()),
+            ("(String) => Number", "(Number) => Number")
+        );
+    }
+
+    /// The same through `subsume` (a value passed where a type is
+    /// expected), whose first, speculative attempt raised the precise
+    /// error: it is kept, with expected and found the right way round.
+    #[test]
+    fn subsume_names_the_member() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let (expected, found) = records_differing_in_one_member();
+        let err = state.subsume(span, &found, &expected).unwrap_err();
+        let (member, e, f) = member_mismatch(state.render_error(err));
+        assert_eq!(member.as_deref(), Some("editor.ask"));
+        assert_eq!(
+            (e.as_str(), f.as_str()),
+            ("(String) => Number", "(Number) => Number")
+        );
+        let err = state.subsume(span, &found, &expected).unwrap_err();
+        let shown = state.render_error(err).to_string();
+        assert!(shown.contains("in member `editor.ask`"), "{shown}");
+        assert!(!shown.contains("f11"), "the records aren't shown: {shown}");
+    }
+
+    /// A member's type bound by the attempt that failed (`t` := `Number`
+    /// at `a`, then `t` against `String` at `b`) shows as it was then,
+    /// though the attempt's bindings are undone.
+    #[test]
+    fn subsume_member_error_keeps_the_attempts_bindings() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let t = state.fresh_type_var();
+        let expected = Type::object([("a", Type::Number), ("b", Type::String)]);
+        let found = Type::object([("a", t.clone()), ("b", t)]);
+        let err = state.subsume(span, &found, &expected).unwrap_err();
+        let (member, e, f) = member_mismatch(state.render_error(err));
+        assert_eq!(member.as_deref(), Some("b"));
+        assert_eq!((e.as_str(), f.as_str()), ("String", "Number"));
+    }
+
+    /// Past a function's parameters the path stops: the member is the
+    /// function, shown whole.
+    #[test]
+    fn member_path_stops_at_a_function() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let cb = |x: Type| {
+            Type::object([(
+                "cb",
+                Type::simple_func(vec![Type::object([("x", x)])], Type::Number),
+            )])
+        };
+        let (expected, found) = (cb(Type::String), cb(Type::Number));
+        let err = state.subsume(span, &found, &expected).unwrap_err();
+        let (member, e, f) = member_mismatch(state.render_error(err));
+        assert_eq!(member.as_deref(), Some("cb"));
+        assert_eq!(
+            (e.as_str(), f.as_str()),
+            ("({x: String}) => Number", "({x: Number}) => Number")
+        );
+    }
+
+    /// A field missing deep in two records, and a `this` mismatch, through
+    /// `subsume` too: named at their member.
+    #[test]
+    fn subsume_names_the_member_of_other_mismatches() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let expected = Type::object([(
+            "inner",
+            Type::Row(RowType {
+                props: [
+                    ("a".into(), FieldEntry::pre(Type::Number)),
+                    ("b".into(), FieldEntry::absent(Type::Number)),
+                ]
+                .into_iter()
+                .collect(),
+                tail: crate::types::RowTail::Closed,
+            }),
+        )]);
+        let found = Type::object([(
+            "inner",
+            Type::object([("a", Type::Number), ("b", Type::Number)]),
+        )]);
+        let err = state.subsume(span, &found, &expected).unwrap_err();
+        match state.render_error(err).as_type() {
+            Some(TypeError::FieldPresenceMismatch { member, field, .. }) => {
+                assert_eq!((member.as_deref(), field.as_str()), (Some("inner"), "b"));
+            }
+            other => panic!("expected FieldPresenceMismatch, got {other:?}"),
+        }
+
+        let plain = Type::func(Type::ArrowThis, vec![Type::Number], Type::Number);
+        let method = Type::func(
+            Type::object([("n", Type::Number)]),
+            vec![Type::Number],
+            Type::Number,
+        );
+        let a = Type::object([("editor", Type::object([("say", plain)]))]);
+        let b = Type::object([("editor", Type::object([("say", method)]))]);
+        let err = state.subsume(span, &b, &a).unwrap_err();
+        match state.render_error(err).as_type() {
+            Some(TypeError::ThisMismatch { member, .. }) => {
+                assert_eq!(member.as_deref(), Some("editor.say"));
+            }
+            other => panic!("expected ThisMismatch, got {other:?}"),
+        }
     }
 
     #[test]

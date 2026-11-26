@@ -154,7 +154,17 @@ impl InferState {
     }
 
     /// Infer the type of a program, returning both the type and the final environment.
+    /// Its error, like those it records, is rendered (`render_error`).
     pub fn infer_program_with_env(
+        &mut self,
+        env: &TypeEnv,
+        program: &Program,
+    ) -> InferResult<(Type, TypeEnv)> {
+        self.infer_program_unrendered(env, program)
+            .map_err(|e| self.render_error(e))
+    }
+
+    fn infer_program_unrendered(
         &mut self,
         env: &TypeEnv,
         program: &Program,
