@@ -166,8 +166,10 @@ fn lay_out_annotation(text: &str, fit: &Fit) -> Option<Laid> {
         })?),
         "const" | "let" | "var" => {
             let colon = top_level_find(text, |t, i| t[i..].starts_with(':'))?;
-            // Several declarators: left as they are.
-            if split_top(&text[colon + 1..], ',').len() > 1 {
+            // Several declarators: left as they are. Counted as the
+            // annotation reader counts them, as a scheme's `where`
+            // constraints are also separated by top-level commas.
+            if read_types(&format!("/** {text} */"))?.len() > 1 {
                 return None;
             }
             Some(colon)
@@ -405,6 +407,16 @@ mod tests {
         assert_eq!(
             fmt(src, 40),
             "/** function sideView(\n *   b: Builder,\n *   v: ScoreView,\n *   c: Cached,\n * ) => Undefined */\nfunction sideView(b, v, c) {}\n"
+        );
+    }
+
+    #[test]
+    fn a_constrained_scheme_is_laid_out_one_parameter_per_line() {
+        // The `where` constraints' commas are not declarators'.
+        let src = "/** const f: <a, b> where a has {length: b} => (a, (a) => b, Number) => b */\nconst f;\n";
+        assert_eq!(
+            fmt(src, 60),
+            "/** const f: <a, b> where a has {length: b} => (\n *   a,\n *   (a) => b,\n *   Number,\n * ) => b */\nconst f;\n"
         );
     }
 

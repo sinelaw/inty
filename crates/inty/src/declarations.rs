@@ -84,7 +84,17 @@ pub fn emit_declarations_with_flavor(module: &CheckedModule, flavor: Declaration
             }
         }
     }
-    out
+    match flavor {
+        // Long declarations laid out one parameter, field or union member
+        // per line, as `inty fmt` lays out written ones (which keeps any
+        // it can't read back as the same type on one line).
+        DeclarationFlavor::Inty => crate::frontends::javascript::format::format_annotations(
+            &out,
+            crate::frontends::javascript::format::DEFAULT_WIDTH,
+        )
+        .unwrap_or(out),
+        DeclarationFlavor::Ts => out,
+    }
 }
 
 fn resolve_scheme(entry: &ExportEntry, env: &TypeEnv) -> Option<TypeScheme> {
@@ -358,6 +368,53 @@ mod tests {
         let module = CheckedModule::new(env, exports);
         let out = emit_declarations(&module);
         assert_eq!(out, "/** const id: (String) => String */\nconst id;\n");
+    }
+
+    #[test]
+    fn a_long_declaration_is_laid_out_one_parameter_per_line() {
+        use crate::stdlib::load_lib;
+        let ty = Type::simple_func(
+            vec![
+                Type::String,
+                Type::Number,
+                Type::Boolean,
+                Type::simple_func(vec![Type::String], Type::Undefined),
+                Type::simple_func(vec![Type::Number, Type::String], Type::Undefined),
+                Type::simple_func(vec![], Type::Undefined),
+            ],
+            Type::Number,
+        );
+        let env = make_env_with("promptSpec", ty);
+        let exports = vec![ExportEntry {
+            exported: "promptSpec".to_string(),
+            binding: ExportBinding::Local("promptSpec".to_string()),
+        }];
+        let module = CheckedModule::new(env, exports);
+        let out = emit_declarations(&module);
+        assert_eq!(
+            out,
+            "/** const promptSpec: (\n \
+             *   String,\n \
+             *   Number,\n \
+             *   Boolean,\n \
+             *   (String) => Undefined,\n \
+             *   (Number, String) => Undefined,\n \
+             *   () => Undefined,\n \
+             * ) => Number */\n\
+             const promptSpec;\n"
+        );
+        // The `.d.ts` flavor is left on one line.
+        let ts = emit_declarations_with_flavor(&module, DeclarationFlavor::Ts);
+        assert_eq!(ts.lines().count(), 1);
+        // And the laid-out declaration reads back as the same type.
+        let base = crate::builtins::initial_env();
+        let mut state = crate::infer::InferState::new();
+        let loaded = load_lib(&mut state, base, &out).unwrap();
+        let scheme = loaded.lookup("promptSpec").unwrap();
+        assert_eq!(
+            PrettyContext::new().format_scheme(scheme),
+            "(String, Number, Boolean, (String) => Undefined, (Number, String) => Undefined, () => Undefined) => Number"
+        );
     }
 
     #[test]
