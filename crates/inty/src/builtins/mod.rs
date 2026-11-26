@@ -1054,7 +1054,9 @@ impl InferState {
             .pred
             .as_has_prop()
             .expect("default_has_prop: a HasProp constraint");
-        let row = Type::object_open([(name, result.clone())], self.fresh_flex());
+        let tail = self.fresh_flex();
+        self.note_field_read(&tail, name, result);
+        let row = Type::object_open([(name, result.clone())], tail);
         self.unify(c.span, recv, &row)?;
         if let Some(this) = c.pred.method_this() {
             self.unify_this(c.span, this, recv)?;

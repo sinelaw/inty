@@ -68,6 +68,16 @@
   reported, instead of when raised: a speculative attempt's error costs
   no rendering (and keeps no types where it can't be seen), so `subsume`
   can keep it, which is what lets it name the member.
+- A mismatch between two types says where each side's part came from,
+  as labels in the files they are in: for a function that reads `this`
+  against one that doesn't, the call that made it a method (`o.ask(…)`,
+  which passed its object as `this`) and the field of the object literal
+  that is a plain function (or a method); for a member mismatch, the
+  call or property read that gave the inferred side its type and the
+  field of the object literal (passed directly, or by the `const` bound
+  to it) that gave the other. A function's `this` bound to its object
+  makes a recursive type: the type remembers the calls, so they are
+  found after the class is generalised and used from another module.
 
 ### DOM declarations
 
@@ -181,6 +191,18 @@ unterminated-comment error.
 
 ### Fixes
 
+- Unifying recursive types always ends, with no depth limit: the "Type
+  too complex: unifying these recursive types did not terminate" error is
+  gone. Its cause was a row whose tail led back to itself (`ρ = {| ρ}`, met
+  where two mutually recursive classes' rows meet), which inty made into
+  the recursive type `μX. {| X}`: a row that never ends, which extended
+  any row it was unified with forever. A row ending in itself is now no
+  recursive type: with no fields the equation says nothing, and
+  `ρ = {F | ρ}` gives `ρ` the fields `F` and a new tail. A recursive type
+  met by a variable is compared once, keyed by the variable, whatever its
+  type looks like by then; together with the pairs of bound variables
+  already compared once, unification visits finitely many pairs of nodes
+  (Huet's unification of rational trees).
 - `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
   string literal type (`"a, b"`) or after an arrow inside type arguments
   (`Pair<() => A, B>`).

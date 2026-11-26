@@ -236,6 +236,28 @@ pub struct InferState {
 
     /// Type origins for error reporting.
     pub type_origins: HashMap<TVarName, TypeOrigin>,
+    /// The variables of `type_origins` with an origin that makes a
+    /// function a method ([`TypeOrigin::makes_method`]: a call that
+    /// passes its object as `this`, a body that reads `this`) whose
+    /// class may still be bound to a recursive type: see
+    /// [`Self::method_origins`].
+    pub(crate) method_origin_vars: Vec<crate::types::TVarId>,
+    /// For a recursive type made when a function's `this` was bound to
+    /// its object (`create_recursive_type`): what made the function a
+    /// method. A generalised type keeps the recursive type, not the
+    /// variables the origins are recorded on.
+    pub(crate) rec_origins: HashMap<crate::types::TypeId, Vec<TypeOrigin>>,
+    /// The fields a property read added to an open record (`o.name`, with
+    /// `o` of a type not known yet): the tail the record had then, the
+    /// field, and the read. A generalised record keeps its tail, not the
+    /// variable the field's origin is on: see [`Self::row_member_origin`].
+    pub(crate) row_field_origins: Vec<(crate::types::TVarId, String, TypeOrigin)>,
+    /// The fields of the object literals `const`s are bound to: each
+    /// field's path (`a.b` for a field of a nested literal), its span,
+    /// and, for a function, whether it reads `this`. A mismatch in a
+    /// member of a value passed by name points at the field.
+    pub(crate) literal_fields:
+        HashMap<crate::ast::resolve::BindingId, std::sync::Arc<Vec<LiteralField>>>,
 
     /// Non-fatal warnings collected during inference.
     /// Currently used by switch-exhaustiveness; consumers can iterate
@@ -447,7 +469,7 @@ pub struct InferState {
     /// single `unify` invocation but lives on the state so it threads
     /// through `&mut self` without rewriting the call signature.
     pub(in crate::infer) unfold_assumptions: Vec<UnfoldAssumption>,
-    /// Current nesting of [`Self::unify`] (see `MAX_UNIFY_DEPTH`).
+    /// Current nesting of [`Self::unify`] (0: no unification under way).
     pub(in crate::infer) unify_depth: usize,
     /// The properties [`Self::unify`] is inside, outermost first: the
     /// field of a record it is comparing, and the field of that, … A
@@ -491,12 +513,11 @@ pub(in crate::infer) enum UnfoldAssumption {
     /// first unfold's assumption one level down, and accept a function
     /// whose second call returns a function as one returning a number.
     NamedRow(TypeId, Vec<Type>, Type),
-    /// Two open rows' tail variables (smaller id first) are being
-    /// unified. A cycle in the substitution — `ρ₁ ↦ {… | ρ₂}` and
-    /// `ρ₂ ↦ {… | ρ₁}`, which `zonk` shows as free tails — otherwise
-    /// makes every attempt re-bind an already-bound tail and unify the
-    /// same pair again, without end.
-    RowTails(TVarId, TVarId),
+    /// A recursive type `Named(id, args)` and the variable (its root)
+    /// bound to the type it is being unified with. The variable is the
+    /// node: met again, by whatever type it has been bound to since (a
+    /// row extended with fresh tails), it is the same goal.
+    VarNamed(TVarId, TypeId, Vec<Type>),
 }
 
 /// State captured by [`InferState::snapshot_inference`] and consumed
@@ -586,6 +607,10 @@ impl InferState {
             expr_types: None,
             instantiations: None,
             type_origins: HashMap::new(),
+            method_origin_vars: Vec::new(),
+            rec_origins: HashMap::new(),
+            row_field_origins: Vec::new(),
+            literal_fields: HashMap::new(),
             warnings: Vec::new(),
             errors: Vec::new(),
             error_sources: Vec::new(),
@@ -718,6 +743,13 @@ impl InferState {
 
     /// Record the origin of a type variable (only if higher priority than existing)
     pub fn record_origin(&mut self, var: TVarName, origin: TypeOrigin) {
+        if let (TVarName::Flex(id), true) = (&var, origin.makes_method()) {
+            self.method_origin_vars.push(*id);
+            let n = self.method_origin_vars.len();
+            if n >= 4096 && n.is_power_of_two() {
+                self.prune_method_origin_vars();
+            }
+        }
         self.type_origins
             .entry(var)
             .and_modify(|existing| {
@@ -769,6 +801,224 @@ impl InferState {
             Type::Named(_, args) => args.iter().find_map(|a| self.find_origin_in_type(a)),
             Type::Union(members) => members.iter().find_map(|m| self.find_origin_in_type(m)),
             _ => None,
+        }
+    }
+
+    /// The root of `id`'s class, read without compressing paths (for
+    /// `&self` readers); `None` for a variable the table doesn't hold.
+    fn class_root(&self, id: crate::types::TVarId) -> Option<crate::types::TVarId> {
+        use super::var_table::Resolution;
+        let mut cur = id;
+        for _ in 0..=self.var_table.len() {
+            match self.var_table.peek(cur)? {
+                Resolution::Link(next) => cur = *next,
+                _ => return Some(cur),
+            }
+        }
+        None
+    }
+
+    /// The recursive type `root` is bound to, if it is bound to one.
+    fn bound_rec_type(&self, root: crate::types::TVarId) -> Option<crate::types::TypeId> {
+        match self.var_table.bound(root)? {
+            Type::Named(id, _) => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// What made a function whose `this` is `this` a method (see
+    /// [`TypeOrigin::makes_method`]): the origins recorded on the
+    /// variables unified with it, and on the recursive type it is (a
+    /// method's `this` is its object, whose type holds the method).
+    /// Sorted by where they are, at most [`MAX_ORIGINS`].
+    pub(crate) fn method_origins(&self, this: &Type) -> Vec<TypeOrigin> {
+        let (root, rec) = match this {
+            Type::Var(TVarName::Flex(v)) => match self.class_root(*v) {
+                Some(r) => (Some(r), self.bound_rec_type(r)),
+                None => return Vec::new(),
+            },
+            Type::Named(id, _) => (None, Some(*id)),
+            _ => return Vec::new(),
+        };
+        let mut out: Vec<TypeOrigin> = rec
+            .and_then(|id| self.rec_origins.get(&id))
+            .cloned()
+            .unwrap_or_default();
+        for id in &self.method_origin_vars {
+            let Some(r) = self.class_root(*id) else {
+                continue;
+            };
+            if Some(r) == root || (rec.is_some() && self.bound_rec_type(r) == rec) {
+                if let Some(o) = self.type_origins.get(&TVarName::Flex(*id)) {
+                    out.push(o.clone());
+                }
+            }
+        }
+        tidy_origins(&mut out);
+        out
+    }
+
+    /// A recursive type `type_id` was made for the variable a function's
+    /// `this` was bound to (`create_recursive_type`): it keeps what made
+    /// the function a method, which a generalised type, holding the
+    /// recursive type rather than the variable, would otherwise lose.
+    /// `method_origin_vars` is pruned then, so it stays short.
+    pub(crate) fn note_rec_origins(&mut self, type_id: crate::types::TypeId) {
+        if self.method_origin_vars.is_empty() {
+            return;
+        }
+        let origins = self.method_origins(&Type::Named(type_id, Vec::new()));
+        if !origins.is_empty() {
+            self.rec_origins.insert(type_id, origins);
+        }
+        self.prune_method_origin_vars();
+    }
+
+    /// Outside a speculative attempt (whose bindings may be undone), drop
+    /// the variables no longer free from `method_origin_vars`, giving
+    /// the origins of those bound to a recursive type to it.
+    fn prune_method_origin_vars(&mut self) {
+        if self.quiet > 0 {
+            return;
+        }
+        let mut keep = Vec::new();
+        for id in std::mem::take(&mut self.method_origin_vars) {
+            let Some(root) = self.class_root(id) else {
+                continue;
+            };
+            if self.var_table.bound(root).is_none() {
+                keep.push(id);
+            } else if let Some(rec) = self.bound_rec_type(root) {
+                if let Some(o) = self.type_origins.get(&TVarName::Flex(id)).cloned() {
+                    let list = self.rec_origins.entry(rec).or_default();
+                    list.push(o);
+                    tidy_origins(list);
+                }
+            }
+        }
+        self.method_origin_vars = keep;
+    }
+
+    /// A property read of `field` added it to an open record with the
+    /// tail `tail` (see `row_field_origins`): record where, if the field's
+    /// type `ty` has an origin.
+    pub(crate) fn note_field_read(&mut self, tail: &TVarName, field: &str, ty: &Type) {
+        if let (TVarName::Flex(tail), Type::Var(v)) = (tail, ty) {
+            if let Some(origin) = self.type_origins.get(v).cloned() {
+                self.row_field_origins
+                    .push((*tail, field.to_string(), origin));
+            }
+        }
+    }
+
+    /// The tail a record ends in: its open tail, through the records it
+    /// was extended with (`ρ := {f: T | ρ'}`); `None` for a closed one.
+    fn row_end(&self, mut tail: crate::types::TVarId) -> Option<crate::types::TVarId> {
+        for _ in 0..10_000 {
+            let root = self.class_root(tail)?;
+            match self.var_table.bound(root) {
+                None => return Some(root),
+                Some(Type::Row(row)) => match &row.tail {
+                    RowTail::Open(TVarName::Flex(next)) => tail = *next,
+                    _ => return None,
+                },
+                Some(_) => return None,
+            }
+        }
+        None
+    }
+
+    /// Where the member `path` (`a.b`) of the type `whole` got its type,
+    /// when a property read added it to an open record (see
+    /// `row_field_origins`): the record's tail leads to `whole`'s.
+    pub(crate) fn row_member_origin(&self, whole: &Type, path: &str) -> Option<TypeOrigin> {
+        if self.row_field_origins.is_empty() {
+            return None;
+        }
+        let head = |t: &Type| -> Option<Type> {
+            let mut t = t.clone();
+            for _ in 0..64 {
+                match t {
+                    Type::Var(TVarName::Flex(v)) => {
+                        t = self.var_table.bound(self.class_root(v)?)?.clone()
+                    }
+                    Type::Named(id, ref args) if !self.is_nominal_type(id) => {
+                        t = self.unroll_named(id, args)?
+                    }
+                    _ => return Some(t),
+                }
+            }
+            None
+        };
+        let mut segments: Vec<&str> = path.split('.').collect();
+        let last = segments.pop()?;
+        let mut ty = head(whole)?;
+        for seg in segments {
+            let Type::Row(row) = &ty else { return None };
+            ty = head(&row.props.get(&crate::types::PropName(seg.to_string()))?.ty)?;
+        }
+        let Type::Row(row) = &ty else { return None };
+        let RowTail::Open(TVarName::Flex(tail)) = &row.tail else {
+            return None;
+        };
+        let end = self.row_end(*tail)?;
+        self.row_field_origins
+            .iter()
+            .find(|(start, field, _)| field == last && self.row_end(*start) == Some(end))
+            .map(|(_, _, origin)| origin.clone())
+    }
+
+    /// The field of the value `arg` (an object literal, or a `const`
+    /// bound to one) at the member path `path`, or the innermost one
+    /// enclosing it.
+    pub(crate) fn literal_field(&self, arg: &crate::ast::Expr, path: &str) -> Option<LiteralField> {
+        let found;
+        let fields: &[LiteralField] = match arg {
+            crate::ast::Expr::Object { properties, .. } => {
+                let mut out = Vec::new();
+                collect_literal_fields(properties, "", &mut out);
+                found = out;
+                &found
+            }
+            crate::ast::Expr::Ident { name, span } => match self.key_of(*span, name) {
+                crate::infer::env::Key::Local(id) => self.literal_fields.get(&id)?,
+                crate::infer::env::Key::Name(_) => return None,
+            },
+            _ => return None,
+        };
+        let encloses = |f: &&LiteralField| {
+            path == f.path
+                || path
+                    .strip_prefix(f.path.as_str())
+                    .is_some_and(|rest| rest.starts_with('.'))
+        };
+        let field = fields
+            .iter()
+            .filter(encloses)
+            .max_by_key(|f| f.path.len())?;
+        let mut field = field.clone();
+        if field.path != path {
+            // A function's `this` is about the field itself only.
+            field.reads_this = None;
+        }
+        Some(field)
+    }
+
+    /// Record the fields of the object literal `init` the binding
+    /// declared at `span` as `name` is bound to (see `literal_fields`).
+    pub(crate) fn record_literal_fields(
+        &mut self,
+        span: Span,
+        name: &str,
+        init: &crate::ast::Expr,
+    ) {
+        let crate::ast::Expr::Object { properties, .. } = init else {
+            return;
+        };
+        if let crate::infer::env::Key::Local(id) = self.key_of(span, name) {
+            let mut fields = Vec::new();
+            collect_literal_fields(properties, "", &mut fields);
+            self.literal_fields.insert(id, std::sync::Arc::new(fields));
         }
     }
 
@@ -2379,6 +2629,13 @@ impl InferState {
                         .find_if_present(id)
                         .is_some_and(|r| methods.contains(&r)) =>
                 {
+                    self.record_origin(
+                        TVarName::Flex(id),
+                        TypeOrigin::MethodCall {
+                            method: String::new(),
+                            span,
+                        },
+                    );
                     self.unify_this(span, &this, &receiver)
                 }
                 Type::Var(v) if v.is_flex() => {
@@ -3124,6 +3381,57 @@ impl InferState {
     /// Check if a type variable occurs within a row type (for recursive type detection).
     /// Returns true if the variable occurs at the tail position of a row.
     /// (Walks through the substitution lazily, as [`Self::occurs_in`].)
+    /// The fields of the row `ty` when it ends in `var` (its tail is
+    /// `var`, through the rows, and recursive types' rows, its tail is
+    /// bound to): every field on the way, the first of each label. `None`
+    /// if it doesn't end in `var` (it ends in another variable, is closed,
+    /// or isn't a row).
+    ///
+    /// Binding `var` to such a row makes no recursive type: a row's tail
+    /// stands for the fields it doesn't list, so `ρ = {F | ρ}` says that
+    /// `ρ` has the fields `F`, `ρ := {F | ρ'}`, and with no fields says
+    /// nothing. (Made one, `μX. {F | X}` is a row that never ends:
+    /// unifying it with another row extends that one's tail forever.)
+    pub fn row_ends_in(
+        &self,
+        var: TVarId,
+        ty: &Type,
+    ) -> Option<std::collections::BTreeMap<crate::types::PropName, crate::types::FieldEntry>> {
+        let mut fields = std::collections::BTreeMap::new();
+        let mut seen_vars = std::collections::HashSet::new();
+        let mut seen_named = std::collections::HashSet::new();
+        let mut unrolled: Type;
+        let mut cur = ty;
+        loop {
+            match cur {
+                Type::Row(row) => {
+                    for (k, e) in &row.props {
+                        fields.entry(k.clone()).or_insert_with(|| e.clone());
+                    }
+                    match &row.tail {
+                        RowTail::Open(TVarName::Flex(id)) if *id == var => return Some(fields),
+                        RowTail::Open(TVarName::Flex(id)) => {
+                            cur = self.bound_unseen(*id, &mut seen_vars)?;
+                        }
+                        _ => return None,
+                    }
+                }
+                Type::Var(TVarName::Flex(id)) if *id == var => return Some(fields),
+                Type::Var(TVarName::Flex(id)) => {
+                    cur = self.bound_unseen(*id, &mut seen_vars)?;
+                }
+                Type::Named(id, args) if !self.is_nominal_type(*id) => {
+                    if !seen_named.insert(*id) {
+                        return None;
+                    }
+                    unrolled = self.unroll_named(*id, args)?;
+                    cur = &unrolled;
+                }
+                _ => return None,
+            }
+        }
+    }
+
     pub fn is_inside_row_type(&self, var: TVarId, ty: &Type) -> bool {
         // A variable's type is looked at once outside a row and once
         // inside one (where finding `var` means more).
@@ -3261,6 +3569,82 @@ fn with_callable_this(ty: &Type, this: Type) -> Type {
             Type::Row(row)
         }
         _ => ty.clone(),
+    }
+}
+
+/// At most this many origins are shown for one side of a mismatch.
+pub(crate) const MAX_ORIGINS: usize = 6;
+
+/// Sort `origins` by where they are, without repeats, at most
+/// [`MAX_ORIGINS`].
+pub(crate) fn tidy_origins(origins: &mut Vec<TypeOrigin>) {
+    origins.sort_by_key(|o| (o.span().start, o.span().end));
+    origins.dedup_by_key(|o| o.span());
+    origins.truncate(MAX_ORIGINS);
+}
+
+/// A field of an object literal (see `InferState::literal_fields`).
+#[derive(Debug, Clone)]
+pub(crate) struct LiteralField {
+    /// Its member path (`a.b` for `b` in a literal `a` holds).
+    pub path: String,
+    /// The whole field (`name: value`, or a method).
+    pub span: Span,
+    /// For a function: whether it reads `this` (a method or a
+    /// `function` whose body mentions `this`; an arrow function doesn't).
+    pub reads_this: Option<bool>,
+}
+
+/// The fields of an object literal, and of the literals its fields hold,
+/// in source order.
+fn collect_literal_fields(
+    properties: &[crate::ast::PropDef],
+    prefix: &str,
+    out: &mut Vec<LiteralField>,
+) {
+    use crate::ast::{Expr, PropDef, PropKey};
+    let name = |key: &PropKey| match key {
+        PropKey::Ident(s) | PropKey::String(s) => s.clone(),
+        PropKey::Number(n) => n.to_string(),
+    };
+    let path = |key: &PropKey| {
+        if prefix.is_empty() {
+            name(key)
+        } else {
+            format!("{prefix}.{}", name(key))
+        }
+    };
+    for prop in properties {
+        match prop {
+            PropDef::Property {
+                key, value, span, ..
+            } => {
+                let path = path(key);
+                let reads_this = match value {
+                    Expr::Function { arrow: true, .. } => Some(false),
+                    Expr::Function { body, .. } => {
+                        Some(crate::ast::free_idents::mentions_this_in_stmt(body))
+                    }
+                    _ => None,
+                };
+                out.push(LiteralField {
+                    path: path.clone(),
+                    span: *span,
+                    reads_this,
+                });
+                if let Expr::Object { properties, .. } = value {
+                    collect_literal_fields(properties, &path, out);
+                }
+            }
+            PropDef::Method {
+                key, body, span, ..
+            } => out.push(LiteralField {
+                path: path(key),
+                span: *span,
+                reads_this: Some(crate::ast::free_idents::mentions_this_in_stmt(body)),
+            }),
+            _ => {}
+        }
     }
 }
 

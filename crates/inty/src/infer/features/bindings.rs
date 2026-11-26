@@ -661,6 +661,10 @@ impl InferState {
             // can recover predicates after the scope is gone.
             self.record_decl_scheme(decl.span, scheme.clone());
             new_env = self.bind(&new_env, decl.span, &decl.name, scheme, mutability)?;
+            // (An annotated binding's type is its annotation's.)
+            if let (Some(init), None, None) = (&decl.init, &decl.type_annotation, &decl.type_ast) {
+                self.record_literal_fields(decl.span, &decl.name, init);
+            }
             if is_declaration {
                 if let Some(key) = new_env.key_of_name(&decl.name) {
                     self.ambient.insert(key.clone());
