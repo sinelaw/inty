@@ -211,6 +211,11 @@ unterminated-comment error.
 
 ### Fixes
 
+- A field written after a spread in an object literal is checked against
+  the expected record's field, as it is without the spread: a callback
+  given to `{ ...ui.BUTTON, onClick: () => { … } }` may take fewer
+  parameters than its slot passes. It was inferred on its own and then
+  compared, so `(s) => …` didn't fit `(String, Number) => Undefined`.
 - Two recursive aliases being compared are assumed equal, while compared,
   as the instances they are, arguments included. Keyed by their ids alone,
   `P<Number>` agreeing with `Q<Number>` let `P<String>` agree with

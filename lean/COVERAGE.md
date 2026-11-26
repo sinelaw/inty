@@ -34,7 +34,7 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.tryCatch` | `infer_stmt_try` |
 | `HasTypeS.tryFinally` | `infer_stmt_try` |
 | `HasTypeS.obj` | `infer_object`, `infer_object_member` |
-| `HasTypeS.objCheck` | `try_check_object` |
+| `HasTypeS.objCheck` | `try_check_object`, `infer_object_expecting` |
 | `HasTypeS.cls` | `infer_function` (a class lowers to a factory function) |
 | `HasTypeS.ctor` | `infer_function` |
 | `HasTypeS.new_` | `infer_new` |
