@@ -223,3 +223,26 @@ fn hints_and_hover_show_one_naming_whatever_is_asked() {
         );
     }
 }
+
+#[test]
+fn types_print_by_their_alias_names() {
+    // As diagnostics print them: a type that is an alias's body, its
+    // parameters instantiated, by the alias's name.
+    let out = js(
+        "/** type Item = {label: String, run: (() => Undefined) | Null} */\n\
+                  /** type Box<T> = {value: T} */\n\
+                  /** function matching(items: Item[], q: String) => Item[] */\n\
+                  function matching(items, q) { return items.filter((it) => it.label === q); }\n\
+                  const hits = matching([], \"x\");\n\
+                  const box = { value: hits };\n\
+                  /** function unbox(b: Box<Number>) => Number */\n\
+                  function unbox(b) { return b.value; }\n",
+    );
+    assert!(
+        out.contains("function matching(items⟨: Item[]⟩, q⟨: String⟩)⟨-> Item[]⟩"),
+        "{out}"
+    );
+    assert!(out.contains("const hits⟨: Item[]⟩"), "{out}");
+    assert!(out.contains("const box⟨: Box<Item[]>⟩"), "{out}");
+    assert!(out.contains("unbox(b⟨: Box<Number>⟩)"), "{out}");
+}

@@ -2380,6 +2380,30 @@ impl InferState {
             .collect()
     }
 
+    /// The printer for the types a user is shown (diagnostics, and the
+    /// language server's hover and hints): brands and recursive aliases
+    /// by their names, and a type that is another alias's body, its
+    /// parameters instantiated, by that alias's name (`PaletteItem`,
+    /// `DomEvent<a>`, rather than their records). An alias is structural,
+    /// so a type equal to its body is that alias, wherever it came from.
+    pub fn printer(&self) -> crate::types::PrettyContext {
+        let mut aliases: Vec<(String, Vec<u32>, Type)> = self
+            .type_aliases
+            .iter()
+            .filter(|(_, d)| d.nominal_id.is_none() && d.rec_id.is_none() && !d.open_arity)
+            .filter(|(_, d)| matches!(d.body, Type::Row(_) | Type::Union(_) | Type::Maybe(..)))
+            .map(|(n, d)| (n.clone(), d.params.clone(), d.body.clone()))
+            .collect();
+        // Deterministic: of aliases with equal bodies, the first by name
+        // (`DomEvent` first, over its synonyms `PointerEvent`, …).
+        aliases.sort_by(|a, b| {
+            let rank = |n: &str| if n == "DomEvent" { 0 } else { 1 };
+            (rank(&a.0), &a.0).cmp(&(rank(&b.0), &b.0))
+        });
+        crate::types::PrettyContext::with_nominal_names(self.nominal_names())
+            .naming_aliases(aliases)
+    }
+
     /// Whether `id` refers to a declared nominal (branded) type rather
     /// than an auto-generated equi-recursive type. Drives unification:
     /// nominal types never unroll for identity.
