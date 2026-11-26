@@ -56,6 +56,7 @@ pub(in crate::infer) fn function_decl_parts(
                     params,
                     body,
                     type_annotation,
+                    name_span: _,
                     span,
                 },
             ..
@@ -232,16 +233,8 @@ fn hoisted_name_span(stmt: &Stmt, name: &str, span: Span) -> Span {
     if let Some((decl, ..)) = const_function_decl(stmt) {
         return decl.span;
     }
-    if let Stmt::FunctionDecl { name_span, .. } = stmt {
-        return crate::ast::function_name_span(*name_span, span, name);
-    }
-    let keyword_len = if matches!(stmt, Stmt::Export { .. }) {
-        "export function ".len()
-    } else {
-        "function ".len()
-    };
-    let name_offset = span.start + keyword_len;
-    Span::new(name_offset, name_offset + name.len())
+    stmt.function_name_span()
+        .unwrap_or_else(|| crate::ast::function_name_span(None, span, name))
 }
 
 impl InferState {

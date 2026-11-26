@@ -212,6 +212,7 @@ fn read_module(
                     params,
                     body,
                     type_annotation,
+                    name_span,
                     span,
                 } => {
                     module
@@ -223,7 +224,7 @@ fn read_module(
                         body: body.clone(),
                         type_annotation: type_annotation.clone(),
                         return_type_ast: None,
-                        name_span: None,
+                        name_span: *name_span,
                         span: *span,
                     });
                 }

@@ -1645,6 +1645,7 @@ fn unexported(stmt: &Stmt) -> Stmt {
             params,
             body,
             type_annotation,
+            name_span,
             span,
         } => Stmt::FunctionDecl {
             name: name.clone(),
@@ -1652,7 +1653,7 @@ fn unexported(stmt: &Stmt) -> Stmt {
             body: body.clone(),
             type_annotation: type_annotation.clone(),
             return_type_ast: None,
-            name_span: None,
+            name_span: *name_span,
             span: *span,
         },
         ExportDecl::Default {

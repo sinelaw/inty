@@ -173,7 +173,10 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
     program.type_aliases = type_aliases;
 
     let mut state = InferState::new();
-    state.load_type_aliases(&program.type_aliases)?;
+    state.load_type_aliases(&program.type_aliases);
+    if let Some(e) = state.errors.first() {
+        return Err(e.clone());
+    }
     state.resolution =
         crate::ast::resolve::Resolution::of_program(&program.statements, program.language);
     let env = initial_env();

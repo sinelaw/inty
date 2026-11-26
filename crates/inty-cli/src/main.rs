@@ -11,8 +11,6 @@ use std::time::Instant;
 use inty::ast::pretty::print_program_with;
 use inty::diagnostics::{print_error, print_error_in, print_error_plain, print_warning_in};
 use inty::error::{IntyError, LocatedError};
-use inty::frontends::javascript::lexer::{Scanner, Token};
-use inty::frontends::javascript::parser::Parser;
 use inty::frontends::Language;
 use inty::infer::{decorate_with_classes, InferState, TypeEnv};
 use inty::stdlib::{initial_env_with_stdlib, load_lib};
@@ -947,8 +945,6 @@ AUTHOR:
     );
 }
 
-/// Lex and parse JavaScript, threading JSDoc type annotations and aliases
-/// off the scanner into the program (the other frontends don't have them).
 /// Search roots for Python's absolute imports (stubs / site-packages),
 /// read from the `INTY_PYTHONPATH` environment variable. Entries are
 /// separated by the platform path separator (`:` on Unix, `;` on
@@ -961,25 +957,6 @@ fn python_search_paths() -> Vec<std::path::PathBuf> {
             .collect(),
         None => Vec::new(),
     }
-}
-
-fn parse_javascript(source: &str) -> Result<inty::ast::Program, IntyError> {
-    let mut scanner = Scanner::new(source);
-    let mut tokens = Vec::new();
-    loop {
-        let tok = scanner.next_token()?;
-        let is_eof = matches!(tok.value, Token::Eof);
-        tokens.push(tok);
-        if is_eof {
-            break;
-        }
-    }
-    let type_annotations = scanner.type_annotations().to_vec();
-    let type_aliases = scanner.type_aliases().to_vec();
-    let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
-    let mut program = parser.parse_program()?;
-    program.type_aliases = type_aliases;
-    Ok(program)
 }
 
 fn run_inference(
@@ -1019,24 +996,12 @@ fn check_source(
         source: None,
     };
 
-    // Parsing — dispatch on the frontend. JavaScript keeps its bespoke
-    // path (JSDoc type annotations and aliases come off the lexer); the
-    // other frontends lower straight to the shared AST.
-    let program = match lang {
-        Language::JavaScript => match parse_javascript(source) {
-            Ok(p) => p,
-            Err(e) => {
-                errors.push(entry_error(e));
-                return Err(errors);
-            }
-        },
-        other => match inty::frontends::parse(other, source) {
-            Ok(p) => p,
-            Err(e) => {
-                errors.push(entry_error(e));
-                return Err(errors);
-            }
-        },
+    let program = match inty::frontends::parse(lang, source) {
+        Ok(p) => p,
+        Err(e) => {
+            errors.push(entry_error(e));
+            return Err(errors);
+        }
     };
 
     // Resolve imports relative to the file's parent directory before
@@ -1171,16 +1136,9 @@ fn check_source(
                 duration: started.elapsed(),
             })
         }
-        Err(first) => {
-            // `first` is usually also at the head of `collected`, so use
-            // the accumulated list as-is to avoid duplicating it. An error
-            // raised before any statement was checked (a type alias that
-            // doesn't parse) is only in `first`.
-            if collected.is_empty() {
-                errors.push(entry_error(first));
-            } else {
-                errors.extend(collected);
-            }
+        Err(_first) => {
+            // `_first` heads `collected`.
+            errors.extend(collected);
             Err(errors)
         }
     }

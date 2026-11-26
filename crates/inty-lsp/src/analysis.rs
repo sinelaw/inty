@@ -5,8 +5,6 @@ use lsp_types::{CompletionItem, CompletionItemKind};
 
 use inty::ast::{Expr, ImportSpecifier, Program, Stmt};
 use inty::error::IntyError;
-use inty::frontends::javascript::lexer::{Scanner, Token};
-use inty::frontends::javascript::parser::Parser;
 use inty::frontends::Language;
 use inty::infer::{InferState, InferWarning, TypeEnv};
 use inty::span::Span;
@@ -32,53 +30,20 @@ impl Analysis {
         Self::check_lang(text, Language::JavaScript)
     }
 
-    /// Like [`Analysis::check`], but for an explicit frontend. The
-    /// JavaScript path carries JSDoc type annotations/aliases off the
-    /// lexer; the other frontends lower straight to the shared AST.
+    /// Like [`Analysis::check`], but for an explicit frontend.
     pub fn check_lang(text: &str, lang: Language) -> Self {
         let mut errors = Vec::new();
 
-        let program = match lang {
-            Language::JavaScript => {
-                // Lex.
-                let mut scanner = Scanner::new(text);
-                let mut tokens = Vec::new();
-                loop {
-                    match scanner.next_token() {
-                        Ok(tok) => {
-                            let is_eof = matches!(tok.value, Token::Eof);
-                            tokens.push(tok);
-                            if is_eof {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            errors.push(e);
-                            return Analysis::errors_only(errors);
-                        }
-                    }
-                }
-                // Parse.
-                let type_annotations = scanner.type_annotations().to_vec();
-                let type_aliases = scanner.type_aliases().to_vec();
-                let mut parser = Parser::new(tokens, type_annotations);
-                let mut program = match parser.parse_program() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        errors.push(e);
-                        return Analysis::errors_only(errors);
-                    }
-                };
-                program.type_aliases = type_aliases;
-                program
+        // Parse through the same entry point as the CLI, so the editor
+        // sees exactly the program the checker does (for JavaScript:
+        // JSDoc annotations and aliases, and the source text the
+        // parser's ASI and inline-annotation rules read).
+        let program = match inty::frontends::parse(lang, text) {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(e);
+                return Analysis::errors_only(errors);
             }
-            other => match inty::frontends::parse(other, text) {
-                Ok(p) => p,
-                Err(e) => {
-                    errors.push(e);
-                    return Analysis::errors_only(errors);
-                }
-            },
         };
 
         // Resolve identifiers (independent of type inference). We pass
@@ -1284,6 +1249,65 @@ const func = function() { return {id: '123', name: 'hello'}; };";
         let mut labels: Vec<_> = items.iter().map(|i| i.label.as_str()).collect();
         labels.sort();
         assert_eq!(labels, ["x", "y"]);
+    }
+
+    /// The name a declaration binds answers hover wherever the name
+    /// sits: after `export`, `export async`, `class`, or Lua's `local`.
+    #[test]
+    fn hover_finds_each_declared_name() {
+        let src = "export function f(a) { return a; }\n\
+                   export async function g() { return 1; }\n\
+                   class C { constructor() { this.n = 1; } }\n\
+                   export class D { constructor() { this.s = ''; } }\n";
+        let analysis = Analysis::check(src);
+        assert!(analysis.errors.is_empty(), "{:?}", analysis.errors);
+        for name in ["f", "g", "C", "D"] {
+            let at = [format!(" {name}("), format!(" {name} {{")]
+                .iter()
+                .find_map(|needle| src.find(needle.as_str()))
+                .unwrap()
+                + 1;
+            let hover = analysis
+                .hover_at(at)
+                .unwrap_or_else(|| panic!("hover on `{name}`"));
+            assert_eq!(hover.name, name);
+        }
+
+        let src = "local function add(a, b) return a + b end\n";
+        let analysis = Analysis::check_lang(src, Language::Lua);
+        let hover = analysis
+            .hover_at(src.find("add").unwrap())
+            .expect("hover on `add`");
+        assert_eq!(hover.name, "add");
+    }
+
+    /// The editor checks the program the CLI does: a `return` ends at
+    /// its line's end (ASI), which the parser decides from the source.
+    #[test]
+    fn parses_the_program_the_cli_checks() {
+        let src = "function f() {\n  return\n  1;\n}\n";
+        let analysis = Analysis::check(src);
+        let hover = analysis
+            .hover_at(src.find('f').unwrap())
+            .expect("hover on `f`");
+        assert_eq!(hover.type_str, "() => Undefined");
+    }
+
+    /// A type alias that doesn't parse is reported, and the rest of
+    /// the file is still checked and answers hover.
+    #[test]
+    fn a_bad_type_alias_is_reported_and_the_rest_answers() {
+        let src = "/** type S = { run: (String) => Item } */\nconst n = 1;\n";
+        let analysis = Analysis::check(src);
+        let shown: Vec<String> = analysis.errors.iter().map(|e| e.to_string()).collect();
+        assert!(
+            shown.iter().any(|e| e.contains("unknown type 'Item'")),
+            "{shown:?}"
+        );
+        let hover = analysis
+            .hover_at(src.find("n =").unwrap())
+            .expect("hover on `n`");
+        assert_eq!(hover.type_str, "Number");
     }
 
     /// `check_lang` routes to the right frontend: a Lua document parses

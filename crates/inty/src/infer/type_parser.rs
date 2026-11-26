@@ -467,11 +467,12 @@ impl<'a> TypeParser<'a> {
                 ) {
                     return Err(e);
                 }
-                // A named first parameter (`(b: Base) => …`) is only
-                // ever a function type: its error is about the
-                // parameter's type, which the grouped reading would
-                // misreport as "unknown type 'b'".
-                if self.named_param_at(start_pos) {
+                // A named first parameter (`(b: Base) => …`), or a
+                // parenthesised group followed by `=>`, is only ever a
+                // function type: its error is about the function's own
+                // types, which the grouped reading would misreport (as
+                // "unknown type 'b'", or as the `=>` after `(T)`).
+                if self.named_param_at(start_pos) || self.arrow_after_group(start_pos) {
                     return Err(e);
                 }
                 // Backtrack and try as grouped type for syntax errors.
@@ -491,6 +492,38 @@ impl<'a> TypeParser<'a> {
                 }
             }
         }
+    }
+
+    /// Whether the parenthesis at `pos` closes to be followed by `=>`:
+    /// a function type's parameter list, never a grouped type. Quoted
+    /// string-literal types are skipped, so a parenthesis inside one
+    /// doesn't count.
+    fn arrow_after_group(&self, pos: usize) -> bool {
+        let bytes = self.input.as_bytes();
+        let mut depth = 0usize;
+        let mut quote = None;
+        let mut i = pos;
+        while i < bytes.len() {
+            let c = bytes[i];
+            match quote {
+                Some(_) if c == b'\\' => i += 1,
+                Some(q) if c == q => quote = None,
+                Some(_) => {}
+                None => match c {
+                    b'"' | b'\'' => quote = Some(c),
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            return self.input[i + 1..].trim_start().starts_with("=>");
+                        }
+                    }
+                    _ => {}
+                },
+            }
+            i += 1;
+        }
+        false
     }
 
     /// Whether the parenthesis at `pos` opens a named parameter list:
@@ -1794,6 +1827,26 @@ mod tests {
                 "expected OptionalParameterFollowedByRequired, got: {:?}",
                 other
             ),
+        }
+    }
+
+    /// `(T) => R` is only ever a function type, so an error inside it
+    /// is the function's: an unknown type in its parameters or result
+    /// is named, not misreported as the grouped reading's stray `=>`.
+    #[test]
+    fn unknown_type_in_a_function_type_is_named() {
+        for src in [
+            "(String) => Item",
+            "(String) => Promise<Item[]>",
+            "{ source: (String) => Item }",
+            "(Item) => Number",
+            "(\")\") => Item",
+        ] {
+            let err = parse_type_annotation(src, Span::new(0, src.len()), 1000).unwrap_err();
+            assert!(
+                err.to_string().contains("unknown type 'Item'"),
+                "{src}: {err}"
+            );
         }
     }
 

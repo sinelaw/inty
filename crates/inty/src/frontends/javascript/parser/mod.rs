@@ -894,6 +894,7 @@ impl Parser {
                         params,
                         body,
                         type_annotation,
+                        name_span,
                         span,
                         ..
                     } => ExportDecl::Function {
@@ -901,6 +902,7 @@ impl Parser {
                         params,
                         body,
                         type_annotation,
+                        name_span,
                         span,
                     },
                     Stmt::Var {
@@ -1125,9 +1127,9 @@ impl Parser {
     fn parse_class_declaration_named(&mut self, forced_name: Option<String>) -> Result<Stmt> {
         let start = self.current_span().start;
         self.expect(&Token::Class)?;
-        let name = match forced_name {
-            Some(n) => n,
-            None => self.expect_ident()?,
+        let (name, name_span) = match forced_name {
+            Some(n) => (n, None),
+            None => (self.expect_ident()?, Some(self.prev_span())),
         };
         // `class Name;`, without a body: an external class, declared by a
         // `/** class Name(params) extends Base { members } */` annotation
@@ -1845,7 +1847,7 @@ impl Parser {
             body: Box::new(body_block),
             type_annotation: None,
             return_type_ast: None,
-            name_span: None,
+            name_span,
             span,
         })
     }
@@ -1882,6 +1884,7 @@ impl Parser {
         let func_start = self.current_span();
         self.advance(); // consume `function`
         let name = self.expect_ident()?;
+        let name_span = self.prev_span();
         let type_annotation = self.try_get_type_annotation_for_function(func_start, &name);
         self.expect(&Token::LParen)?;
         // Use `parse_parameters_with_prefix` so destructuring patterns
@@ -1911,6 +1914,7 @@ impl Parser {
                 params,
                 body,
                 type_annotation,
+                name_span: Some(name_span),
                 span: func_span,
             },
             span: func_span,

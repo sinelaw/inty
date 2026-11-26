@@ -331,10 +331,11 @@ impl Resolution {
                     name,
                     params,
                     body,
+                    name_span,
                     span,
                     ..
                 } => {
-                    let name_span = name_span_from_func(*span, name);
+                    let name_span = inty::ast::function_name_span(*name_span, *span, name);
                     self.declare(fn_scope, name, name_span, DefKind::Function);
                     self.visit_function_body(*span, params, body, scope);
                 }
@@ -750,8 +751,13 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
                 }
             }
             ExportDecl::Var { .. } => {} // Let/Const not hoisted.
-            ExportDecl::Function { name, span, .. } => {
-                let name_span = name_span_from_func(*span, name);
+            ExportDecl::Function {
+                name,
+                name_span,
+                span,
+                ..
+            } => {
+                let name_span = inty::ast::function_name_span(*name_span, *span, name);
                 r.declare(scope, name, name_span, DefKind::Function);
             }
             // Default / List / From don't introduce new local bindings,
@@ -820,13 +826,6 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
 fn name_span_from_decl(d: &VarDeclarator) -> Span {
     let len = d.name.len();
     Span::new(d.span.start, d.span.start.saturating_add(len))
-}
-
-/// FunctionDecl.span covers `function name(...) { ... }`. The keyword
-/// `function ` is 9 ASCII bytes, so the name starts at span.start + 9.
-fn name_span_from_func(decl: Span, name: &str) -> Span {
-    let start = decl.start.saturating_add("function ".len());
-    Span::new(start, start.saturating_add(name.len()))
 }
 
 fn span_contains(span: Span, offset: usize) -> bool {

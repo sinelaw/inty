@@ -89,11 +89,8 @@ pub fn compile(source: &str) -> std::result::Result<GoOutput, Vec<IntyError>> {
         state.instantiations = Some(HashMap::new());
         let result = state.infer_program_with_env(&env, &program);
         let mut errors: Vec<IntyError> = state.take_errors();
-        if let Err(e) = result {
-            if errors.is_empty() {
-                errors.push(e);
-            }
-        } else if errors.is_empty() {
+        // An `Err` result is the head of `errors`.
+        if result.is_ok() && errors.is_empty() {
             if let Err(e) = state.resolve_constraints() {
                 errors.push(e);
             }
