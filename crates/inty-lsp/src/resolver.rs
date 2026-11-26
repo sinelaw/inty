@@ -595,6 +595,9 @@ impl Resolution {
                 for a in arguments {
                     self.visit_expr(a, scope);
                 }
+                for (_, v) in expr.keyword_args() {
+                    self.visit_expr(v, scope);
+                }
             }
             Expr::Unary { argument, .. } => self.visit_expr(argument, scope),
             Expr::Binary { left, right, .. } => {

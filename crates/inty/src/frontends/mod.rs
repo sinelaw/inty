@@ -7,11 +7,12 @@
 //! Each frontend lowers its own surface syntax (and, where the syntax is
 //! richer than the type system can express, a deliberately limited subset
 //! of it) onto the same core nodes. JavaScript is just one frontend here;
-//! Lua and Python are peers.
+//! Lua and Python are peers, and Starlark is a dialect of the Python one.
 
 pub mod javascript;
 pub mod lua;
 pub mod python;
+pub mod starlark;
 
 use crate::ast::Program;
 use crate::error::Result;
@@ -22,6 +23,7 @@ pub enum Language {
     JavaScript,
     Lua,
     Python,
+    Starlark,
 }
 
 impl Language {
@@ -32,6 +34,7 @@ impl Language {
             "js" | "mjs" | "cjs" | "jsx" => Some(Language::JavaScript),
             "lua" => Some(Language::Lua),
             "py" | "pyi" => Some(Language::Python),
+            "star" | "sky" | "bzl" => Some(Language::Starlark),
             _ => None,
         }
     }
@@ -52,5 +55,6 @@ pub fn parse(language: Language, source: &str) -> Result<Program> {
         Language::JavaScript => javascript::parse_source(source),
         Language::Lua => lua::parse_source(source),
         Language::Python => python::parse_source(source),
+        Language::Starlark => starlark::parse_source(source),
     }
 }

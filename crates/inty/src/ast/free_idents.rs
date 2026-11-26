@@ -654,6 +654,9 @@ impl State {
                 for a in arguments {
                     self.visit_expr(a);
                 }
+                for (_, v) in expr.keyword_args() {
+                    self.visit_expr(v);
+                }
             }
             Expr::Unary { argument, .. } => self.visit_expr(argument),
             Expr::Binary { left, right, .. } => {

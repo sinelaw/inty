@@ -1018,7 +1018,35 @@ fn run_inference(
     // "./foo.js"`; Python resolves dotted/relative module specs against
     // the file's directory plus the `INTY_PYTHONPATH` search roots (the
     // typeshed / site-packages stand-in). stdin (no path) skips both.
-    let env = if filename == "<stdin>" {
+    let env = if lang == Language::Starlark {
+        // Starlark starts from its own prelude (not the JavaScript
+        // stdlib). `load` labels resolve against the file's workspace;
+        // from stdin there is no path, so loaded names are bound opaquely.
+        use inty::frontends::starlark;
+        let path = std::path::Path::new(filename);
+        let bazel = filename == "<stdin>" || starlark::is_bazel_file(path);
+        let loaded =
+            starlark::prelude::load(state, inty::builtins::initial_env(), bazel).and_then(|base| {
+                if filename == "<stdin>" {
+                    starlark::bind_loads_opaquely(state, base, &program)
+                } else {
+                    let mut loader = starlark::Loader::new();
+                    starlark::resolve_loads(state, base, &program, path, &mut loader)
+                }
+            });
+        match loaded {
+            Ok(e) => e,
+            Err(e) => {
+                // As for Python: report the propagated error against the
+                // module whose load failed.
+                errors.push(LocatedError {
+                    error: e,
+                    source: state.current_source(),
+                });
+                return Err(errors);
+            }
+        }
+    } else if filename == "<stdin>" {
         env
     } else if lang == Language::JavaScript {
         let base_dir = std::path::Path::new(filename)

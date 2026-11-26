@@ -1409,8 +1409,10 @@ fn builtin_variadic_is_opaque_not_constrained() {
 }
 
 #[test]
-fn rejects_comprehension() {
-    assert!(parse_source("xs = [a for a in items]").is_err());
+fn rejects_dict_comprehension() {
+    // A list comprehension is lowered; a dict comprehension needs a
+    // dictionary (`Dict`) result, which a dict literal never infers to.
+    assert!(parse_source("d = {k: 1 for k in items}").is_err());
 }
 
 #[test]
@@ -2112,4 +2114,439 @@ fn narrowing_holds_only_for_its_own_binding() {
     for src in rejected {
         assert!(!check_program(src).is_empty(), "accepted:\n{src}");
     }
+}
+
+// ---- keyword arguments ----
+
+#[test]
+fn keyword_argument_values_see_local_bindings() {
+    // A name read only inside a keyword argument's value is still a use
+    // of the binding: scope resolution walks keyword values too.
+    let ok = [
+        "def h(xs = []):\n\
+         \x20   return xs\n\
+         def g():\n\
+         \x20   o = 1\n\
+         \x20   return h(xs = [o])\n",
+        "def h(xs = []):\n\
+         \x20   return xs\n\
+         o = 1\n\
+         r = h(xs = [o])\n",
+        "def g(a):\n\
+         \x20   out = a.f(1)\n\
+         \x20   a.h(xs = [out])\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    // The value is still checked against the parameter.
+    let bad = "def h(n = 0):\n\
+               \x20   return n + 1\n\
+               s = \"a\"\n\
+               r = h(n = s)\n";
+    assert!(!check_program(bad).is_empty(), "accepted:\n{bad}");
+}
+
+// ---- comprehensions ----
+
+#[test]
+fn list_comprehensions_are_typed() {
+    let ok = [
+        "xs = [x * 2 for x in [1, 2, 3]]\nz = xs[0] + 1\n",
+        "ys = [s.upper() for s in [\"a\", \"b\"] if s != \"a\"]\nz = ys[0] + \"!\"\n",
+        // A tuple target destructures each element.
+        "pairs = [(1, \"a\")]\nks = [k + 1 for k, v in pairs]\nvs = [v + \"x\" for k, v in pairs]\n",
+        // Several clauses nest in order.
+        "m = [[1, 2], [3]]\nflat = [y for row in m for y in row if y > 1]\nz = flat[0] + 1\n",
+        // The first iterable is read in the enclosing scope.
+        "x = [1, 2]\nx2 = [x + 1 for x in x]\nz = x2[0] + 1\n",
+        // A loop variable doesn't clobber an enclosing name.
+        "x = 5\nys = [x for x in [\"a\"]]\nz = x + 1\n",
+        // A generator expression as the sole argument of a call that
+        // iterates it.
+        "b = any(v > 1 for v in [1, 2])\ns = sum(v for v in [1, 2])\nn = s + 1\n",
+        // In a method, `self` inside the comprehension is the receiver.
+        "class C:\n\
+         \x20   def __init__(self):\n\
+         \x20       self.k = 2\n\
+         \x20   def m(self, xs):\n\
+         \x20       return [x * self.k for x in xs]\n\
+         c = C()\n\
+         r = c.m([1])\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        "xs = [x * 2 for x in [1, 2, 3]]\nz = xs[0] + \"a\"\n",
+        "pairs = [(1, \"a\")]\nvs = [v + 1 for k, v in pairs]\n",
+        "ys = [s for s in [\"a\"] if s > 1]\n",
+        // Loop variables are local to the comprehension.
+        "ys = [q for q in [1]]\nz = q\n",
+    ];
+    for src in bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+}
+
+// ---- slicing ----
+
+#[test]
+fn slices_keep_the_receiver_type() {
+    let ok = [
+        "xs = [1, 2, 3]\n\
+         a = xs[1:]\nb = xs[:2]\nc = xs[::-1]\nd = xs[:]\n\
+         z = a[0] + b[0] + c[0] + d[0]\n",
+        "s = \"hello\"\nt = s[1:3] + s[-2:]\n",
+        // A parameter sliced takes whichever of a list or string it gets.
+        "def tail(v):\n\
+         \x20   return v[1:]\n\
+         a = tail(\"abc\") + \"x\"\n\
+         b = tail([1])[0] + 1\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        "xs = [1, 2]\nz = xs[1:] + \"a\"\n",
+        "xs = [1, 2]\nz = xs[\"a\":]\n",
+        "n = 5\nz = n[1:]\n",
+    ];
+    for src in bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+}
+
+// ---- keyword-only parameters ----
+
+#[test]
+fn keyword_only_marker_is_accepted() {
+    let ok = [
+        "def f(a, *, b = 1):\n\
+         \x20   return a + b\n\
+         r = f(1, b = 2)\n",
+        "class C:\n\
+         \x20   def m(self, *, k):\n\
+         \x20       return k\n\
+         c = C()\n\
+         r = c.m(k = 1)\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = "def f(a, *, b = 1):\n\
+               \x20   return a + b\n\
+               r = f(1, b = \"s\")\n";
+    assert!(!check_program(bad).is_empty(), "accepted:\n{bad}");
+    // `*args` is still out.
+    assert!(parse_source("def f(*args):\n    pass\n").is_err());
+}
+
+// ---- PEP 484 type comments ----
+
+#[test]
+fn type_comments_declare_types() {
+    let ok = [
+        "names = []  # type: list[str]\nnames.append(\"a\")\n",
+        "def f(a, b):  # type: (int, str) -> str\n\
+         \x20   return b + \"x\"\n\
+         r = f(1, \"y\")\n",
+        "def f(a, b):\n\
+         \x20   # type: (int, str) -> str\n\
+         \x20   return b + \"x\"\n",
+        // `# type: ignore` and ordinary comments are not types.
+        "x = 1  # type: ignore\ny = x + 1\n",
+        "x = 1  # just a comment\n# type: int\ny = 2\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        "names = []  # type: list[str]\nnames.append(1)\n",
+        "def f(a, b):\n\
+         \x20   # type: (int, str) -> str\n\
+         \x20   return b\n\
+         r = f(\"no\", \"x\")\n",
+        // `(...)` states only the return type.
+        "def f(a):\n\
+         \x20   # type: (...) -> int\n\
+         \x20   return a\n\
+         r = f(\"s\")\n",
+    ];
+    for src in bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+    // The comment must give one type per parameter.
+    assert!(parse_source("def f(a):\n    # type: (int, int) -> int\n    return a\n").is_err());
+}
+
+// ---- str and dict methods ----
+
+#[test]
+fn str_partition_methods() {
+    let ok = [
+        "a, sep, b = \"k=v\".partition(\"=\")\nx = a + sep + b\n",
+        "a, sep, b = \"a.b.c\".rpartition(\".\")\nx = a + b\n",
+        "b = \"a\".isascii()\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        "a, sep, b = \"k=v\".partition(\"=\")\nx = a + 1\n",
+        // Starlark's `elems` isn't Python's.
+        "x = \"ab\".elems()\n",
+    ];
+    for src in bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+}
+
+#[test]
+fn dict_methods_and_iteration() {
+    let d = "d = {}  # type: dict[str, int]\n";
+    let ok = [
+        "a = d.get(\"a\")\nb = d.get(\"a\", 0) + 1\n",
+        "k = d.keys()[0] + \"!\"\nv = d.values()[0] + 1\n",
+        "for kk, vv in d.items():\n    z = kk + str(vv + 1)\n",
+        "p = d.pop(\"a\") + 1\nq = d.pop(\"a\", 0) + 1\n",
+        "s = d.setdefault(\"b\", 2) + 1\n",
+        "d.update(d)\nc = d.copy()\nd.clear()\ne = d.popitem()\n",
+        // Iterating a dict gives its keys.
+        "for k in d:\n    x = k + \"!\"\n",
+        "ks = [k.upper() for k in d]\n",
+        "b = \"a\" in d\n",
+    ];
+    for body in ok {
+        let src = format!("{d}{body}");
+        let errs = check_program(&src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        // Without a default, `get` may give `None`.
+        "a = d.get(\"a\") + 1\n",
+        "a = d.get(\"a\", None)\nb = a + 1\n",
+        // A default must be a value.
+        "a = d.get(\"a\", \"x\")\n",
+        "for k in d:\n    x = k + 1\n",
+        "for k, v in d.items():\n    x = v + \"!\"\n",
+        "x = d.nope()\n",
+        "x = d.setdefault(\"a\", \"s\")\n",
+    ];
+    for body in bad {
+        let src = format!("{d}{body}");
+        assert!(!check_program(&src).is_empty(), "accepted:\n{src}");
+    }
+    // A receiver not known to be a dict at the call keeps `get`'s general
+    // type: the value or `None`, whatever the default.
+    let src = "def f(d):\n\
+               \x20   return d.get(\"a\", 0)\n\
+               x = {}  # type: dict[str, int]\n\
+               r = f(x)\n";
+    let errs = check_program(src);
+    assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+}
+
+// ---- record types and alias comments ----
+
+#[test]
+fn record_types_in_annotations_and_type_comments() {
+    let ok = [
+        // An inline record type; a key may be a name or a string.
+        "def f(r):\n\
+         \x20   # type: ({name: str, \"n\": int}) -> int\n\
+         \x20   return r[\"n\"]\n\
+         y = f({\"name\": \"a\", \"n\": 1}) + 1\n",
+        "def f(p: {x: int, y: int}) -> int:\n\
+         \x20   return p[\"x\"] + p[\"y\"]\n",
+        // An alias comment names it, for annotations and type comments.
+        "# type Point = {x: int, y: int}\n\
+         p = {\"x\": 1, \"y\": 2}  # type: Point\n\
+         q = p[\"x\"] + p[\"y\"]\n\
+         def f(p: Point) -> int:\n\
+         \x20   return p[\"x\"]\n",
+        // An alias may name one declared after it, and itself.
+        "# type Finding = {rec: Record, severity: str}\n\
+         # type Record = {pid: int}\n\
+         def f(x):\n\
+         \x20   # type: (Finding) -> int\n\
+         \x20   return x[\"rec\"][\"pid\"] + 1\n",
+        "# type Tree = {value: int, kids: list[Tree]}\n\
+         def total(t):\n\
+         \x20   # type: (Tree) -> int\n\
+         \x20   s = t[\"value\"]\n\
+         \x20   for k in t[\"kids\"]:\n\
+         \x20       s += k[\"value\"]\n\
+         \x20   return s\n",
+        // Prose that happens to start with "type" is not an alias.
+        "# type checking matters\n# type = 3 things\nx = 1\n",
+    ];
+    for src in ok {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let record = "# type Record = {process: str, pid: int}\n\
+                  def f(r):\n\
+                  \x20   # type: (Record) -> str\n\
+                  \x20   return r[\"process\"]\n";
+    let bad = [
+        // A field the record doesn't have.
+        "# type R = {process: str}\n\
+         def f(r):\n\
+         \x20   # type: (R) -> str\n\
+         \x20   return r[\"procss\"]\n"
+            .to_string(),
+        // A field of the wrong type, or missing, at a call.
+        format!("{record}x = f({{\"process\": \"sh\", \"pid\": \"1\"}})\n"),
+        format!("{record}x = f({{\"process\": \"sh\"}})\n"),
+        // The record is exact: no extra fields.
+        format!("{record}x = f({{\"process\": \"sh\", \"pid\": 1, \"x\": 2}})\n"),
+    ];
+    for src in &bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+    let ok_call = format!("{record}x = f({{\"process\": \"sh\", \"pid\": 1}}) + \"!\"\n");
+    let errs = check_program(&ok_call);
+    assert!(errs.is_empty(), "rejected:\n{ok_call}\n{errs:?}");
+
+    // A malformed or repeated alias is an error.
+    assert!(parse_source("# type A = {x int}\n").is_err());
+    assert!(parse_source("# type A = {x: int, x: str}\n").is_err());
+    assert!(parse_source("# type A = {x: int}\n# type A = {y: int}\n").is_err());
+}
+
+#[test]
+fn get_on_records() {
+    let record = "# type Record = {process: str, pid: int, argv: list[str]}\n";
+    let ok = [
+        "def f(r):\n\
+         \x20   # type: (Record) -> str\n\
+         \x20   p = r.get(\"process\", \"\").lower()\n\
+         \x20   a = r.get(\"argv\", [])\n\
+         \x20   return p + str(r.get(\"pid\") + len(a))\n",
+        // `None` as the (never used) default.
+        "def f(r):\n    # type: (Record) -> str\n    return r.get(\"process\", None)\n",
+        // A dict literal is a record too.
+        "def f():\n\
+         \x20   res = {\"matched\": True, \"n\": 1}\n\
+         \x20   if res.get(\"matched\"):\n\
+         \x20       return res.get(\"n\") + 1\n\
+         \x20   return 0\n",
+        "def f(r: Record) -> str:\n    return r.get(\"process\", \"\")\n",
+    ];
+    for body in ok {
+        let src = format!("{record}{body}");
+        let errs = check_program(&src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+    let bad = [
+        // A key the record doesn't have.
+        "def f(r):\n    # type: (Record) -> str\n    return r.get(\"procss\", \"\")\n",
+        // A default of another type.
+        "def f(r):\n    # type: (Record) -> str\n    return r.get(\"process\", 0)\n",
+        "def f(r):\n    # type: (Record) -> int\n    return r.get(\"process\") + 1\n",
+        // A key known only at run time.
+        "def f(r, k):\n    # type: (Record, str) -> str\n    return r.get(k)\n",
+    ];
+    for body in bad {
+        let src = format!("{record}{body}");
+        assert!(!check_program(&src).is_empty(), "accepted:\n{src}");
+    }
+    // A recursive alias's record has `.get` too.
+    let tree = "# type Tree = {value: int, kids: list[Tree]}\n\
+                def f(t):\n\
+                \x20   # type: (Tree) -> int\n\
+                \x20   return t.get(\"value\", 0) + len(t.get(\"kids\", []))\n";
+    let errs = check_program(tree);
+    assert!(errs.is_empty(), "rejected:\n{tree}\n{errs:?}");
+}
+
+#[test]
+fn unknown_names_in_aliases_are_reported() {
+    for src in [
+        "# type A = {x: Nope}\n",
+        "# type A = {x: list[Recrd]}\n# type Record = {pid: int}\n",
+        "type A = Nope\n",
+    ] {
+        let errs = check_program(src);
+        assert!(
+            errs.iter().any(|e| e.contains("UnknownTypeRef")),
+            "expected an unknown type in:\n{src}\ngot {errs:?}"
+        );
+    }
+    // A name an alias may refer to: another alias, a class, an import.
+    for src in [
+        "# type A = {x: list[Record], y: str | None}\n# type Record = {pid: int}\n",
+        "class C:\n    pass\ntype A = C\n",
+        "from typing import Sequence\ntype A = Sequence[int]\n",
+    ] {
+        let errs = check_program(src);
+        assert!(errs.is_empty(), "rejected:\n{src}\n{errs:?}");
+    }
+}
+
+// ---- review fixes ----
+
+#[test]
+fn generator_expressions_only_where_iterated() {
+    let ok = "xs = [1]\n\
+              b = any(x > 0 for x in xs)\n\
+              s = \", \".join(str(x) for x in xs)\n\
+              t = sum(x for x in xs) + 1\n";
+    let errs = check_program(ok);
+    assert!(errs.is_empty(), "rejected:\n{ok}\n{errs:?}");
+    // A generator can't be measured or indexed as a list can.
+    for src in [
+        "xs = [1]\ng = (x for x in xs)\n",
+        "xs = [1]\nn = len(x for x in xs)\n",
+    ] {
+        assert!(parse_source(src).is_err(), "accepted:\n{src}");
+    }
+}
+
+#[test]
+fn signature_comments_on_methods() {
+    // `self` may be left out of the comment, or given a type.
+    let bad = [
+        "class C:\n\
+         \x20   def m(self, x):\n\
+         \x20       # type: (int) -> str\n\
+         \x20       return x\n",
+        "class C:\n\
+         \x20   def m(self, x):\n\
+         \x20       # type: (C, int) -> int\n\
+         \x20       return x\n\
+         r = C().m(\"s\")\n",
+    ];
+    for src in bad {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+    let ok = "class C:\n\
+              \x20   def m(self, x):\n\
+              \x20       # type: (int) -> int\n\
+              \x20       return x + 1\n\
+              r = C().m(1) + 1\n";
+    let errs = check_program(ok);
+    assert!(errs.is_empty(), "rejected:\n{ok}\n{errs:?}");
+}
+
+#[test]
+fn slices_use_a_name_programs_cant_write() {
+    let src = "s = \"abc\".__slice__(1, None, None)\n";
+    assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+}
+
+#[test]
+fn alias_comment_spans_cover_the_name() {
+    // Trailing whitespace once inverted the span (a panic when rendered).
+    let src = "# type Rec = {a: int}          \n";
+    let program = parse_source(src).unwrap();
+    let alias = &program.type_aliases[0];
+    assert_eq!(&src[alias.span.start..alias.span.end], "Rec = {a: int}");
 }

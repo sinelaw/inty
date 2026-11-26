@@ -150,8 +150,39 @@ impl Cursor<'_> {
                 self.skip_balanced(Tok::LBracket, Tok::RBracket);
                 TypeAst::Opaque
             }
+            Tok::LBrace => self.parse_record(),
             _ => TypeAst::Opaque,
         }
+    }
+
+    /// `{name: T, "other": U, …}` — a record of exactly these fields (a
+    /// key is a name or a string). Not Python type syntax: inty's, for
+    /// annotations and type comments (Starlark has no `TypedDict`). On
+    /// malformed input the cursor stops at the offending token and the
+    /// record is opaque, so the caller's own end-of-annotation check
+    /// reports it.
+    fn parse_record(&mut self) -> TypeAst {
+        self.advance(); // {
+        let mut fields: Vec<(String, TypeAst)> = Vec::new();
+        while !self.eat(&Tok::RBrace) {
+            let name = match self.cur().clone() {
+                Tok::Name(n) | Tok::Str(n) => n,
+                _ => return TypeAst::Opaque,
+            };
+            if fields.iter().any(|(f, _)| *f == name) {
+                return TypeAst::Opaque;
+            }
+            self.advance();
+            if !self.eat(&Tok::Colon) {
+                return TypeAst::Opaque;
+            }
+            let ty = self.parse_type();
+            fields.push((name, ty));
+            if !self.eat(&Tok::Comma) && !self.check(&Tok::RBrace) {
+                return TypeAst::Opaque;
+            }
+        }
+        TypeAst::Record(fields)
     }
 
     /// `NAME [ args ]` — a subscripted (generic) type. `head` is the full
@@ -644,7 +675,7 @@ mod tests {
                 TypeAst::Array(_) => prop_assert!(matches!(t, Type::Array(_))),
                 TypeAst::Tuple(_) => prop_assert!(matches!(t, Type::Tuple(_))),
                 TypeAst::Map(_) => prop_assert!(matches!(t, Type::Map(_))),
-                TypeAst::Func(..) => prop_assert!(matches!(t, Type::Row(_))),
+                TypeAst::Func(..) | TypeAst::Record(_) => prop_assert!(matches!(t, Type::Row(_))),
                 TypeAst::Var(_) => prop_assert!(matches!(t, Type::Var(_))),
                 // An unknown reference lowers to a fresh variable (no alias
                 // table in this test), just like opaque.

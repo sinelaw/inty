@@ -5,11 +5,12 @@
 //! constructs the type system can't express are rejected with a
 //! `ParseError::Unsupported` rather than mis-typed.
 //!
-//! Supported: `def` (positional params), assignment (plain, chained,
-//! augmented, matched-arity tuple), `if/elif/else`, `while`, `for ... in`
-//! (single target), `pass`/`break`/`continue`, single-value `return`,
-//! `global`, `lambda`, ternary `a if c else b`, calls, lists, dicts
-//! (literal keys), and the usual operators.
+//! Supported: `def` (positional, default and keyword-only parameters),
+//! assignment (plain, chained, augmented, matched-arity tuple),
+//! `if/elif/else`, `while`, `for ... in`, `pass`/`break`/`continue`,
+//! `return`, `global`, `lambda`, ternary `a if c else b`, calls (with
+//! keyword arguments), lists, list comprehensions, slices, dicts (literal
+//! keys), and the usual operators.
 //!
 //! Lowerings worth noting:
 //! - `None` → the null literal; `True`/`False` → booleans.
@@ -23,16 +24,31 @@
 //!   (`x += 1`) to a name that isn't yet bound in the function — and isn't
 //!   declared `global` — is rejected as a referenced-before-assignment.
 //! - `/` and `//` both map to `/`; `**` → `**` (Pow).
-//! - type annotations (`x: int`, `def f(a: int) -> str:`) are parsed and
-//!   discarded — inty infers types instead.
+//! - type annotations (`x: int`, `def f(a: int) -> str:`), and PEP 484
+//!   type comments (`x = []  # type: list[str]`, `# type: (int) -> str`
+//!   after a `def` header), declare types that inference checks.
+//! - `[e for x in xs if c]` → an immediately-called arrow function that
+//!   loops and appends, so the loop variables stay local to it; a
+//!   generator expression passed as the sole argument of a call that only
+//!   iterates it (`any(x > 0 for x in xs)`, `sum`, `sorted`, `join`, …) is
+//!   lowered the same way. Any other generator expression is rejected: it
+//!   can't be indexed or measured as a list can.
+//! - `xs[a:b:c]` → a call of an internal slice method (`None` for an
+//!   omitted bound), which the `str` and `list` surfaces give the
+//!   receiver's own type. A tuple can't be sliced.
+//! - `def f(a, *, b)`: parameters after the bare `*` are ordinary named
+//!   parameters (passing them by position isn't rejected).
 //!
-//! Rejected (use a simpler form): `*args`/`**kwargs`, comprehensions,
-//! slicing, `is`/`in`, chained comparisons, and the statement keywords
+//! Rejected (use a simpler form): `*args`/`**kwargs`, dict and set
+//! comprehensions, chained comparisons, and the statement keywords
 //! `nonlocal`/`del`/`yield`/… .
+//!
+//! The parser also has a Starlark mode; see [`crate::frontends::starlark`].
 
 mod lexer;
 pub mod modules;
 mod parser;
+pub use parser::SLICE_METHOD;
 pub mod prelude;
 pub mod pyi;
 mod stubs;
@@ -43,8 +59,19 @@ use crate::error::Result;
 
 /// Parse Python source into the shared AST.
 pub fn parse_source(source: &str) -> Result<Program> {
-    let tokens = lexer::tokenize(source)?;
-    parser::Parser::new(tokens).parse_program()
+    let (tokens, comments) = lexer::tokenize_with_type_comments(source)?;
+    parser::Parser::new(tokens)
+        .with_type_comments(comments)
+        .parse_program()
+}
+
+/// Parse Starlark source (the Python dialect; see
+/// [`crate::frontends::starlark`]) into the shared AST.
+pub fn parse_starlark_source(source: &str) -> Result<Program> {
+    let (tokens, comments) = lexer::tokenize_with_type_comments(source)?;
+    parser::Parser::new_starlark(tokens)
+        .with_type_comments(comments)
+        .parse_program()
 }
 
 #[cfg(test)]

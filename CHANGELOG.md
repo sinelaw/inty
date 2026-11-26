@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Starlark, and Python lowerings
+
+- A Starlark frontend (`.star`, `.bzl`, `.sky`), a mode of the Python
+  one. It rejects what Starlark leaves out of Python (`class`, `try`,
+  `raise`, `while`, `import`, `global`, `with`, decorators, `is`, `**`,
+  f-strings) and checks Starlark's static rules: no `if`/`for` at the top
+  level, a global is bound once, and no recursion. `load("//pkg:f.bzl",
+  "name", local = "name")` loads typed names from another file, resolving
+  the label against the workspace root (`MODULE.bazel`, `WORKSPACE`,
+  `.buckconfig`, …) or the loading file's package; a label in another
+  repository (`@repo//…`) binds its names unchecked. `fail(…)` is a
+  `throw`, and `struct(a = 1)` a record. A `.bzl` file sees Bazel's
+  globals (`rule`, `attr`, `native`, `provider`, `depset`, …), accepted
+  without checking until they are declared. The CLI and the language
+  server pick it from the extension.
+- Python: list comprehensions (several `for`/`if` clauses, tuple
+  targets), and a generator expression as the sole argument of a call that
+  iterates it (`any`, `all`, `sum`, `sorted`, `join`, …).
+- Python: slices `xs[a:b:c]` of lists and strings.
+- Python: keyword-only parameters (`def f(a, *, b)`).
+- Python: PEP 484 type comments, `x = []  # type: list[str]` and
+  `# type: (int, str) -> bool` after a `def` header (a method's may leave
+  out `self`).
+- Python: a `dict[str, V]`'s methods (`get`, `keys`, `values`, `items`,
+  `pop`, `popitem`, `setdefault`, `update`, `clear`, `copy`), and
+  iterating it gives its keys. `d.get(k)` is `V | None`; `d.get(k, default)`
+  is `V` when `d` is known to be a dict at the call.
+- Python: `str.partition`, `str.rpartition` and `str.isascii`.
+- Starlark is its own language to inference (`SourceLanguage::Starlark`,
+  typed by the Python rules): a string isn't iterable (`s.elems()` is),
+  and `str`, `list` and `dict` have Starlark's methods, not Python-only
+  ones such as `zfill`, `sort` or `copy`.
+- Python and Starlark: record types, `{name: str, pid: int}`, in
+  annotations and type comments, and alias comments `# type Name = T` to
+  name them (Starlark has no alias or annotation syntax). A record type is
+  exact: no missing or extra fields. A Python type alias may now name one
+  declared after it, or itself.
+- Python and Starlark: `r.get("key", default?)` on a record with a literal
+  key gives the field's type (a key the record lacks is an error), when `r`
+  is known to be a record at the call.
+- Python and Starlark: a name in a type alias that names nothing (not an
+  alias, not in scope, not bound by the program) is reported, instead of
+  leaving what it types unchecked.
+- Python: a name read only in a keyword argument's value
+  (`f(xs = [o])`) was reported as undefined; scope resolution, and the
+  language server's walks, now visit keyword arguments.
+
 ### DOM declarations
 
 - Nodes: `firstChild`, `lastChild`, `nextSibling`, `previousSibling`,

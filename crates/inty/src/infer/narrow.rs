@@ -812,7 +812,7 @@ fn could_be_falsy(ty: &Type, lang: Language) -> bool {
                 | Type::Maybe(..)
                 | Type::Error
         ),
-        Language::Python => !callable,
+        Language::Python | Language::Starlark => !callable,
     }
 }
 

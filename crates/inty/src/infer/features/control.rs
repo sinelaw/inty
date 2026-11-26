@@ -228,7 +228,7 @@ impl InferState {
             };
             let narrowing = match (strict, self.language) {
                 (true, _) => Narrowing::Is(single),
-                (false, SourceLanguage::Python) => Narrowing::PyEq(single),
+                (false, lang) if lang.is_python_like() => Narrowing::PyEq(single),
                 (false, _) if matches!(single, Type::Null | Type::Undefined) => Narrowing::Nullish,
                 (false, _) => continue,
             };

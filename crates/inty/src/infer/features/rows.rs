@@ -1170,6 +1170,13 @@ impl InferState {
             Type::Map(value) if language == SourceLanguage::JavaScript => {
                 return Ok(self.dict_read(value));
             }
+            // Python / Starlark: a dict's methods (its entries are read by
+            // subscript, not as attributes).
+            Type::Map(value) if language.is_python_like() => {
+                if let Some(ty) = crate::builtins::python_dict_method_type(self, value, property) {
+                    return Ok(self.declared_callbacks_detached(&ty));
+                }
+            }
             Type::Array(elem_ty) => {
                 if property == "length" {
                     return Ok(Type::Number);
@@ -1178,7 +1185,7 @@ impl InferState {
                 // `list` vs JavaScript `Array` (issue #67). Lua has no
                 // method-call surface on sequences (yet).
                 let method = match language {
-                    SourceLanguage::Python => {
+                    SourceLanguage::Python | SourceLanguage::Starlark => {
                         crate::builtins::python_list_method_type(self, elem_ty, property)
                     }
                     SourceLanguage::JavaScript => {
@@ -1205,7 +1212,7 @@ impl InferState {
                     return Ok(Type::Number);
                 }
                 let method = match language {
-                    SourceLanguage::Python => {
+                    SourceLanguage::Python | SourceLanguage::Starlark => {
                         crate::builtins::python_string_method_type(self, property)
                     }
                     SourceLanguage::JavaScript => {

@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use super::lexer::{tokenize, AugOp, Tok};
+use super::lexer::{tokenize, AugOp, Tok, TypeComment};
 use crate::ast::*;
 use crate::error::{ParseError, Result};
 use crate::span::{Span, Spanned};
@@ -57,6 +57,26 @@ pub struct Parser {
     /// in-function assignments that target them resolve to a real
     /// (module-scoped) declaration. See [`Self::global_stmt`].
     globals: HashSet<String>,
+    /// Parsing the Starlark dialect: the Python subset minus what
+    /// Starlark leaves out (classes, exceptions, `while`, `import`, …),
+    /// plus `load()`, and Starlark's static rules (no top-level `if`/
+    /// `for`, globals bound once, no recursion). See
+    /// [`crate::frontends::starlark`].
+    starlark: bool,
+    /// Starlark: the module-level `def` whose body is being parsed.
+    top_def: Option<String>,
+    /// Starlark: every module-level `def`, with its name's span, in order.
+    top_defs: Vec<(String, Span)>,
+    /// Starlark: `(caller, callee, span)` for each call, inside a
+    /// module-level `def`, of a name that no enclosing function binds.
+    /// Feeds the recursion check in [`Self::parse_program`].
+    top_calls: Vec<(String, String, Span)>,
+    /// The file's PEP 484 type comments (`# type: T`), in source order;
+    /// see [`Self::type_comment_between`].
+    type_comments: Vec<TypeComment>,
+    /// The file's alias comments (`# type Name = T`), declared as type
+    /// aliases by [`Self::parse_program`].
+    alias_comments: Vec<TypeComment>,
 }
 
 impl Parser {
@@ -70,7 +90,151 @@ impl Parser {
             class_names: Vec::new(),
             type_aliases: Vec::new(),
             globals: HashSet::new(),
+            starlark: false,
+            top_def: None,
+            top_defs: Vec::new(),
+            top_calls: Vec::new(),
+            type_comments: Vec::new(),
+            alias_comments: Vec::new(),
         }
+    }
+
+    /// Attach the file's type comments (from
+    /// [`super::lexer::tokenize_with_type_comments`]).
+    pub fn with_type_comments(mut self, comments: Vec<TypeComment>) -> Self {
+        (self.alias_comments, self.type_comments) =
+            comments.into_iter().partition(|c| c.alias.is_some());
+        self
+    }
+
+    /// Declare a type alias for each alias comment, `# type Name = T`:
+    /// a way to name a type (a record, say) where the language has no
+    /// alias syntax (Starlark), usable in annotations and type comments.
+    fn declare_alias_comments(&mut self) -> Result<()> {
+        for c in std::mem::take(&mut self.alias_comments) {
+            let (name, name_offset) = c.alias.clone().expect("an alias comment");
+            let span = Span::new(name_offset, c.offset + c.text.len());
+            if self.type_aliases.iter().any(|a| a.name == name) {
+                return Err(ParseError::Unsupported {
+                    feature: format!("type '{name}' is already declared"),
+                    span,
+                }
+                .into());
+            }
+            let body_ast = Self::comment_type(&c)?;
+            self.type_aliases.push(TypeAlias {
+                name,
+                params: Vec::new(),
+                body: String::new(),
+                body_ast: Some(body_ast),
+                span,
+                nominal: false,
+                content_start: None,
+            });
+        }
+        Ok(())
+    }
+
+    /// The type comment that starts in `[from, to)`, if any.
+    fn type_comment_between(&self, from: usize, to: usize) -> Option<TypeComment> {
+        self.type_comments
+            .iter()
+            .find(|c| c.offset >= from && c.offset < to)
+            .cloned()
+    }
+
+    /// Tokenize a type comment's text, with spans placed in the file.
+    fn comment_tokens(c: &TypeComment) -> Result<Vec<Spanned<Tok>>> {
+        Ok(tokenize(&c.text)?
+            .into_iter()
+            .map(|t| {
+                let span = Span::new(t.span.start + c.offset, t.span.end + c.offset);
+                Spanned::new(t.value, span)
+            })
+            .collect())
+    }
+
+    /// The type a variable's type comment states (`x = [] # type: list[str]`).
+    fn comment_type(c: &TypeComment) -> Result<TypeAst> {
+        let toks = Self::comment_tokens(c)?;
+        let mut p = Parser::new(toks);
+        let ty = p.parse_type_ast();
+        p.end_of_comment()?;
+        Ok(ty)
+    }
+
+    /// The signature a function's type comment states, PEP 484's
+    /// `(T1, T2) -> R`: the parameter types (`None` for `(...) -> R`,
+    /// which states only the return type) and the return type.
+    fn comment_signature(c: &TypeComment) -> Result<(Option<Vec<TypeAst>>, TypeAst)> {
+        let toks = Self::comment_tokens(c)?;
+        let mut p = Parser::new(toks);
+        p.expect(
+            &Tok::LParen,
+            "'(' starting a signature type comment `(T, …) -> R`",
+        )?;
+        let params = if p.check(&Tok::Dot) {
+            for _ in 0..3 {
+                p.expect(&Tok::Dot, "'...'")?;
+            }
+            p.expect(&Tok::RParen, "')'")?;
+            None
+        } else {
+            let mut params = Vec::new();
+            while !p.eat(&Tok::RParen) {
+                params.push(p.parse_type_ast());
+                if !p.eat(&Tok::Comma) {
+                    p.expect(&Tok::RParen, "')'")?;
+                    break;
+                }
+            }
+            Some(params)
+        };
+        p.expect(&Tok::Arrow, "'->' and the return type")?;
+        let ret = p.parse_type_ast();
+        p.end_of_comment()?;
+        Ok((params, ret))
+    }
+
+    /// Require that a type comment's tokens are all consumed.
+    fn end_of_comment(&mut self) -> Result<()> {
+        self.eat(&Tok::Newline);
+        if self.at_eof() {
+            Ok(())
+        } else {
+            Err(self.unexpected("the end of the type comment"))
+        }
+    }
+
+    /// A parser for the Starlark dialect (see the `starlark` field).
+    pub fn new_starlark(toks: Vec<Spanned<Tok>>) -> Self {
+        Parser {
+            starlark: true,
+            ..Parser::new(toks)
+        }
+    }
+
+    /// The error for a construct Starlark leaves out of Python, with a
+    /// hint at what to write instead (empty for none).
+    fn not_starlark(&self, what: &str, instead: &str) -> crate::error::IntyError {
+        if instead.is_empty() {
+            self.unsupported(&format!("{what} is not part of Starlark"))
+        } else {
+            self.unsupported(&format!("{what} is not part of Starlark; {instead}"))
+        }
+    }
+
+    /// Whether `name` is bound by an enclosing function (not the module):
+    /// a call or a read of it then means that binding, not the module-level
+    /// function or builtin of the same name.
+    fn bound_in_function(&self, name: &str) -> bool {
+        self.scopes[1..].iter().any(|s| s.locals.contains(name))
+    }
+
+    /// Whether `name` means the Starlark builtin of that name: nothing in
+    /// the file binds it.
+    fn is_builtin(&self, name: &str) -> bool {
+        !self.scopes.iter().any(|s| s.locals.contains(name))
     }
 
     /// Look at the token `n` positions ahead (saturating at the trailing
@@ -212,6 +376,10 @@ impl Parser {
             }
             statements.extend(self.statement()?);
         }
+        if self.starlark {
+            self.check_no_recursion()?;
+        }
+        self.declare_alias_comments()?;
         // Backfill a module-scope `var` for every `global` name that never
         // received a module-level binding (e.g. one only ever assigned from
         // inside a function). Without it, those in-function assignments
@@ -255,7 +423,11 @@ impl Parser {
             type_aliases: std::mem::take(&mut self.type_aliases),
             class_brands: std::mem::take(&mut self.class_names),
             class_decls: Vec::new(),
-            language: crate::ast::SourceLanguage::Python,
+            language: if self.starlark {
+                crate::ast::SourceLanguage::Starlark
+            } else {
+                crate::ast::SourceLanguage::Python
+            },
         })
     }
 
@@ -298,6 +470,11 @@ impl Parser {
     // ---- statements ----
 
     fn statement(&mut self) -> Result<Vec<Stmt>> {
+        if self.starlark {
+            if let Some(stmts) = self.starlark_statement()? {
+                return Ok(stmts);
+            }
+        }
         match self.cur() {
             Tok::At => self.decorated_stmt(),
             Tok::Def => Ok(vec![self.def_stmt()?]),
@@ -309,6 +486,7 @@ impl Parser {
             Tok::For => Ok(vec![self.for_stmt()?]),
             Tok::Try => Ok(vec![self.try_stmt()?]),
             Tok::With => self.with_stmt(),
+            Tok::Reserved(k) if self.starlark => Err(self.not_starlark(&format!("'{k}'"), "")),
             Tok::Reserved(k) => {
                 Err(self.unsupported(&format!("'{}' is not supported in the Python subset", k)))
             }
@@ -381,6 +559,7 @@ impl Parser {
                     span: Span::new(start, self.prev_span().end),
                 }])
             }
+            Tok::Raise if self.starlark => Err(self.not_starlark("'raise'", "call fail()")),
             Tok::Raise => {
                 let start = self.cur_span().start;
                 self.advance();
@@ -409,12 +588,181 @@ impl Parser {
                     span: Span::new(start, self.prev_span().end),
                 }])
             }
+            Tok::Global if self.starlark => Err(self.not_starlark("'global'", "")),
             Tok::Global => Ok(vec![self.global_stmt()?]),
+            Tok::Reserved(k) if self.starlark => Err(self.not_starlark(&format!("'{k}'"), "")),
             Tok::Reserved(k) => {
                 Err(self.unsupported(&format!("'{}' is not supported in the Python subset", k)))
             }
             _ => self.expr_or_assign(),
         }
+    }
+
+    /// The Starlark-specific statement rules, checked before the Python
+    /// dispatch. `Some` when the statement is handled here (`load`), an
+    /// error for a statement Starlark leaves out or disallows where it is,
+    /// `None` to parse it as Python.
+    fn starlark_statement(&mut self) -> Result<Option<Vec<Stmt>>> {
+        let top = !self.in_function();
+        match self.cur() {
+            Tok::Name(n) if n == "load" && matches!(self.peek_tok(1), Tok::LParen) => {
+                if !top {
+                    return Err(self.unsupported("load() is only allowed at the top level"));
+                }
+                Ok(Some(vec![self.load_stmt()?]))
+            }
+            Tok::At => Err(self.not_starlark("a decorator", "")),
+            Tok::Class => Err(self.not_starlark("'class'", "use struct() or a dict")),
+            Tok::Import | Tok::From => Err(self.not_starlark("'import'", "use load()")),
+            Tok::While => Err(self.not_starlark("'while'", "use a for loop")),
+            Tok::Try => Err(self.not_starlark("'try'", "report errors with fail()")),
+            Tok::With => Err(self.not_starlark("'with'", "")),
+            Tok::If | Tok::For if top => {
+                let kw = if self.check(&Tok::If) { "if" } else { "for" };
+                Err(self.unsupported(&format!(
+                    "'{kw}' is not allowed at the top level of a Starlark file; \
+                     move it into a function"
+                )))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// `load("label", "name", local = "name", …)` → an import of each
+    /// named symbol from the module the label names. The label is kept
+    /// verbatim as the import source; [`crate::frontends::starlark`]
+    /// resolves it to a file.
+    fn load_stmt(&mut self) -> Result<Stmt> {
+        let start = self.cur_span().start;
+        self.advance(); // load
+        self.advance(); // (
+        let source = match self.cur().clone() {
+            Tok::Str(label) => {
+                self.advance();
+                label
+            }
+            _ => return Err(self.unexpected("a module label string")),
+        };
+        let mut specifiers = Vec::new();
+        while self.eat(&Tok::Comma) {
+            if self.check(&Tok::RParen) {
+                break; // trailing comma
+            }
+            let spec_span = self.cur_span();
+            let (local, imported) = match self.cur().clone() {
+                Tok::Str(name) => {
+                    self.advance();
+                    (name.clone(), name)
+                }
+                Tok::Name(local) if matches!(self.peek_tok(1), Tok::Assign) => {
+                    self.advance(); // local
+                    self.advance(); // =
+                    match self.cur().clone() {
+                        Tok::Str(name) => {
+                            self.advance();
+                            (local, name)
+                        }
+                        _ => return Err(self.unexpected("the loaded symbol's name, a string")),
+                    }
+                }
+                _ => return Err(self.unexpected("a symbol to load: \"name\" or local = \"name\"")),
+            };
+            if local.starts_with('_') || imported.starts_with('_') {
+                return Err(ParseError::Unsupported {
+                    feature: format!("'{imported}' is private to its module and cannot be loaded"),
+                    span: spec_span,
+                }
+                .into());
+            }
+            if self.local_declared(&local) {
+                return Err(self.reassigned_global(&local, spec_span));
+            }
+            self.declare(&local);
+            specifiers.push(ImportSpecifier::Named {
+                imported,
+                local,
+                span: spec_span,
+            });
+        }
+        self.expect(&Tok::RParen, "')'")?;
+        if specifiers.is_empty() {
+            return Err(self.unexpected("at least one symbol to load"));
+        }
+        if !self.at_eof() {
+            self.expect(&Tok::Newline, "newline")?;
+        }
+        Ok(Stmt::Import {
+            specifiers,
+            source,
+            span: Span::new(start, self.prev_span().end),
+        })
+    }
+
+    /// Starlark binds a global once: a second assignment to it (or a
+    /// second `def`/`load` of the name) is an error.
+    fn reassigned_global(&self, name: &str, span: Span) -> crate::error::IntyError {
+        ParseError::Unsupported {
+            feature: format!(
+                "'{name}' is already bound at the top level; a Starlark global is bound once"
+            ),
+            span,
+        }
+        .into()
+    }
+
+    /// Starlark forbids recursion. Reject any module-level `def` that can
+    /// reach a call of itself through calls of module-level `def`s
+    /// (directly, or through others). A call counts when its callee is a
+    /// bare name that no enclosing function binds. A function only passed
+    /// around, not called, is not followed, so a call through a parameter
+    /// isn't seen (Starlark reports that one when it runs).
+    fn check_no_recursion(&self) -> Result<()> {
+        use std::collections::HashMap;
+        let defs: HashMap<&str, Span> = self
+            .top_defs
+            .iter()
+            .map(|(n, sp)| (n.as_str(), *sp))
+            .collect();
+        let mut edges: HashMap<&str, Vec<(&str, Span)>> = HashMap::new();
+        for (caller, callee, span) in &self.top_calls {
+            if defs.contains_key(callee.as_str()) {
+                edges
+                    .entry(caller.as_str())
+                    .or_default()
+                    .push((callee.as_str(), *span));
+            }
+        }
+        for (name, _) in &self.top_defs {
+            // Depth-first search from `name`'s callees, keeping the path.
+            let mut stack: Vec<(&str, Vec<&str>, Span)> = edges
+                .get(name.as_str())
+                .into_iter()
+                .flatten()
+                .map(|(c, sp)| (*c, vec![name.as_str(), *c], *sp))
+                .collect();
+            let mut seen = HashSet::new();
+            while let Some((cur, path, first_span)) = stack.pop() {
+                if cur == name {
+                    return Err(ParseError::Unsupported {
+                        feature: format!(
+                            "recursion is not allowed in Starlark ({})",
+                            path.join(" → ")
+                        ),
+                        span: first_span,
+                    }
+                    .into());
+                }
+                if !seen.insert(cur) {
+                    continue;
+                }
+                for (next, _) in edges.get(cur).into_iter().flatten() {
+                    let mut p = path.clone();
+                    p.push(next);
+                    stack.push((next, p, first_span));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// `global NAME (',' NAME)*`.
@@ -529,7 +877,7 @@ impl Parser {
                 init,
                 type_ast,
                 Span::new(start, self.prev_span().end),
-            )]);
+            )?]);
         }
 
         // augmented: `target op= value`
@@ -545,6 +893,9 @@ impl Parser {
             // read-before-assignment trap. Require an explicit `global` to
             // rebind a module-level variable.
             if let Some(name) = self.bare_name(&first) {
+                if self.starlark && !self.in_function() {
+                    return Err(self.reassigned_global(&name, first.span()));
+                }
                 if self.in_function() && !self.local_declared(&name) && !self.is_global(&name) {
                     return Err(ParseError::LocalReferencedBeforeAssignment {
                         name,
@@ -601,6 +952,20 @@ impl Parser {
 
         // bare expression statement
         let span = first.span();
+        // Starlark's `fail(…)` statement stops evaluation: lower it to a
+        // `throw` of the call (so its arguments are still checked), which
+        // makes the code after it unreachable for narrowing and returns.
+        if self.starlark {
+            if let Expr::Call { callee, .. } = &first {
+                if matches!(&**callee, Expr::Ident { name, .. } if name == "fail" && self.is_builtin("fail"))
+                {
+                    return Ok(vec![Stmt::Throw {
+                        argument: first,
+                        span,
+                    }]);
+                }
+            }
+        }
         Ok(vec![Stmt::Expr {
             expression: first,
             span,
@@ -618,7 +983,13 @@ impl Parser {
         if targets.len() == 1 {
             let t = &targets[0];
             if let Some(name) = self.bare_name(t) {
-                return Ok(self.declare_or_assign_single(name, Some(value), None, span));
+                // A type comment at the end of the line declares the type:
+                // `names = []  # type: list[str]`.
+                let type_ast = match self.type_comment_between(span.end, self.cur_span().start) {
+                    Some(c) => Some(Self::comment_type(&c)?),
+                    None => None,
+                };
+                return self.declare_or_assign_single(name, Some(value), type_ast, span);
             }
             if !t.is_valid_assignment_target() {
                 return Err(ParseError::InvalidAssignmentTarget { span: t.span() }.into());
@@ -745,7 +1116,7 @@ impl Parser {
             // every target shares the statement span, and a declaration
             // is located (and its type keyed) by where its span starts.
             let span = Span::new(target.span().start, span.end);
-            return Ok(self.declare_or_assign_single(name, Some(value), None, span));
+            return self.declare_or_assign_single(name, Some(value), None, span);
         }
         if !target.is_valid_assignment_target() {
             return Err(ParseError::InvalidAssignmentTarget {
@@ -779,8 +1150,11 @@ impl Parser {
         init: Option<Expr>,
         type_ast: Option<TypeAst>,
         span: Span,
-    ) -> Stmt {
-        if self.is_global(&name) || self.local_declared(&name) {
+    ) -> Result<Stmt> {
+        if self.starlark && !self.in_function() && self.local_declared(&name) {
+            return Err(self.reassigned_global(&name, span));
+        }
+        Ok(if self.is_global(&name) || self.local_declared(&name) {
             // already bound (global rebind or local reassignment); a bare
             // annotation with no value is a no-op.
             match init {
@@ -809,7 +1183,7 @@ impl Parser {
                 }],
                 span,
             }
-        }
+        })
     }
 
     fn bare_name(&self, e: &Expr) -> Option<String> {
@@ -893,6 +1267,70 @@ impl Parser {
         param
     }
 
+    /// Consume a bare `*,` in a parameter list: the marker after which
+    /// parameters are keyword-only (`def f(a, *, b)`). The parameters
+    /// that follow are lowered as ordinary named parameters, so a call
+    /// that passes them by keyword is checked; one that passes them by
+    /// position is accepted although Python and Starlark reject it.
+    fn eat_keyword_only_marker(&mut self) -> bool {
+        if self.check(&Tok::Star) && matches!(self.peek_tok(1), Tok::Comma) {
+            self.advance(); // *
+            self.advance(); // ,
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Apply a PEP 484 signature type comment, `# type: (T1, T2) -> R`,
+    /// written after a `def` header's `:` (on that line or as the first
+    /// line of the body), to the parameters and return type. A type
+    /// written inline (`a: T`, `-> R`) takes precedence over the comment.
+    /// For a method (`receiver`), `params` leaves out `self`, and the
+    /// comment may give `self` a type or leave it out, as PEP 484 allows.
+    fn apply_signature_comment(
+        &mut self,
+        params: &mut [Param],
+        ret: &mut Option<TypeAst>,
+        receiver: bool,
+    ) -> Result<()> {
+        let from = self.prev_span().end;
+        // Up to the first token of the body.
+        let to = self.toks[self.pos..]
+            .iter()
+            .find(|t| !matches!(t.value, Tok::Newline | Tok::Indent))
+            .map_or(usize::MAX, |t| t.span.start);
+        let Some(c) = self.type_comment_between(from, to) else {
+            return Ok(());
+        };
+        let (param_types, ret_type) = Self::comment_signature(&c)?;
+        if let Some(mut types) = param_types {
+            if receiver && types.len() == params.len() + 1 {
+                types.remove(0); // `self`'s type
+            }
+            if types.len() != params.len() {
+                return Err(ParseError::Unsupported {
+                    feature: format!(
+                        "the type comment gives {} parameter type(s) but the function has {}",
+                        types.len(),
+                        params.len()
+                    ),
+                    span: Span::new(c.offset, c.offset + c.text.len()),
+                }
+                .into());
+            }
+            for (p, t) in params.iter_mut().zip(types) {
+                if p.type_ast.is_none() {
+                    p.type_ast = Some(t);
+                }
+            }
+        }
+        if ret.is_none() {
+            *ret = Some(ret_type);
+        }
+        Ok(())
+    }
+
     fn def_stmt(&mut self) -> Result<Stmt> {
         let start = self.cur_span().start;
         self.advance(); // def
@@ -902,6 +1340,9 @@ impl Parser {
         let mut params = Vec::new();
         if !self.check(&Tok::RParen) {
             loop {
+                if self.eat_keyword_only_marker() {
+                    continue;
+                }
                 if matches!(self.cur(), Tok::Star | Tok::DStar) {
                     return Err(self.unsupported("*args / **kwargs are not supported"));
                 }
@@ -932,19 +1373,33 @@ impl Parser {
         self.expect(&Tok::RParen, "')'")?;
         // Optional return annotation (`-> T`), parsed into the shared
         // TypeAst IR so inference can check the body against it.
-        let return_type_ast = if self.eat(&Tok::Arrow) {
+        let mut return_type_ast = if self.eat(&Tok::Arrow) {
             Some(self.parse_type_ast())
         } else {
             None
         };
         self.expect(&Tok::Colon, "':'")?;
+        self.apply_signature_comment(&mut params, &mut return_type_ast, false)?;
 
+        let starlark_top = self.starlark && !self.in_function();
+        if starlark_top {
+            if self.local_declared(&name) {
+                return Err(self.reassigned_global(&name, name_span));
+            }
+            self.declare(&name);
+            self.top_defs.push((name.clone(), name_span));
+            self.top_def = Some(name.clone());
+        }
         self.scopes.push(Scope::default());
         for p in &params {
             self.declare(&p.name);
         }
-        let body = self.suite()?;
+        let body = self.suite();
         self.scopes.pop();
+        if starlark_top {
+            self.top_def = None;
+        }
+        let body = body?;
 
         Ok(Stmt::FunctionDecl {
             name,
@@ -1025,6 +1480,9 @@ impl Parser {
                     if !self.check(&Tok::RParen) {
                         let mut idx = 0;
                         loop {
+                            if self.eat_keyword_only_marker() {
+                                continue;
+                            }
                             if matches!(self.cur(), Tok::Star | Tok::DStar) {
                                 return Err(self.unsupported("*args / **kwargs are not supported"));
                             }
@@ -1054,12 +1512,17 @@ impl Parser {
                         }
                     }
                     self.expect(&Tok::RParen, "')'")?;
-                    let return_type_ast = if self.eat(&Tok::Arrow) {
+                    let mut return_type_ast = if self.eat(&Tok::Arrow) {
                         Some(self.parse_type_ast())
                     } else {
                         None
                     };
                     self.expect(&Tok::Colon, "':'")?;
+                    self.apply_signature_comment(
+                        &mut params,
+                        &mut return_type_ast,
+                        self_param.is_some(),
+                    )?;
 
                     // Parse the body with `self` lowered to `this`.
                     let saved_self = self.self_name.take();
@@ -1675,7 +2138,7 @@ impl Parser {
             let span = Span::new(item_start, self.prev_span().end);
             match bound {
                 Some(name) => {
-                    out.push(self.declare_or_assign_single(name, Some(value), None, span))
+                    out.push(self.declare_or_assign_single(name, Some(value), None, span)?)
                 }
                 None => out.push(Stmt::Expr {
                     expression: value,
@@ -1730,31 +2193,7 @@ impl Parser {
         self.declare(&tmp);
         let span_so_far = Span::new(start, self.prev_span().end);
         let inner = self.suite()?;
-        let mut body = Vec::with_capacity(targets.len() + 1);
-        for (i, (t, t_span)) in targets.iter().zip(&target_spans).enumerate() {
-            body.push(Stmt::Var {
-                kind: VarKind::Var,
-                declarations: vec![VarDeclarator {
-                    name: t.clone(),
-                    init: Some(Expr::ComputedMember {
-                        object: Box::new(Expr::Ident {
-                            name: tmp.clone(),
-                            span: span_so_far,
-                        }),
-                        property: Box::new(Expr::Lit {
-                            value: Literal::Number(i as f64),
-                            span: span_so_far,
-                        }),
-                        span: span_so_far,
-                    }),
-                    type_annotation: None,
-                    type_ast: None,
-                    kind: VarKind::Var,
-                    span: *t_span,
-                }],
-                span: span_so_far,
-            });
-        }
+        let mut body = destructure_targets(&tmp, &targets, &target_spans, span_so_far);
         body.push(*inner);
         let span = Span::new(start, self.prev_span().end);
         Ok(Stmt::ForOf {
@@ -1795,7 +2234,15 @@ impl Parser {
             }
         }
         self.expect(&Tok::Colon, "':'")?;
-        let body_expr = self.expr()?;
+        // The parameters are bound in the body: a call of one isn't a call
+        // of a module-level `def` of the same name (Starlark's recursion
+        // check).
+        let mut scope = Scope::default();
+        scope.locals.extend(params.iter().map(|p| p.name.clone()));
+        self.scopes.push(scope);
+        let body_expr = self.expr();
+        self.scopes.pop();
+        let body_expr = body_expr?;
         let span = Span::new(start, self.prev_span().end);
         let body = Box::new(Stmt::Block {
             body: vec![Stmt::Return {
@@ -1869,6 +2316,9 @@ impl Parser {
     fn comparison(&mut self) -> Result<Expr> {
         let start = self.cur_span().start;
         let left = self.bitor()?;
+        if self.starlark && self.check(&Tok::Is) {
+            return Err(self.not_starlark("'is'", "use =="));
+        }
         // Two-token operators (`is not`, `not in`) need lookahead.
         let (op, negate, advance_tokens) = match (self.cur(), self.peek_tok(1)) {
             (Tok::Is, Tok::Not) => (Some(BinOp::EqEqEq), true, 2),
@@ -1999,6 +2449,9 @@ impl Parser {
         let start = self.cur_span().start;
         let base = self.postfix()?;
         if self.check(&Tok::DStar) {
+            if self.starlark {
+                return Err(self.not_starlark("the '**' operator", ""));
+            }
             self.advance();
             let exp = self.factor()?; // right-associative, allows unary
             return Ok(Expr::Binary {
@@ -2009,6 +2462,49 @@ impl Parser {
             });
         }
         Ok(base)
+    }
+
+    /// The rest of a slice subscript `e[lower:upper:step]`, positioned at
+    /// the first `:`. Lowered to a call of the [`SLICE_METHOD`] that the
+    /// Python `str` and `list` method surfaces provide, with `None` for an
+    /// omitted bound: `xs[1:]` ⇒ `xs.[:](1, None, None)`. The result
+    /// has the receiver's type (a string or a list of the same element).
+    fn slice(&mut self, start: usize, object: Expr, lower: Option<Expr>) -> Result<Expr> {
+        let none = |span: Span| Expr::Lit {
+            value: Literal::Null,
+            span,
+        };
+        let colon_span = self.cur_span();
+        self.expect(&Tok::Colon, "':'")?;
+        let bound = |p: &mut Self| -> Result<Option<Expr>> {
+            if matches!(p.cur(), Tok::Colon | Tok::RBracket) {
+                Ok(None)
+            } else {
+                Ok(Some(p.expr()?))
+            }
+        };
+        let upper = bound(self)?;
+        let step = if self.eat(&Tok::Colon) {
+            bound(self)?
+        } else {
+            None
+        };
+        self.expect(&Tok::RBracket, "']'")?;
+        let span = Span::new(start, self.prev_span().end);
+        let arguments = [lower, upper, step]
+            .into_iter()
+            .map(|b| b.unwrap_or_else(|| none(colon_span)))
+            .collect();
+        Ok(Expr::Call {
+            callee: Box::new(Expr::Member {
+                object: Box::new(object),
+                property: SLICE_METHOD.to_string(),
+                span,
+            }),
+            arguments,
+            keywords: vec![],
+            span,
+        })
     }
 
     fn postfix(&mut self) -> Result<Expr> {
@@ -2027,10 +2523,16 @@ impl Parser {
                 }
                 Tok::LBracket => {
                     self.advance();
-                    let index = self.expr()?;
+                    let lower = if self.check(&Tok::Colon) {
+                        None
+                    } else {
+                        Some(self.expr()?)
+                    };
                     if self.check(&Tok::Colon) {
-                        return Err(self.unsupported("slicing is not supported"));
+                        e = self.slice(start, e, lower)?;
+                        continue;
                     }
+                    let index = lower.expect("a subscript without ':' has an index");
                     self.expect(&Tok::RBracket, "']'")?;
                     let span = Span::new(start, self.prev_span().end);
                     // `d["name"]` (string-literal key) is a field access,
@@ -2054,12 +2556,31 @@ impl Parser {
                 }
                 Tok::LParen => {
                     self.advance();
-                    let (arguments, keywords) = self.call_args()?;
+                    let (arguments, keywords) = self.call_args(&e)?;
+                    let span = Span::new(start, self.prev_span().end);
+                    if self.starlark {
+                        if let Expr::Ident { name, .. } = &e {
+                            // `struct(a = 1, b = x)` builds a record.
+                            if name == "struct"
+                                && arguments.is_empty()
+                                && !keywords.is_empty()
+                                && self.is_builtin("struct")
+                            {
+                                e = struct_literal(keywords, span);
+                                continue;
+                            }
+                            if let Some(caller) = &self.top_def {
+                                if !self.bound_in_function(name) {
+                                    self.top_calls.push((caller.clone(), name.clone(), span));
+                                }
+                            }
+                        }
+                    }
                     e = Expr::Call {
                         callee: Box::new(e),
                         arguments,
                         keywords,
-                        span: Span::new(start, self.prev_span().end),
+                        span,
                     };
                 }
                 _ => break,
@@ -2068,10 +2589,48 @@ impl Parser {
         Ok(e)
     }
 
+    /// A generator expression passed to `callee` is lowered to a list, which
+    /// is faithful only where the callee just iterates its argument: these
+    /// builtins and methods. Starlark has no generator expressions.
+    fn check_generator_consumer(&self, callee: &Expr) -> Result<()> {
+        const CONSUMERS: &[&str] = &[
+            "any",
+            "all",
+            "sum",
+            "min",
+            "max",
+            "sorted",
+            "list",
+            "tuple",
+            "set",
+            "frozenset",
+            "dict",
+            "enumerate",
+            "join",
+            "extend",
+        ];
+        if self.starlark {
+            return Err(self.not_starlark("a generator expression", "use a list comprehension"));
+        }
+        let name = match callee {
+            Expr::Ident { name, .. } => Some(name.as_str()),
+            Expr::Member { property, .. } => Some(property.as_str()),
+            _ => None,
+        };
+        if name.is_some_and(|n| CONSUMERS.contains(&n)) {
+            Ok(())
+        } else {
+            Err(self.unsupported(
+                "a generator expression is supported only as the sole argument of a call \
+                 that iterates it (any, all, sum, sorted, join, …); use a list comprehension",
+            ))
+        }
+    }
+
     /// Parse a call's argument list into `(positional, keyword)`. A
     /// `name=value` argument is a keyword; positional arguments may not
     /// follow a keyword (a Python `SyntaxError`).
-    fn call_args(&mut self) -> Result<CallArgs> {
+    fn call_args(&mut self, callee: &Expr) -> Result<CallArgs> {
         let mut args = Vec::new();
         let mut kwargs: Vec<(String, Expr)> = Vec::new();
         if self.check(&Tok::RParen) {
@@ -2101,7 +2660,18 @@ impl Parser {
             if !kwargs.is_empty() {
                 return Err(self.unsupported("positional argument follows keyword argument"));
             }
-            args.push(self.expr()?);
+            let arg_start = self.cur_span().start;
+            let arg = self.expr()?;
+            // A generator expression as the sole argument of a call that
+            // only iterates it (`any(x > 0 for x in xs)`): lowered to a list
+            // comprehension, which it iterates the same way.
+            if args.is_empty() && self.check(&Tok::For) {
+                self.check_generator_consumer(callee)?;
+                args.push(self.comprehension(arg_start, arg)?);
+                self.expect(&Tok::RParen, "')'")?;
+                return Ok((args, kwargs));
+            }
+            args.push(arg);
             if !self.eat(&Tok::Comma) {
                 break;
             }
@@ -2145,6 +2715,9 @@ impl Parser {
             // An f-string desugars to a template literal: it always
             // evaluates to `String`, and each interpolation is re-parsed
             // and type-checked as an embedded expression.
+            Tok::FString { .. } if self.starlark => {
+                Err(self.not_starlark("an f-string", "use % or .format()"))
+            }
             Tok::FString { quasis, exprs } => {
                 self.advance();
                 let mut expressions = Vec::with_capacity(exprs.len());
@@ -2199,6 +2772,19 @@ impl Parser {
                     });
                 }
                 let first = self.expr()?;
+                // `(e for x in xs)` on its own: a generator, which can't be
+                // indexed or measured as a list can, so it isn't one.
+                if self.check(&Tok::For) {
+                    return Err(if self.starlark {
+                        self.not_starlark("a generator expression", "use a list comprehension")
+                    } else {
+                        self.unsupported(
+                            "a generator expression is supported only as the sole argument \
+                             of a call that iterates it (any, all, sum, sorted, join, …); \
+                             use a list comprehension",
+                        )
+                    });
+                }
                 // A comma makes it a tuple (`(a, b)`, `(a,)`); otherwise the
                 // parentheses are just grouping.
                 if self.check(&Tok::Comma) {
@@ -2230,10 +2816,13 @@ impl Parser {
         self.advance(); // [
         let mut elements = Vec::new();
         while !self.check(&Tok::RBracket) {
-            elements.push(Some(self.expr()?));
-            if self.check(&Tok::For) {
-                return Err(self.unsupported("list comprehensions are not supported"));
+            let element = self.expr()?;
+            if elements.is_empty() && self.check(&Tok::For) {
+                let comp = self.comprehension(start, element)?;
+                self.expect(&Tok::RBracket, "']'")?;
+                return Ok(comp);
             }
+            elements.push(Some(element));
             if !self.eat(&Tok::Comma) {
                 break;
             }
@@ -2245,27 +2834,217 @@ impl Parser {
         })
     }
 
+    /// Parse the `for … in …` / `if …` clauses of a comprehension whose
+    /// element expression is already parsed, and lower the whole thing to
+    /// an immediately-called arrow function that builds the list:
+    ///
+    /// ```text
+    /// [e for x in xs if c for y in ys]
+    ///   ⇒ ((it) => { var acc = [];
+    ///                for (var x of it) if (c) for (var y of ys) acc.append(e);
+    ///                return acc; })(xs)
+    /// ```
+    ///
+    /// The loop variables are `var`s of the arrow function, so they are
+    /// local to the comprehension and never leak into (or get declared in)
+    /// the enclosing scope, as in Python 3 and Starlark. The first iterable
+    /// is evaluated in the enclosing scope, as Python does, so it is passed
+    /// in as the argument rather than read inside the function, where a
+    /// loop variable of the same name would shadow it (`[x for x in x]`).
+    /// The arrow function keeps the enclosing `this`, so `self.f` inside a
+    /// method's comprehension still means the receiver. Tuple targets
+    /// (`for k, v in pairs`) destructure by index, as a `for` statement
+    /// does. Used for list comprehensions and for a generator expression
+    /// passed as a call's sole argument (`any(x > 0 for x in xs)`), whose
+    /// consumers all take a list.
+    fn comprehension(&mut self, start: usize, element: Expr) -> Result<Expr> {
+        enum Clause {
+            For {
+                targets: Vec<String>,
+                spans: Vec<Span>,
+                iter: Expr,
+                span: Span,
+            },
+            If(Expr),
+        }
+        let mut clauses = Vec::new();
+        loop {
+            if self.check(&Tok::For) {
+                let clause_start = self.cur_span().start;
+                self.advance(); // for
+                let mut targets = vec![self.expect_name("loop variable")?];
+                let mut spans = vec![self.prev_span()];
+                while self.eat(&Tok::Comma) {
+                    targets.push(self.expect_name("loop variable")?);
+                    spans.push(self.prev_span());
+                }
+                self.expect(&Tok::In, "'in'")?;
+                let iter = self.or_expr()?;
+                clauses.push(Clause::For {
+                    targets,
+                    spans,
+                    iter,
+                    span: Span::new(clause_start, self.prev_span().end),
+                });
+            } else if self.check(&Tok::If) {
+                self.advance(); // if
+                clauses.push(Clause::If(self.or_expr()?));
+            } else {
+                break;
+            }
+        }
+        let span = Span::new(start, self.prev_span().end);
+
+        // A call of a loop variable is not a call of a module-level `def` of
+        // the same name: drop such calls the element and conditions (parsed
+        // before the targets were known) recorded for the recursion check.
+        let targets: Vec<&String> = clauses
+            .iter()
+            .filter_map(|c| match c {
+                Clause::For { targets, .. } => Some(targets),
+                Clause::If(_) => None,
+            })
+            .flatten()
+            .collect();
+        self.top_calls
+            .retain(|(_, callee, at)| at.start < start || !targets.contains(&callee));
+
+        let acc = self.fresh_temp();
+        let first_iter = self.fresh_temp();
+        let ident = |name: &str| Expr::Ident {
+            name: name.to_string(),
+            span,
+        };
+        // Innermost: `acc.append(element)`.
+        let mut inner = Stmt::Expr {
+            expression: Expr::Call {
+                callee: Box::new(Expr::Member {
+                    object: Box::new(ident(&acc)),
+                    property: "append".to_string(),
+                    span,
+                }),
+                arguments: vec![element],
+                keywords: vec![],
+                span,
+            },
+            span,
+        };
+        let mut first = None;
+        for (i, clause) in clauses.into_iter().enumerate().rev() {
+            inner = match clause {
+                Clause::If(test) => Stmt::If {
+                    test,
+                    consequent: Box::new(inner),
+                    alternate: None,
+                    span,
+                },
+                Clause::For {
+                    mut targets,
+                    spans,
+                    iter,
+                    span: clause_span,
+                } => {
+                    // The first clause iterates the argument instead.
+                    let right = if i == 0 {
+                        first = Some(iter);
+                        ident(&first_iter)
+                    } else {
+                        iter
+                    };
+                    if targets.len() == 1 {
+                        Stmt::ForOf {
+                            left: ForInLhs::VarDecl(
+                                targets.pop().unwrap(),
+                                None,
+                                spans[0],
+                                VarKind::Var,
+                            ),
+                            right,
+                            body: Box::new(inner),
+                            span: clause_span,
+                        }
+                    } else {
+                        let tmp = self.fresh_temp();
+                        let mut body = destructure_targets(&tmp, &targets, &spans, clause_span);
+                        body.push(inner);
+                        Stmt::ForOf {
+                            left: ForInLhs::VarDecl(tmp, None, clause_span, VarKind::Var),
+                            right,
+                            body: Box::new(Stmt::Block {
+                                body,
+                                span: clause_span,
+                            }),
+                            span: clause_span,
+                        }
+                    }
+                }
+            };
+        }
+        let Some(first) = first else {
+            return Err(self.unexpected("'for' in comprehension"));
+        };
+        let body = Stmt::Block {
+            body: vec![
+                Stmt::Var {
+                    kind: VarKind::Var,
+                    declarations: vec![VarDeclarator {
+                        name: acc.clone(),
+                        init: Some(Expr::Array {
+                            elements: vec![],
+                            span,
+                        }),
+                        type_annotation: None,
+                        type_ast: None,
+                        kind: VarKind::Var,
+                        span,
+                    }],
+                    span,
+                },
+                inner,
+                Stmt::Return {
+                    argument: Some(ident(&acc)),
+                    span,
+                },
+            ],
+            span,
+        };
+        Ok(Expr::Call {
+            callee: Box::new(Expr::Function {
+                name: None,
+                params: vec![Param::new(first_iter, span)],
+                body: Box::new(body),
+                type_annotation: None,
+                arrow: true,
+                span,
+            }),
+            arguments: vec![first],
+            keywords: vec![],
+            span,
+        })
+    }
+
     fn dict(&mut self) -> Result<Expr> {
         let start = self.cur_span().start;
         self.advance(); // {
         let mut props = Vec::new();
         while !self.check(&Tok::RBrace) {
             let field_span = self.cur_span();
-            let key =
-                match self.cur().clone() {
-                    Tok::Str(s) => {
-                        self.advance();
-                        PropKey::String(s)
-                    }
-                    Tok::Number(n) => {
-                        self.advance();
-                        PropKey::Number(n)
-                    }
-                    _ => return Err(self.unsupported(
-                        "dict keys must be string or number literals (or this is a set literal, \
-                         which is unsupported)",
-                    )),
-                };
+            let key = match self.cur().clone() {
+                Tok::Str(s) => {
+                    self.advance();
+                    PropKey::String(s)
+                }
+                Tok::Number(n) => {
+                    self.advance();
+                    PropKey::Number(n)
+                }
+                _ => {
+                    return Err(self.unsupported(
+                        "dict keys must be string or number literals \
+                         (set literals and dict comprehensions are unsupported)",
+                    ))
+                }
+            };
             self.expect(&Tok::Colon, "':' in dict")?;
             let value = self.expr()?;
             props.push(PropDef::Property {
@@ -2285,6 +3064,64 @@ impl Parser {
             span: Span::new(start, self.prev_span().end),
         })
     }
+}
+
+/// `struct(a = 1, b = x)` ⇒ the record `{a: 1, b: x}`: Starlark's
+/// `struct` is a record whose fields are its keyword arguments.
+fn struct_literal(keywords: Vec<(String, Expr)>, span: Span) -> Expr {
+    Expr::Object {
+        properties: keywords
+            .into_iter()
+            .map(|(name, value)| PropDef::Property {
+                span: value.span(),
+                key: PropKey::Ident(name),
+                value,
+                type_annotation: None,
+                type_ast: None,
+            })
+            .collect(),
+        span,
+    }
+}
+
+/// The method a slice subscript (`xs[a:b:c]`) lowers to. The Python
+/// `str` and `list` method surfaces define it (`builtins::python_*_method_type`).
+/// Not a name a program can write (or define on a class), so only a slice
+/// reaches it.
+pub const SLICE_METHOD: &str = "[:]";
+
+/// `var t0 = tmp[0]; var t1 = tmp[1]; …` — the statements that bind the
+/// names of a tuple target (`for k, v in …`) from the element `tmp`. Each
+/// declaration keeps its name's span, so the LSP anchors the type hint on
+/// the name.
+fn destructure_targets(tmp: &str, targets: &[String], spans: &[Span], span: Span) -> Vec<Stmt> {
+    targets
+        .iter()
+        .zip(spans)
+        .enumerate()
+        .map(|(i, (t, t_span))| Stmt::Var {
+            kind: VarKind::Var,
+            declarations: vec![VarDeclarator {
+                name: t.clone(),
+                init: Some(Expr::ComputedMember {
+                    object: Box::new(Expr::Ident {
+                        name: tmp.to_string(),
+                        span,
+                    }),
+                    property: Box::new(Expr::Lit {
+                        value: Literal::Number(i as f64),
+                        span,
+                    }),
+                    span,
+                }),
+                type_annotation: None,
+                type_ast: None,
+                kind: VarKind::Var,
+                span: *t_span,
+            }],
+            span,
+        })
+        .collect()
 }
 
 /// Typing special forms that are *only* type-level — assigning one is
