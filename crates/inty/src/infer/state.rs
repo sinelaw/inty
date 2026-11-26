@@ -447,7 +447,7 @@ pub struct InferState {
     /// single `unify` invocation but lives on the state so it threads
     /// through `&mut self` without rewriting the call signature.
     pub(in crate::infer) unfold_assumptions: Vec<UnfoldAssumption>,
-    /// Current nesting of [`Self::unify`] (see `MAX_UNIFY_DEPTH`).
+    /// Current nesting of [`Self::unify`] (0: no unification under way).
     pub(in crate::infer) unify_depth: usize,
     /// The properties [`Self::unify`] is inside, outermost first: the
     /// field of a record it is comparing, and the field of that, … A
@@ -491,12 +491,11 @@ pub(in crate::infer) enum UnfoldAssumption {
     /// first unfold's assumption one level down, and accept a function
     /// whose second call returns a function as one returning a number.
     NamedRow(TypeId, Vec<Type>, Type),
-    /// Two open rows' tail variables (smaller id first) are being
-    /// unified. A cycle in the substitution — `ρ₁ ↦ {… | ρ₂}` and
-    /// `ρ₂ ↦ {… | ρ₁}`, which `zonk` shows as free tails — otherwise
-    /// makes every attempt re-bind an already-bound tail and unify the
-    /// same pair again, without end.
-    RowTails(TVarId, TVarId),
+    /// A recursive type `Named(id, args)` and the variable (its root)
+    /// bound to the type it is being unified with. The variable is the
+    /// node: met again, by whatever type it has been bound to since (a
+    /// row extended with fresh tails), it is the same goal.
+    VarNamed(TVarId, TypeId, Vec<Type>),
 }
 
 /// State captured by [`InferState::snapshot_inference`] and consumed
@@ -3124,6 +3123,57 @@ impl InferState {
     /// Check if a type variable occurs within a row type (for recursive type detection).
     /// Returns true if the variable occurs at the tail position of a row.
     /// (Walks through the substitution lazily, as [`Self::occurs_in`].)
+    /// The fields of the row `ty` when it ends in `var` (its tail is
+    /// `var`, through the rows, and recursive types' rows, its tail is
+    /// bound to): every field on the way, the first of each label. `None`
+    /// if it doesn't end in `var` (it ends in another variable, is closed,
+    /// or isn't a row).
+    ///
+    /// Binding `var` to such a row makes no recursive type: a row's tail
+    /// stands for the fields it doesn't list, so `ρ = {F | ρ}` says that
+    /// `ρ` has the fields `F`, `ρ := {F | ρ'}`, and with no fields says
+    /// nothing. (Made one, `μX. {F | X}` is a row that never ends:
+    /// unifying it with another row extends that one's tail forever.)
+    pub fn row_ends_in(
+        &self,
+        var: TVarId,
+        ty: &Type,
+    ) -> Option<std::collections::BTreeMap<crate::types::PropName, crate::types::FieldEntry>> {
+        let mut fields = std::collections::BTreeMap::new();
+        let mut seen_vars = std::collections::HashSet::new();
+        let mut seen_named = std::collections::HashSet::new();
+        let mut unrolled: Type;
+        let mut cur = ty;
+        loop {
+            match cur {
+                Type::Row(row) => {
+                    for (k, e) in &row.props {
+                        fields.entry(k.clone()).or_insert_with(|| e.clone());
+                    }
+                    match &row.tail {
+                        RowTail::Open(TVarName::Flex(id)) if *id == var => return Some(fields),
+                        RowTail::Open(TVarName::Flex(id)) => {
+                            cur = self.bound_unseen(*id, &mut seen_vars)?;
+                        }
+                        _ => return None,
+                    }
+                }
+                Type::Var(TVarName::Flex(id)) if *id == var => return Some(fields),
+                Type::Var(TVarName::Flex(id)) => {
+                    cur = self.bound_unseen(*id, &mut seen_vars)?;
+                }
+                Type::Named(id, args) if !self.is_nominal_type(*id) => {
+                    if !seen_named.insert(*id) {
+                        return None;
+                    }
+                    unrolled = self.unroll_named(*id, args)?;
+                    cur = &unrolled;
+                }
+                _ => return None,
+            }
+        }
+    }
+
     pub fn is_inside_row_type(&self, var: TVarId, ty: &Type) -> bool {
         // A variable's type is looked at once outside a row and once
         // inside one (where finding `var` means more).
