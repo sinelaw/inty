@@ -794,6 +794,7 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                     body,
                     type_annotation,
                     span,
+                    ..
                 } => {
                     if let Some(text) = as_written(*span) {
                         return write!(w, "export {}", text);

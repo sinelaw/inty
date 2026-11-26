@@ -173,7 +173,14 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
     program.type_aliases = type_aliases;
 
     let mut state = InferState::new();
-    state.load_type_aliases(&program.type_aliases)?;
+    // As `infer_program_with_env`: fail with the first error collected
+    // (an alias or annotation that doesn't parse is collected, and what
+    // it annotates checked without it).
+    let first_collected = |state: &InferState| state.errors.first().cloned();
+    state.load_type_aliases(&program.type_aliases);
+    if let Some(e) = first_collected(&state) {
+        return Err(e);
+    }
     state.resolution =
         crate::ast::resolve::Resolution::of_program(&program.statements, program.language);
     let env = initial_env();
@@ -185,6 +192,9 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
         let (ty, new_env) = state.infer_stmt(&final_env, stmt)?;
         result_ty = ty;
         final_env = new_env;
+    }
+    if let Some(e) = first_collected(&state) {
+        return Err(e);
     }
 
     Ok((result_ty, final_env, state))

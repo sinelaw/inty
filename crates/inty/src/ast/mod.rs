@@ -125,6 +125,8 @@ pub enum ExportDecl {
         params: Vec<Param>,
         body: Box<Stmt>,
         type_annotation: Option<TypeAnnotation>,
+        /// Where the function's name sits, as on [`Stmt::FunctionDecl`].
+        name_span: Option<Span>,
         span: Source,
     },
     /// Default export: `export default expr;` or `export default function f() {}`.
@@ -779,6 +781,14 @@ pub struct VarDeclarator {
     pub span: Source,
 }
 
+impl VarDeclarator {
+    /// The span of the declared name: `span` covers `name = init`, and
+    /// starts at the name.
+    pub fn name_span(&self) -> Span {
+        Span::new(self.span.start, self.span.start + self.name.len())
+    }
+}
+
 /// Left-hand side of for-in/of
 #[derive(Debug, Clone)]
 pub enum ForInLhs {
@@ -934,18 +944,20 @@ pub enum Stmt {
         /// Currently only the Python frontend sets this; others leave it
         /// `None`. Inference checks the body's result against it.
         return_type_ast: Option<crate::types::TypeAst>,
-        /// Where the function's name sits, when the frontend knows it.
-        /// `None` falls back to "just after `function `".
+        /// Where the function's name sits. Parsers always record it;
+        /// `None` is for a declaration synthesised with no name in the
+        /// source (see [`function_name_span`]).
         name_span: Option<Span>,
         span: Source,
     },
 }
 
-/// Where a function declaration's name sits. Frontends that know it
-/// record `name_span`; otherwise it's taken to follow `function ` at
-/// the start of `decl_span`, which holds for JavaScript declarations.
+/// Where a function declaration's name sits: its recorded `name_span`,
+/// or, for a declaration synthesised with no name in the source, a
+/// stand-in just after `function ` at the start of `decl_span`.
 /// Inference keys the function's type by this span and the LSP looks
-/// it up by the same span, so both must go through here.
+/// it up by the same span, so both must go through here (or through
+/// [`Stmt::function_name_span`]).
 pub fn function_name_span(name_span: Option<Span>, decl_span: Span, name: &str) -> Span {
     name_span.unwrap_or_else(|| {
         let start = decl_span.start + "function ".len();
@@ -954,6 +966,31 @@ pub fn function_name_span(name_span: Option<Span>, decl_span: Span, name: &str) 
 }
 
 impl Stmt {
+    /// The span of the name a function declaration binds, plain or
+    /// exported (see [`function_name_span`]); `None` for any other
+    /// statement.
+    pub fn function_name_span(&self) -> Option<Span> {
+        match self {
+            Stmt::FunctionDecl {
+                name,
+                name_span,
+                span,
+                ..
+            }
+            | Stmt::Export {
+                declaration:
+                    ExportDecl::Function {
+                        name,
+                        name_span,
+                        span,
+                        ..
+                    },
+                ..
+            } => Some(function_name_span(*name_span, *span, name)),
+            _ => None,
+        }
+    }
+
     /// Get the source span for this statement
     pub fn span(&self) -> Source {
         match self {

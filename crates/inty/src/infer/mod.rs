@@ -148,14 +148,39 @@ impl InferState {
     }
 
     /// Infer the type of a program, returning both the type and the final environment.
-    /// Its error, like those it records, is rendered (`render_error`).
+    ///
+    /// Fails exactly when the program collected an error in
+    /// [`InferState::errors`], and the error returned is the first of
+    /// them, rendered as they are (`render_error`), so a caller that
+    /// drains them (to report every one) never needs the returned error
+    /// as well. The environment the program left behind despite them is
+    /// then [`InferState::take_env_after_errors`].
     pub fn infer_program_with_env(
         &mut self,
         env: &TypeEnv,
         program: &Program,
     ) -> InferResult<(Type, TypeEnv)> {
-        self.infer_program_unrendered(env, program)
-            .map_err(|e| self.render_error(e))
+        let errors_at_entry = self.errors.len();
+        self.env_after_errors = None;
+        let result = self.infer_program_unrendered(env, program);
+        let first_collected = |state: &Self| state.errors.get(errors_at_entry).cloned();
+        match result {
+            Ok(done) if self.errors.len() == errors_at_entry => Ok(done),
+            // Collected beside the statement list's own (a type alias
+            // that doesn't parse, a read before initialisation).
+            Ok((_, env)) => {
+                self.env_after_errors = Some(env);
+                Err(first_collected(self).expect("an error was collected"))
+            }
+            Err(e) => {
+                if self.errors.len() == errors_at_entry {
+                    self.push_error(e.clone());
+                }
+                // (`push_error` keeps one of equal errors, so `e` may
+                // have been collected before this call.)
+                Err(first_collected(self).unwrap_or_else(|| self.render_error(e)))
+            }
+        }
     }
 
     fn infer_program_unrendered(
@@ -185,7 +210,7 @@ impl InferState {
         // to `Foo<X>` is exactly equivalent to inlining `Foo`'s body
         // with the type argument substituted.
         self.reserve_class_names(program);
-        self.load_type_aliases(&program.type_aliases)?;
+        self.load_type_aliases(&program.type_aliases);
         self.check_alias_refs(env, program);
         // Inject constructors for declared nominal types before checking
         // the body, so `Name(repr)` resolves to a branded value.
@@ -222,6 +247,8 @@ impl InferState {
             .cloned()
             .collect();
         let result = self.infer_stmt_list(&env, &program.statements);
+        // (A module imported mid-way leaves its own here: take ours now.)
+        let env_after_errors = self.env_after_errors.take();
         // The method calls whose callee's `this` is still unknown, then
         // the detached ones (see `generalize_seeded`).
         self.settle_receivers(None);
@@ -240,6 +267,10 @@ impl InferState {
         }
         self.ambient = ambient;
         let result = result.map(|(ty, env)| (ty, env.without_narrowings().globalized()));
+        self.env_after_errors = match &result {
+            Ok(_) => None,
+            Err(_) => env_after_errors.map(|env| env.without_narrowings().globalized()),
+        };
         self.stmt_list_depth = depth;
         // Every binding read before its declaration must have met it
         // since: one that didn't means a declaration was bound under a
@@ -373,7 +404,7 @@ impl InferState {
     /// after it). Aliases that refer to themselves, directly or through
     /// each other, become equi-recursive named types
     /// (`type Tree = { kids: Tree[] }`).
-    pub fn load_type_aliases(&mut self, aliases: &[crate::ast::TypeAlias]) -> InferResult<()> {
+    pub fn load_type_aliases(&mut self, aliases: &[crate::ast::TypeAlias]) {
         use crate::infer::state::AliasDef;
         use crate::types::{TVarName, TypeDef};
 
@@ -471,7 +502,7 @@ impl InferState {
             // the shared `TypeAst` IR (Python) supply `body_ast`; the
             // JavaScript path supplies a `body` string parsed by the
             // `type_parser`.
-            let body_ty = if let Some(ast) = &alias.body_ast {
+            let mut body_ty = if let Some(ast) = &alias.body_ast {
                 self.lower_type_ast(ast)
             } else {
                 let mut parser = crate::infer::type_parser::TypeParser::with_aliases(
@@ -484,10 +515,18 @@ impl InferState {
                 for (name, id) in alias.params.iter().zip(ids.iter()) {
                     parser.preset_var(name.clone(), *id);
                 }
-                let parsed = parser.parse()?;
+                let parsed = parser.parse();
                 let next = parser.next_var_id();
                 self.bump_var_id_to(next);
-                parsed
+                match parsed {
+                    Ok(ty) => ty,
+                    // As a statement that fails binds its names to
+                    // `Type::Error`: what uses the alias goes on, quietly.
+                    Err(e) => {
+                        self.push_error(e.into());
+                        Type::Error
+                    }
+                }
             };
 
             let (nominal_id, rec_id) = self
@@ -510,15 +549,18 @@ impl InferState {
             }
             if let Some(id) = rec_id {
                 if matches!(body_ty, Type::Named(target, _) if target == id) {
-                    return Err(TypeError::InvalidSyntax {
-                        message: format!(
-                            "type alias '{}' is defined as itself; a recursive alias \
-                             must refer to itself inside a record, array, union or function",
-                            alias.name
-                        ),
-                        span: alias.span,
-                    }
-                    .into());
+                    self.push_error(
+                        TypeError::InvalidSyntax {
+                            message: format!(
+                                "type alias '{}' is defined as itself; a recursive alias \
+                                 must refer to itself inside a record, array, union or function",
+                                alias.name
+                            ),
+                            span: alias.span,
+                        }
+                        .into(),
+                    );
+                    body_ty = Type::Error;
                 }
                 let mut def = TypeDef::recursive(id, tvar_params, body_ty.clone());
                 def.name = Some(alias.name.clone());
@@ -537,7 +579,6 @@ impl InferState {
                 },
             );
         }
-        Ok(())
     }
 
     /// Reserve a nominal type for each class a JavaScript program
@@ -1183,6 +1224,11 @@ impl InferState {
         // error drain `state.errors` after the top-level inference
         // completes.
         if self.errors.len() > errors_at_entry {
+            // A program's top level: keep the recovered env for
+            // `infer_program_with_env` to hand out.
+            if self.stmt_list_depth == 1 {
+                self.env_after_errors = Some(current_env);
+            }
             return Err(self.errors[errors_at_entry].clone());
         }
         Ok((result, current_env))
@@ -1903,6 +1949,7 @@ impl InferState {
                         params,
                         body,
                         type_annotation,
+                        name_span,
                         span,
                     } => self.infer_stmt(
                         env,
@@ -1912,7 +1959,7 @@ impl InferState {
                             body: body.clone(),
                             type_annotation: type_annotation.clone(),
                             return_type_ast: None,
-                            name_span: None,
+                            name_span: *name_span,
                             span: *span,
                         },
                     ),

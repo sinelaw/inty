@@ -203,6 +203,32 @@ unterminated-comment error.
   type looks like by then; together with the pairs of bound variables
   already compared once, unification visits finitely many pairs of nodes
   (Huet's unification of rational trees).
+- The language server answers hover, completion, and signature help in a
+  file with a type error. A single error anywhere used to turn them off for
+  the whole file, though inference had typed every other statement.
+- The language server parses a file as the CLI does. It parsed without the
+  source text, so a `return` at the end of a line returned the next line's
+  value, and TS-style class field types were dropped.
+- A type alias that doesn't parse is reported, and the rest of the file is
+  still checked (the alias is an error type where it's used). It used to
+  stop inference before the first statement, and the language server
+  dropped the error, leaving a file with no diagnostics and no hover.
+- `infer_program*` fails exactly when it collected an error, and the error
+  it returns is the first collected. A read before initialisation used to
+  be collected while the call succeeded.
+- Hover on the name of an `export function`, `export async function`,
+  class, or Lua `local function`. Their name's position was guessed from
+  the statement's start, which lands in `export`, `class`, or `local`.
+- An unknown type in a function type, `{ run: (String) => Item }`, is named
+  (`unknown type 'Item'`) instead of reported as "expected ',' or ';'
+  between object-type properties".
+- An annotation that doesn't parse (`/** function f(a: String) => Item */`
+  with `Item` undeclared) is reported, and the function or variable it
+  annotates is checked as if it had none. The whole declaration used to
+  fail, so its body was never checked: its parameters and locals had no
+  types, and it was an error type wherever it was used.
+- Hover off any name (in a function's body, or a declaration's initialiser)
+  shows nothing. It used to show the enclosing function or variable.
 - `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
   string literal type (`"a, b"`) or after an arrow inside type arguments
   (`Pair<() => A, B>`).

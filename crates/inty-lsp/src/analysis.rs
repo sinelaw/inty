@@ -5,8 +5,6 @@ use lsp_types::{CompletionItem, CompletionItemKind};
 
 use inty::ast::{Expr, ImportSpecifier, Program, Stmt};
 use inty::error::IntyError;
-use inty::frontends::javascript::lexer::{Scanner, Token};
-use inty::frontends::javascript::parser::Parser;
 use inty::frontends::Language;
 use inty::infer::{InferState, InferWarning, TypeEnv};
 use inty::span::Span;
@@ -32,53 +30,20 @@ impl Analysis {
         Self::check_lang(text, Language::JavaScript)
     }
 
-    /// Like [`Analysis::check`], but for an explicit frontend. The
-    /// JavaScript path carries JSDoc type annotations/aliases off the
-    /// lexer; the other frontends lower straight to the shared AST.
+    /// Like [`Analysis::check`], but for an explicit frontend.
     pub fn check_lang(text: &str, lang: Language) -> Self {
         let mut errors = Vec::new();
 
-        let program = match lang {
-            Language::JavaScript => {
-                // Lex.
-                let mut scanner = Scanner::new(text);
-                let mut tokens = Vec::new();
-                loop {
-                    match scanner.next_token() {
-                        Ok(tok) => {
-                            let is_eof = matches!(tok.value, Token::Eof);
-                            tokens.push(tok);
-                            if is_eof {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            errors.push(e);
-                            return Analysis::errors_only(errors);
-                        }
-                    }
-                }
-                // Parse.
-                let type_annotations = scanner.type_annotations().to_vec();
-                let type_aliases = scanner.type_aliases().to_vec();
-                let mut parser = Parser::new(tokens, type_annotations);
-                let mut program = match parser.parse_program() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        errors.push(e);
-                        return Analysis::errors_only(errors);
-                    }
-                };
-                program.type_aliases = type_aliases;
-                program
+        // Parse through the same entry point as the CLI, so the editor
+        // sees exactly the program the checker does (for JavaScript:
+        // JSDoc annotations and aliases, and the source text the
+        // parser's ASI and inline-annotation rules read).
+        let program = match inty::frontends::parse(lang, text) {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(e);
+                return Analysis::errors_only(errors);
             }
-            other => match inty::frontends::parse(other, text) {
-                Ok(p) => p,
-                Err(e) => {
-                    errors.push(e);
-                    return Analysis::errors_only(errors);
-                }
-            },
         };
 
         // Resolve identifiers (independent of type inference). We pass
@@ -161,10 +126,14 @@ impl Analysis {
                 // `_first` is the head of `collected`; use the
                 // accumulated list as-is to avoid duplicating it.
                 errors.extend(collected);
+                // Recovery still typed every statement that didn't
+                // fail: keep that env so hover, completion, and
+                // signature help work in a file with a type error.
+                let final_env = state.take_env_after_errors();
                 Analysis {
                     errors,
                     program: Some(program),
-                    final_env: None,
+                    final_env,
                     state: Some(state),
                     resolution,
                 }
@@ -995,8 +964,8 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
     match stmt {
         Stmt::Var { declarations, .. } => {
             for d in declarations {
-                if span_contains(d.span, offset) {
-                    consider(best, d.name.clone(), d.span);
+                if span_contains(d.name_span(), offset) {
+                    consider(best, d.name.clone(), d.name_span());
                 }
                 if let Some(init) = &d.init {
                     visit_expr(init, offset, best);
@@ -1037,8 +1006,8 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
                 match init {
                     ForInit::VarDecl(decls) => {
                         for d in decls {
-                            if span_contains(d.span, offset) {
-                                consider(best, d.name.clone(), d.span);
+                            if span_contains(d.name_span(), offset) {
+                                consider(best, d.name.clone(), d.name_span());
                             }
                             if let Some(e) = &d.init {
                                 visit_expr(e, offset, best);
@@ -1095,11 +1064,10 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
             }
         }
         Stmt::Labeled { body, .. } => visit_stmt(body, offset, best),
-        Stmt::FunctionDecl {
-            name, body, span, ..
-        } => {
-            if span_contains(*span, offset) {
-                consider(best, name.clone(), *span);
+        Stmt::FunctionDecl { name, body, .. } => {
+            let name_span = stmt.function_name_span().expect("a function declaration");
+            if span_contains(name_span, offset) {
+                consider(best, name.clone(), name_span);
             }
             visit_stmt(body, offset, best);
         }
@@ -1247,6 +1215,142 @@ const func = function() { return {id: '123', name: 'hello'}; };";
             undef_count,
             analysis.errors
         );
+    }
+
+    /// A type error in one statement must not blind the editor to the
+    /// rest of the file: inference recovers past it, so hover,
+    /// completion details, and member completion still answer for the
+    /// bindings that typed fine — before and after the error.
+    #[test]
+    fn queries_answer_in_a_file_with_a_type_error() {
+        let src = "const n = 1;\nconst bad = n + 'a' - {};\nconst o = {x: 1, y: 'two'};\n";
+        let analysis = Analysis::check(src);
+        assert!(!analysis.errors.is_empty(), "expected the type error");
+
+        let hover = analysis
+            .hover_at(src.find("n =").unwrap())
+            .expect("hover on `n`");
+        assert_eq!(
+            (hover.name.as_str(), hover.type_str.as_str()),
+            ("n", "Number")
+        );
+        let hover = analysis
+            .hover_at(src.find("o =").unwrap())
+            .expect("hover on `o`");
+        assert_eq!(hover.name, "o");
+
+        assert_eq!(analysis.type_of_name("n").as_deref(), Some("Number"));
+
+        let text = format!("{src}o.");
+        let items = analysis
+            .member_completions_before_with(&text, text.len())
+            .expect("member completions on `o.`");
+        let mut labels: Vec<_> = items.iter().map(|i| i.label.as_str()).collect();
+        labels.sort();
+        assert_eq!(labels, ["x", "y"]);
+    }
+
+    /// The name a declaration binds answers hover wherever the name
+    /// sits: after `export`, `export async`, `class`, or Lua's `local`.
+    #[test]
+    fn hover_finds_each_declared_name() {
+        let src = "export function f(a) { return a; }\n\
+                   export async function g() { return 1; }\n\
+                   class C { constructor() { this.n = 1; } }\n\
+                   export class D { constructor() { this.s = ''; } }\n";
+        let analysis = Analysis::check(src);
+        assert!(analysis.errors.is_empty(), "{:?}", analysis.errors);
+        for name in ["f", "g", "C", "D"] {
+            let at = [format!(" {name}("), format!(" {name} {{")]
+                .iter()
+                .find_map(|needle| src.find(needle.as_str()))
+                .unwrap()
+                + 1;
+            let hover = analysis
+                .hover_at(at)
+                .unwrap_or_else(|| panic!("hover on `{name}`"));
+            assert_eq!(hover.name, name);
+        }
+
+        let src = "local function add(a, b) return a + b end\n";
+        let analysis = Analysis::check_lang(src, Language::Lua);
+        let hover = analysis
+            .hover_at(src.find("add").unwrap())
+            .expect("hover on `add`");
+        assert_eq!(hover.name, "add");
+    }
+
+    /// The editor checks the program the CLI does: a `return` ends at
+    /// its line's end (ASI), which the parser decides from the source.
+    #[test]
+    fn parses_the_program_the_cli_checks() {
+        let src = "function f() {\n  return\n  1;\n}\n";
+        let analysis = Analysis::check(src);
+        let hover = analysis
+            .hover_at(src.find("f(").unwrap())
+            .expect("hover on `f`");
+        assert_eq!(hover.type_str, "() => Undefined");
+    }
+
+    /// A type alias that doesn't parse is reported, and the rest of
+    /// the file is still checked and answers hover.
+    #[test]
+    fn a_bad_type_alias_is_reported_and_the_rest_answers() {
+        let src = "/** type S = { run: (String) => Item } */\nconst n = 1;\n";
+        let analysis = Analysis::check(src);
+        let shown: Vec<String> = analysis.errors.iter().map(|e| e.to_string()).collect();
+        assert!(
+            shown.iter().any(|e| e.contains("unknown type 'Item'")),
+            "{shown:?}"
+        );
+        let hover = analysis
+            .hover_at(src.find("n =").unwrap())
+            .expect("hover on `n`");
+        assert_eq!(hover.type_str, "Number");
+    }
+
+    /// Hover answers on a name, not on the rest of its declaration: off
+    /// any name, in a function's body or a declarator's initialiser,
+    /// there is nothing to show.
+    #[test]
+    fn hover_off_a_name_is_nothing() {
+        let src = "function f(a) {  return a; }\nconst x =   1;\n";
+        let analysis = Analysis::check(src);
+        assert!(analysis.errors.is_empty(), "{:?}", analysis.errors);
+        for (what, at) in [
+            ("function body", src.find("{ ").unwrap() + 1),
+            ("initialiser", src.find("=   ").unwrap() + 2),
+        ] {
+            let hover = analysis.hover_at(at).map(|h| h.name);
+            assert_eq!(hover, None, "hover in the {what}");
+        }
+    }
+
+    /// An annotation that doesn't parse is reported, and what it
+    /// annotates is checked as if it had none: a function's parameters
+    /// and locals, and a constant, still answer hover.
+    #[test]
+    fn a_bad_annotation_is_reported_and_its_declaration_checked() {
+        let src = "/** function f(a: String) => Item */\n\
+                   function f(a) { const z = a; return z; }\n\
+                   /** const x: Item */\n\
+                   const x = 1;\n";
+        let analysis = Analysis::check(src);
+        let shown: Vec<String> = analysis.errors.iter().map(|e| e.to_string()).collect();
+        assert_eq!(shown.len(), 2, "{shown:?}");
+        assert!(
+            shown.iter().all(|e| e.contains("unknown type 'Item'")),
+            "{shown:?}"
+        );
+        for (needle, name) in [("(a)", "a"), ("z =", "z"), ("x =", "x")] {
+            let at = src.find(needle).unwrap() + needle.find(name).unwrap();
+            let hover = analysis
+                .hover_at(at)
+                .unwrap_or_else(|| panic!("hover on `{name}`"));
+            assert_eq!(hover.name, name);
+        }
+        let x = analysis.hover_at(src.find("x =").unwrap()).unwrap();
+        assert_eq!(x.type_str, "Number");
     }
 
     /// `check_lang` routes to the right frontend: a Lua document parses

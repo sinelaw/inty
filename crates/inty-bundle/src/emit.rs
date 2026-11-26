@@ -292,6 +292,7 @@ fn emit_export_decl(
             params,
             body,
             type_annotation: _,
+            name_span: _,
             span,
         } => {
             // Reconstruct as a plain function declaration. We use

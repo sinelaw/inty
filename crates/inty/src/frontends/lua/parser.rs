@@ -228,6 +228,7 @@ impl Parser {
         if self.check(&Tok::Function) {
             self.advance();
             let name = self.expect_name("function name")?;
+            let name_span = self.prev_span();
             let (params, body) = self.func_body(false)?;
             return Ok(Stmt::FunctionDecl {
                 name,
@@ -235,7 +236,7 @@ impl Parser {
                 body,
                 type_annotation: None,
                 return_type_ast: None,
-                name_span: None,
+                name_span: Some(name_span),
                 span: Span::new(start, self.prev_span().end),
             });
         }
@@ -350,7 +351,7 @@ impl Parser {
                 body,
                 type_annotation: None,
                 return_type_ast: None,
-                name_span: None,
+                name_span: Some(name_span),
                 span,
             });
         }

@@ -331,10 +331,11 @@ impl Resolution {
                     name,
                     params,
                     body,
+                    name_span,
                     span,
                     ..
                 } => {
-                    let name_span = name_span_from_func(*span, name);
+                    let name_span = inty::ast::function_name_span(*name_span, *span, name);
                     self.declare(fn_scope, name, name_span, DefKind::Function);
                     self.visit_function_body(*span, params, body, scope);
                 }
@@ -512,7 +513,7 @@ impl Resolution {
             VarKind::Let | VarKind::Const => scope,
         };
         for d in decls {
-            let name_span = name_span_from_decl(d);
+            let name_span = d.name_span();
             self.declare(target, &d.name, name_span, def_kind);
             self.mark_annotated(name_span, d.type_ast.is_some());
             if let Some(init) = &d.init {
@@ -720,7 +721,7 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
             // Only `var` hoists to the enclosing function scope.
             // `let`/`const` are block-scoped and bind in visit_stmt.
             for d in declarations {
-                let name_span = name_span_from_decl(d);
+                let name_span = d.name_span();
                 r.declare(scope, &d.name, name_span, DefKind::Var);
             }
         }
@@ -745,13 +746,18 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
                 ..
             } => {
                 for d in declarations {
-                    let name_span = name_span_from_decl(d);
+                    let name_span = d.name_span();
                     r.declare(scope, &d.name, name_span, DefKind::Var);
                 }
             }
             ExportDecl::Var { .. } => {} // Let/Const not hoisted.
-            ExportDecl::Function { name, span, .. } => {
-                let name_span = name_span_from_func(*span, name);
+            ExportDecl::Function {
+                name,
+                name_span,
+                span,
+                ..
+            } => {
+                let name_span = inty::ast::function_name_span(*name_span, *span, name);
                 r.declare(scope, name, name_span, DefKind::Function);
             }
             // Default / List / From don't introduce new local bindings,
@@ -774,7 +780,7 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
             if let Some(ForInit::VarDecl(decls)) = init {
                 for d in decls {
                     if d.kind == VarKind::Var {
-                        let name_span = name_span_from_decl(d);
+                        let name_span = d.name_span();
                         r.declare(scope, &d.name, name_span, DefKind::Var);
                     }
                 }
@@ -812,21 +818,6 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
         // Don't recurse into nested function bodies.
         _ => {}
     }
-}
-
-/// VarDeclarator.span covers the entire `name = init` so we trim it to
-/// just the name's text. We use byte length of `name` from the start —
-/// the lexer is tight, so this matches in practice.
-fn name_span_from_decl(d: &VarDeclarator) -> Span {
-    let len = d.name.len();
-    Span::new(d.span.start, d.span.start.saturating_add(len))
-}
-
-/// FunctionDecl.span covers `function name(...) { ... }`. The keyword
-/// `function ` is 9 ASCII bytes, so the name starts at span.start + 9.
-fn name_span_from_func(decl: Span, name: &str) -> Span {
-    let start = decl.start.saturating_add("function ".len());
-    Span::new(start, start.saturating_add(name.len()))
 }
 
 fn span_contains(span: Span, offset: usize) -> bool {
@@ -867,14 +858,15 @@ mod tests {
     fn uses_collected_for_rename() {
         let src = "var x = 1; x; x + 1;";
         let r = build(src);
-        let def_span = name_span_from_decl(&VarDeclarator {
+        let def_span = VarDeclarator {
             name: "x".to_string(),
             init: None,
             type_annotation: None,
             type_ast: None,
             kind: VarKind::Var,
             span: Span::new(4, 9),
-        });
+        }
+        .name_span();
         let uses = r.uses_of(def_span);
         assert_eq!(uses.len(), 2);
     }
