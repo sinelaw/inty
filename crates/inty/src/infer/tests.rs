@@ -6400,3 +6400,46 @@ fn a_row_with_fields_ending_in_itself_has_them() {
     let other = Type::object_open([("b", Type::Number)], rest);
     state.unify(span, &row, &other).unwrap();
 }
+
+/// Spreads whose result flows back into their operand make rows whose
+/// tails are bound to rows: unifying them compares each as the one row it
+/// is, rather than extending a bound tail with a fresh one on every
+/// attempt. These diverged (and crashed once unification had no depth
+/// limit); they are well typed.
+#[test]
+fn spreads_flowing_back_into_their_operand_end() {
+    for src in [
+        "function f(o) { o = {...{...o, a: 1}, b: 1}; }",
+        "function f(o, p) { p = {...o, a: 1}; o = {...p, b: 1}; }",
+        "function f(o) { const p = {...o, a: 1}; const q = {...p, a: \"s\"}; o = q; return o; }\n\
+         f({a: \"x\"});",
+    ] {
+        assert!(
+            check_program(src, &[]).is_ok(),
+            "{src}: {:?}",
+            check_program(src, &[])
+        );
+    }
+}
+
+/// Two classes that hold each other, whose methods meet each other's
+/// rows (`this.doc.render(this)`): a method's `this` is its row, so
+/// comparing the rows flattened meets them again, which matches.
+#[test]
+fn mutually_recursive_classes_end() {
+    let src = "class Doc {\n\
+                 constructor() { this.views = []; this.title = \"t\"; }\n\
+                 add(v) { this.views.push(v); v.doc = this; }\n\
+                 render(v) { return v.conceals; }\n\
+               }\n\
+               class View {\n\
+                 constructor(d) { this.doc = d; this.conceals = 1; }\n\
+                 draw() { return this.doc.render(this) + 1; }\n\
+               }\n\
+               const d = new Doc();\n\
+               const v = new View(d);\n\
+               d.add(v);\n\
+               const n = v.draw();";
+    // (An error, if any, is the program's; the point is that it ends.)
+    let _ = check_program(src, &["n"]);
+}

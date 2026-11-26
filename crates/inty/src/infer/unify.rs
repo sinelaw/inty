@@ -827,6 +827,55 @@ impl InferState {
 
     /// Unify two row types.
     fn unify_rows(&mut self, span: Span, r1: &RowType, r2: &RowType) -> UnifyResult<()> {
+        // Two rows that end in the same tail, through the rows their tails
+        // are bound to, differ only in the fields they list on the way:
+        // compared as the one row each is (`flat_row`), so the shared tail
+        // takes the fields only one lists. Taken a row at a time, each
+        // extended the other's bound tail with a fresh one, without end.
+        if (self.tail_is_bound(r1) || self.tail_is_bound(r2))
+            && !self.same_tail(r1, r2)
+            && self.row_end_root(r1).is_some()
+            && self.row_end_root(r1) == self.row_end_root(r2)
+        {
+            let flat1 = self.flat_row(r1.clone());
+            let flat2 = self.flat_row(r2.clone());
+            return self.unify_flat_rows(span, &flat1, &flat2);
+        }
+        self.unify_flat_rows(span, r1, r2)
+    }
+
+    /// The root of the tail `row` ends in, through the rows its tail is
+    /// bound to; `None` for a closed row. (No copy of the rows: a row
+    /// can't end in itself, `var_bind`, so the walk ends.)
+    fn row_end_root(&mut self, row: &RowType) -> Option<TVarId> {
+        let RowTail::Open(TVarName::Flex(mut v)) = row.tail.clone() else {
+            return None;
+        };
+        loop {
+            let root = self.var_table.find_if_present(v).unwrap_or(v);
+            match self.var_table.bound(root) {
+                Some(Type::Row(next)) => match &next.tail {
+                    RowTail::Open(TVarName::Flex(w)) => v = *w,
+                    _ => return None,
+                },
+                _ => return Some(root),
+            }
+        }
+    }
+
+    /// Whether two rows have the same tail (the same variable's class).
+    fn same_tail(&mut self, r1: &RowType, r2: &RowType) -> bool {
+        match (&r1.tail, &r2.tail) {
+            (RowTail::Open(TVarName::Flex(a)), RowTail::Open(TVarName::Flex(b))) => {
+                a == b || self.var_table.find_if_present(*a) == self.var_table.find_if_present(*b)
+            }
+            _ => false,
+        }
+    }
+
+    /// [`Self::unify_rows`] for rows whose tails are free, closed, bound to
+    /// a type that isn't a row, or the same.
+    fn unify_flat_rows(&mut self, span: Span, r1: &RowType, r2: &RowType) -> UnifyResult<()> {
         // Collect all property names from both rows
         let mut all_props: Vec<PropName> =
             r1.props.keys().chain(r2.props.keys()).cloned().collect();
@@ -963,36 +1012,33 @@ impl InferState {
             }
 
             (RowTail::Open(TVarName::Flex(id1)), RowTail::Open(TVarName::Flex(id2))) => {
-                // Path-compress both tail vars to their union-find
-                // roots. The existing v1 == v2 short-circuit at
-                // RowTail::Open(v1) | RowTail::Open(v2) above only
-                // catches the trivially-equal case. Two tail vars
-                // that *transitively* reference the same root via a
-                // Var → Var → … chain in the substitution would
-                // otherwise fall into the fresh-tail dance below,
-                // bind both ends, and on the next collision re-enter
-                // unify_rows on the resulting rows with two *new*
-                // fresh tails — the htmx divergence cycle observed
-                // in gdb. Catching "same equivalence class" here
-                // short-circuits that loop the same way the v1 == v2
-                // check does for the trivial case.
-                let root1 = match self.main_subst.resolve(&TVarName::Flex(*id1)).as_deref() {
-                    Some(Type::Var(TVarName::Flex(r))) => *r,
-                    None => *id1,
-                    // If the chain ends at a structural type or a
-                    // skolem, fall through to the fresh-tail dance
-                    // with the original ids; the next unification
-                    // step will handle the structural case via the
-                    // normal Var-vs-structure path.
-                    _ => *id1,
-                };
-                let root2 = match self.main_subst.resolve(&TVarName::Flex(*id2)).as_deref() {
-                    Some(Type::Var(TVarName::Flex(r))) => *r,
-                    None => *id2,
-                    _ => *id2,
-                };
-                if root1 == root2 {
-                    return Ok(());
+                // The tails' roots (a variable the table doesn't hold, made
+                // without it as tests do, is its own, and free).
+                let root1 = self.var_table.find_if_present(*id1).unwrap_or(*id1);
+                let root2 = self.var_table.find_if_present(*id2).unwrap_or(*id2);
+                // A tail still bound is bound to a type that isn't a row
+                // (a recursive type's): binding it unifies the two, which
+                // unrolls the recursive type under its assumptions.
+                let free = |s: &Self, r: TVarId| s.var_table.bound(r).is_none();
+                if root1 == root2 && free(self, root1) {
+                    // One tail for both: the fields only one side lists
+                    // are the tail's (`ρ = {F | ρ}` says `ρ` has `F`).
+                    let extra: BTreeMap<PropName, FieldEntry> = r1
+                        .props
+                        .iter()
+                        .filter(|(k, _)| !r2.props.contains_key(*k))
+                        .chain(r2.props.iter().filter(|(k, _)| !r1.props.contains_key(*k)))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    if extra.is_empty() {
+                        return Ok(());
+                    }
+                    let rest = self.fresh_flex();
+                    return self.extend_subst(
+                        span,
+                        TVarName::Flex(root1),
+                        Type::Row(RowType::open_entries(extra, rest)),
+                    );
                 }
                 self.unify_open_tails(span, r1, r2, root1, root2)
             }
@@ -1007,6 +1053,41 @@ impl InferState {
 
             _ => Err(self.unification_error(span, &Type::Row(r1.clone()), &Type::Row(r2.clone()))),
         }
+    }
+
+    /// Whether `row`'s tail is a variable bound to a type (the row
+    /// continues there).
+    fn tail_is_bound(&mut self, row: &RowType) -> bool {
+        match &row.tail {
+            RowTail::Open(TVarName::Flex(v)) => self
+                .var_table
+                .find_if_present(*v)
+                .is_some_and(|r| self.var_table.bound(r).is_some()),
+            _ => false,
+        }
+    }
+
+    /// `row` as one row: the fields of the rows its tail is bound to
+    /// added, the first of each label kept, up to a tail that is free,
+    /// closed, or bound to another type (a recursive type, left for
+    /// `unify` to unroll under its assumptions). Ends: a row can't end in
+    /// itself (`var_bind`).
+    fn flat_row(&mut self, mut row: RowType) -> RowType {
+        while let RowTail::Open(TVarName::Flex(v)) = row.tail.clone() {
+            let rest = match self.zonk_head(&Type::Var(TVarName::Flex(v))) {
+                Type::Row(rest) => rest,
+                Type::Var(TVarName::Flex(w)) if w != v => {
+                    row.tail = RowTail::Open(TVarName::Flex(w));
+                    continue;
+                }
+                _ => break,
+            };
+            for (k, e) in rest.props {
+                row.props.entry(k).or_insert(e);
+            }
+            row.tail = rest.tail;
+        }
+        row
     }
 
     /// The open-tail / open-tail case of [`Self::unify_rows`], once the
