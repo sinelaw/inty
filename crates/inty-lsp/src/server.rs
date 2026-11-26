@@ -189,10 +189,12 @@ impl Server {
         // JavaScript for anything unrecognised.
         let lang = inty::frontends::Language::from_path(uri.as_str())
             .unwrap_or(inty::frontends::Language::JavaScript);
+        // A saved file's imports resolve relative to it, as the CLI's do.
+        let path = file_path(&uri);
         let analysis = {
             let text = text.clone();
             inty::worker::run_with_inference_stack("inty-lsp-infer", move || {
-                Analysis::check_lang(&text, lang)
+                Analysis::check_document(&text, lang, path.as_deref())
             })
         };
         let mut diagnostics: Vec<Diagnostic> = analysis
@@ -507,6 +509,33 @@ where
     }
 }
 
+/// The file a `file://` URI names (percent-escapes decoded); `None` for
+/// any other scheme (an unsaved buffer).
+fn file_path(uri: &Uri) -> Option<std::path::PathBuf> {
+    let encoded = uri.as_str().strip_prefix("file://")?;
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%')
+            .then(|| encoded.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(byte) => {
+                decoded.push(byte);
+                i += 3;
+            }
+            None => {
+                decoded.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    let path = String::from_utf8(decoded).ok()?;
+    Some(std::path::PathBuf::from(path))
+}
+
 /// Resolve an import path string (e.g. `"./shared.js"` or
 /// `"../lib/foo.js"`) against the importing file's URI to a target
 /// URI. Returns `None` for non-`file://` schemes or absolute import
@@ -635,4 +664,20 @@ pub fn run_stdio() -> Result<(), Box<dyn Error + Sync + Send>> {
     server.run()?;
     threads.join()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_path_decodes_a_file_uri() {
+        let uri: Uri = "file:///home/me/my%20project/a%2Bb.js".parse().unwrap();
+        assert_eq!(
+            file_path(&uri),
+            Some(std::path::PathBuf::from("/home/me/my project/a+b.js"))
+        );
+        let untitled: Uri = "untitled:Untitled-1".parse().unwrap();
+        assert_eq!(file_path(&untitled), None);
+    }
 }
