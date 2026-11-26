@@ -1036,7 +1036,12 @@ impl InferState {
             match self.zonk_head(&this_type) {
                 Type::Var(v) if v.is_flex() && callee_unknown => {
                     self.pending_receivers
-                        .push((Type::Var(v), obj_for_this.into_owned(), span))
+                        .push(crate::infer::state::PendingReceiver {
+                            this: Type::Var(v),
+                            receiver: obj_for_this.into_owned(),
+                            span,
+                            unknown_is_method: false,
+                        })
                 }
                 this => {
                     // A `this` not known yet: this call makes the callee

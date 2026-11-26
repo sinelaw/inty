@@ -952,8 +952,9 @@ impl InferState {
                         }
                         Some(key) => {
                             if !seen.contains(&key) {
+                                let kept = matches!(&key.0, Type::Var(v) if keep.contains(v));
                                 seen.push(key);
-                                self.default_has_prop(&c)?;
+                                self.default_has_prop(&c, kept)?;
                             }
                             defaulted = true;
                         }
@@ -1049,7 +1050,18 @@ impl InferState {
     /// bind the receiver to `{name: result | ρ}`. A valid choice for a
     /// receiver nothing else constrains (it only narrows the types the
     /// constraint admits), and what inty inferred before `HasProp`.
-    fn default_has_prop(&mut self, c: &crate::infer::PendingConstraint) -> Result<(), IntyError> {
+    ///
+    /// A method call's (`recv.name(…)`) callee is called on the receiver.
+    /// Where an importing module still decides the receiver (`kept`), it
+    /// also decides the callee: a function that uses no `this` is called
+    /// on any receiver as well as detached, so the callee's `this` waits
+    /// as an unknown callee's does (`settle_receivers`, at the end of the
+    /// importer) rather than making it a method of the receiver now.
+    fn default_has_prop(
+        &mut self,
+        c: &crate::infer::PendingConstraint,
+        kept: bool,
+    ) -> Result<(), IntyError> {
         let (recv, name, result) = c
             .pred
             .as_has_prop()
@@ -1059,7 +1071,20 @@ impl InferState {
         let row = Type::object_open([(name, result.clone())], tail);
         self.unify(c.span, recv, &row)?;
         if let Some(this) = c.pred.method_this() {
-            self.unify_this(c.span, this, recv)?;
+            match self.zonk_head(this) {
+                Type::Var(v) if kept && v.is_flex() => {
+                    // Settled as a method of the receiver, as without an
+                    // importer, unless what the importer gives first is a
+                    // function that uses no `this`.
+                    self.pending_receivers.push(crate::infer::PendingReceiver {
+                        this: Type::Var(v),
+                        receiver: recv.clone(),
+                        span: c.span,
+                        unknown_is_method: true,
+                    });
+                }
+                _ => self.unify_this(c.span, this, recv)?,
+            }
         }
         Ok(())
     }

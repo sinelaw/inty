@@ -1075,6 +1075,49 @@ mod tests {
         }
     }
 
+    /// A method call on a value an importer decides (`editor.say(…)`)
+    /// takes a function that uses no `this` as well as a method of the
+    /// receiver: JavaScript passes the receiver, which an arrow function
+    /// ignores. A method that reads another object's `this` still doesn't
+    /// fit.
+    #[test]
+    fn a_method_call_on_an_imported_value_takes_a_function_without_this() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "editing.js",
+            "let editor; export function attach(e) { editor = e; } \
+             export function hello() { editor.say(\"hi\"); }",
+        );
+        for (arg, ok) in [
+            ("{ say: (t) => { t.length; } }", true),
+            ("{ say: function (t) { t.length; } }", true),
+            ("{ n: 1, say(t) { return this.n + t.length; } }", true),
+            ("{ say: (t) => t * 2 }", false),
+            ("{ say: new K().say }", false),
+        ] {
+            write_file(
+                dir.path(),
+                "main.js",
+                &format!(
+                    "import {{ attach }} from \"./editing.js\"; \
+                     class K {{ constructor() {{ this.n = 1; }} say(t) {{ return this.n + t.length; }} }} \
+                     attach({arg});"
+                ),
+            );
+            let main_path = dir.path().join("main.js");
+            let mut state = InferState::new();
+            let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+                .and_then(|_| state.resolve_constraints());
+            assert_eq!(
+                r.is_ok() && state.errors.is_empty(),
+                ok,
+                "attach({arg}): {r:?} {:?}",
+                state.errors
+            );
+        }
+    }
+
     #[test]
     fn named_import_resolves() {
         let dir = tempdir();
