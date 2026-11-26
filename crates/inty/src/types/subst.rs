@@ -722,6 +722,17 @@ pub struct Reach {
     pub named: HashSet<super::TypeId>,
 }
 
+/// The state of a walk shared by several [`Subst::reach_in`] calls.
+#[derive(Default, Debug)]
+pub struct ReachWalk {
+    /// Bound variables whose bindings have been gone through.
+    done: HashSet<TVarName>,
+    /// Bound variables whose bindings are being gone through (a cycle).
+    in_progress: HashSet<TVarName>,
+    /// The last call met a variable an earlier call went through.
+    pub skipped: bool,
+}
+
 impl Subst {
     /// `flatten(ty)`'s free variables, free presence variables and named
     /// type ids, found without building the flattened type: each bound
@@ -731,32 +742,36 @@ impl Subst {
     /// shouldn't build it.) A variable whose expansion is cut by a cycle
     /// counts as free, as it stays in `flatten`'s output.
     pub fn reach(&self, ty: &Type, into: &mut Reach) {
-        let mut done: HashSet<TVarName> = HashSet::new();
-        let mut in_progress: HashSet<TVarName> = HashSet::new();
-        self.reach_type(ty, into, &mut done, &mut in_progress);
+        self.reach_in(ty, into, &mut ReachWalk::default());
     }
 
-    fn reach_var(
-        &self,
-        name: &TVarName,
-        into: &mut Reach,
-        done: &mut HashSet<TVarName>,
-        in_progress: &mut HashSet<TVarName>,
-    ) {
+    /// [`Self::reach`], as part of `walk`: a bound variable an earlier
+    /// call in the same walk went through is not gone through again (what
+    /// it reaches is in that call's [`Reach`]). For callers that only
+    /// want the union of several types' reaches; `walk.skipped` tells
+    /// whether this call's `Reach` may be missing what such a variable
+    /// reaches.
+    pub fn reach_in(&self, ty: &Type, into: &mut Reach, walk: &mut ReachWalk) {
+        walk.skipped = false;
+        self.reach_type(ty, into, walk);
+    }
+
+    fn reach_var(&self, name: &TVarName, into: &mut Reach, walk: &mut ReachWalk) {
         let Some(bound) = self.get(name) else {
             into.vars.insert(name.clone());
             return;
         };
-        if done.contains(name) {
+        if walk.done.contains(name) {
+            walk.skipped = true;
             return;
         }
-        if !in_progress.insert(name.clone()) {
+        if !walk.in_progress.insert(name.clone()) {
             into.vars.insert(name.clone());
             return;
         }
-        self.reach_type(bound, into, done, in_progress);
-        in_progress.remove(name);
-        done.insert(name.clone());
+        self.reach_type(bound, into, walk);
+        walk.in_progress.remove(name);
+        walk.done.insert(name.clone());
     }
 
     fn reach_presence(&self, p: &Presence, into: &mut Reach) {
@@ -765,36 +780,28 @@ impl Subst {
         }
     }
 
-    fn reach_type(
-        &self,
-        ty: &Type,
-        into: &mut Reach,
-        done: &mut HashSet<TVarName>,
-        in_progress: &mut HashSet<TVarName>,
-    ) {
+    fn reach_type(&self, ty: &Type, into: &mut Reach, walk: &mut ReachWalk) {
         match ty {
-            Type::Var(name) => self.reach_var(name, into, done, in_progress),
+            Type::Var(name) => self.reach_var(name, into, walk),
             Type::Row(row) => {
                 for e in row.props.values() {
                     for p in e.presences() {
                         self.reach_presence(p, into);
                     }
-                    self.reach_type(&e.ty, into, done, in_progress);
+                    self.reach_type(&e.ty, into, walk);
                 }
                 match &row.tail {
                     RowTail::Closed => {}
                     RowTail::Recursive(id, args) => {
                         into.named.insert(*id);
                         for a in args {
-                            self.reach_type(a, into, done, in_progress);
+                            self.reach_type(a, into, walk);
                         }
                     }
                     // A tail bound to anything but a row or a variable
                     // stays as it is in `flatten`'s output.
                     RowTail::Open(var) => match self.get(var) {
-                        Some(Type::Row(_) | Type::Var(_)) | None => {
-                            self.reach_var(var, into, done, in_progress)
-                        }
+                        Some(Type::Row(_) | Type::Var(_)) | None => self.reach_var(var, into, walk),
                         Some(_) => {
                             into.vars.insert(var.clone());
                         }
@@ -807,26 +814,26 @@ impl Subst {
                 ret,
             } => {
                 if let Some(t) = this_type {
-                    self.reach_type(t, into, done, in_progress);
+                    self.reach_type(t, into, walk);
                 }
                 for p in params {
                     self.reach_presence(&p.presence, into);
-                    self.reach_type(&p.ty, into, done, in_progress);
+                    self.reach_type(&p.ty, into, walk);
                 }
-                self.reach_type(ret, into, done, in_progress);
+                self.reach_type(ret, into, walk);
             }
             Type::Array(t) | Type::Maybe(_, t) | Type::Promise(t) | Type::Map(t) => {
-                self.reach_type(t, into, done, in_progress)
+                self.reach_type(t, into, walk)
             }
             Type::Tuple(ts) | Type::Union(ts) => {
                 for t in ts {
-                    self.reach_type(t, into, done, in_progress);
+                    self.reach_type(t, into, walk);
                 }
             }
             Type::Named(id, args) => {
                 into.named.insert(*id);
                 for a in args {
-                    self.reach_type(a, into, done, in_progress);
+                    self.reach_type(a, into, walk);
                 }
             }
             // `flatten` leaves a module as it is.

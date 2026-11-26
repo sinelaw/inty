@@ -217,6 +217,13 @@ unterminated-comment error.
 
 ### Fixes
 
+- Checking is faster where many functions are generalised with inferred
+  recursive types around (an object whose methods take it as `this`):
+  Fresh's web client took 303 s, now under a minute. Generalising went
+  through each such type's body on a walk of its own, every body again
+  reaching what they share; they are now one walk. And binding a variable
+  to a row copied all of the row's fields first, to check whether it ends
+  in that variable, which it rarely does.
 - A method call on a value an importing module decides
   (`editor.say("hi")` on a `let editor` an importer sets) takes a
   function that uses no `this` as well as a method of the receiver, as

@@ -3194,7 +3194,18 @@ impl InferState {
         pvars.extend(reach.pvars);
         named.extend(reach.named);
         let mut seen: HashSet<TypeId> = HashSet::new();
-        while let Some(id) = named.pop() {
+        // The bodies are gone through as one walk: they share much of what
+        // they reach (an object's methods' recursive types each reach the
+        // object), and only the union of what they reach is wanted. A
+        // walk per body went through the shared part once per body, at
+        // every generalisation.
+        let mut walk = crate::types::subst::ReachWalk::default();
+        // In order of id: where a shared walk cuts a cycle of bindings
+        // depends on the order the bodies are gone through, and the
+        // result must not depend on hashing.
+        let mut named: std::collections::BinaryHeap<std::cmp::Reverse<TypeId>> =
+            named.into_iter().map(std::cmp::Reverse).collect();
+        while let Some(std::cmp::Reverse(id)) = named.pop() {
             if !seen.insert(id) || self.closed_named.contains(&id) {
                 continue;
             }
@@ -3207,7 +3218,16 @@ impl InferState {
             // exponentially larger as a tree: see `Subst::reach`).
             let mut body = crate::types::subst::Reach::default();
             let def_body = def.body.clone();
-            self.main_subst.reach(&def_body, &mut body);
+            // A body with parameters has a walk of its own: what it
+            // reaches is less its parameters, so what it shares with
+            // another body can't be left to that one's walk.
+            let complete = if params.is_empty() {
+                self.main_subst.reach_in(&def_body, &mut body, &mut walk);
+                !walk.skipped
+            } else {
+                self.main_subst.reach(&def_body, &mut body);
+                true
+            };
             let free: Vec<TVarName> = body
                 .vars
                 .into_iter()
@@ -3216,8 +3236,10 @@ impl InferState {
             let free_pvars = body.pvars;
             let inner: Vec<TypeId> = body.named.into_iter().filter(|n| *n != id).collect();
             // Only its parameters, and named types that are closed too: no
-            // substitution reaches inside it again.
-            if free.is_empty()
+            // substitution reaches inside it again. (Known only when its
+            // walk went through everything the body reaches.)
+            if complete
+                && free.is_empty()
                 && free_pvars.is_empty()
                 && inner.iter().all(|n| self.closed_named.contains(n))
             {
@@ -3225,7 +3247,7 @@ impl InferState {
             }
             vars.extend(free);
             pvars.extend(free_pvars);
-            named.extend(inner);
+            named.extend(inner.into_iter().map(std::cmp::Reverse));
         }
         // Close over the pending constraints' functional dependencies:
         // each type's free variables through the substitution (`reach`,
@@ -3250,7 +3272,15 @@ impl InferState {
         loop {
             let mut changed = false;
             for (class, types) in &preds {
-                let fixed = |r: &crate::types::subst::Reach| r.vars.is_subset(&vars);
+                // A bound variable in a reach is one a cycle of bindings was
+                // cut at: what it reaches is in the reach already, and
+                // whether it is listed itself depends on where the walk
+                // entered the cycle.
+                let fixed = |r: &crate::types::subst::Reach| {
+                    r.vars
+                        .iter()
+                        .all(|v| vars.contains(v) || self.main_subst.contains(v))
+                };
                 let determined: Vec<&crate::types::subst::Reach> = match (class, types.as_slice()) {
                     // container → index, element
                     (ClassName::Indexable, [container, index, element]) => {
@@ -3494,7 +3524,28 @@ impl InferState {
         var: TVarId,
         ty: &Type,
     ) -> Option<std::collections::BTreeMap<crate::types::PropName, crate::types::FieldEntry>> {
+        // Found before the fields are copied: most rows don't end in
+        // `var`, and a row's fields (an object's methods) can be large.
+        if !self.row_chain_ends_in(var, ty, &mut |_| {}) {
+            return None;
+        }
         let mut fields = std::collections::BTreeMap::new();
+        self.row_chain_ends_in(var, ty, &mut |row| {
+            for (k, e) in &row.props {
+                fields.entry(k.clone()).or_insert_with(|| e.clone());
+            }
+        });
+        Some(fields)
+    }
+
+    /// Whether `ty` is a chain of rows (through their tails) ending in
+    /// `var`; `each` is given each row of the chain, outermost first.
+    fn row_chain_ends_in(
+        &self,
+        var: TVarId,
+        ty: &Type,
+        each: &mut dyn FnMut(&crate::types::RowType),
+    ) -> bool {
         let mut seen_vars = std::collections::HashSet::new();
         let mut seen_named = std::collections::HashSet::new();
         let mut unrolled: Type;
@@ -3502,29 +3553,34 @@ impl InferState {
         loop {
             match cur {
                 Type::Row(row) => {
-                    for (k, e) in &row.props {
-                        fields.entry(k.clone()).or_insert_with(|| e.clone());
-                    }
+                    each(row);
                     match &row.tail {
-                        RowTail::Open(TVarName::Flex(id)) if *id == var => return Some(fields),
+                        RowTail::Open(TVarName::Flex(id)) if *id == var => return true,
                         RowTail::Open(TVarName::Flex(id)) => {
-                            cur = self.bound_unseen(*id, &mut seen_vars)?;
+                            match self.bound_unseen(*id, &mut seen_vars) {
+                                Some(t) => cur = t,
+                                None => return false,
+                            }
                         }
-                        _ => return None,
+                        _ => return false,
                     }
                 }
-                Type::Var(TVarName::Flex(id)) if *id == var => return Some(fields),
-                Type::Var(TVarName::Flex(id)) => {
-                    cur = self.bound_unseen(*id, &mut seen_vars)?;
-                }
+                Type::Var(TVarName::Flex(id)) if *id == var => return true,
+                Type::Var(TVarName::Flex(id)) => match self.bound_unseen(*id, &mut seen_vars) {
+                    Some(t) => cur = t,
+                    None => return false,
+                },
                 Type::Named(id, args) if !self.is_nominal_type(*id) => {
                     if !seen_named.insert(*id) {
-                        return None;
+                        return false;
                     }
-                    unrolled = self.unroll_named(*id, args)?;
+                    match self.unroll_named(*id, args) {
+                        Some(t) => unrolled = t,
+                        None => return false,
+                    }
                     cur = &unrolled;
                 }
-                _ => return None,
+                _ => return false,
             }
         }
     }
