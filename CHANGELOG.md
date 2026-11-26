@@ -101,6 +101,12 @@
 
 ### DOM declarations
 
+- `el.focus({preventScroll, focusVisible})`; an event's `detail` (a
+  click's count); `append`, `prepend`, `before`, `after` and
+  `replaceChildren` take several nodes (up to eight; inty has no variadic
+  function type). Strings, which JavaScript also takes, aren't declared
+  yet: a `T | String` parameter doesn't take an element whose node type a
+  call hasn't pinned down.
 - Nodes: `firstChild`, `lastChild`, `nextSibling`, `previousSibling`,
   `childNodes`, `nodeType`, `nodeValue`, `isConnected`; elements also
   `parentNode`, `offsetParent`, `getClientRects()` and

@@ -121,3 +121,29 @@ fn add_event_listener_options_from_a_const() {
     let r = check(src);
     assert!(r.is_ok(), "{:?}", r);
 }
+
+#[test]
+fn focus_options_click_count_and_appending_several_children() {
+    ok("const el = document.createElement(\"div\");\n\
+        el.focus();\n\
+        el.focus({ preventScroll: true });\n\
+        el.onclick = (e) => { if (e.detail <= 1) el.focus({ focusVisible: false }); };\n\
+        const a = document.createElement(\"span\");\n\
+        const b = document.createElement(\"b\");\n\
+        el.append(a, b);\n\
+        el.prepend(b, a);\n\
+        a.before(b);\n\
+        a.after(b, el);\n\
+        el.replaceChildren();\n\
+        el.replaceChildren(a, b);\n\
+        el.append(...[a, b]);\n");
+    for bad in [
+        "const d = document.createElement(\"div\"); d.append(d, 2);",
+        "const d = document.createElement(\"div\"); d.append(d); d.prepend(1);",
+        "document.createElement(\"div\").focus({ preventScrol: true });",
+        "document.createElement(\"div\").focus(true);",
+        "document.createElement(\"div\").onclick = (e) => { e.detail.length; };",
+    ] {
+        assert!(check(bad).is_err(), "should not check: {bad}");
+    }
+}
