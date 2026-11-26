@@ -11,10 +11,10 @@ Error: Type mismatch: expected '{id: Number}', found '{id: String, … and 129 m
    │ Note: Cannot unify expected '{id: Number}' with found '{id: String, … and 129 more}'
 ───╯
 
-Error: Property 'clientXYZ' not found in type {addEventListener: (String, (DomEvent<a>) => Undefined, Boolean | ListenerOptions?) => Undefined, after: (a) => Undefined, append: (a) => Undefined, appendChild: (a) => a, async: Boolean, autofocus: Boolean, … and 124 more}
+Error: Property 'clientXYZ' not found in type {addEventListener: (String, (DomEvent<a>) => Undefined, Boolean | ListenerOptions?) => Undefined, after: (a?, a?, a?, a?, a?, a?, a?, a?) => Undefined, append: (a?, a?, a?, a?, a?, a?, a?, a?) => Undefined, appendChild: (a) => a, async: Boolean, autofocus: Boolean, … and 124 more}
    ╭─[ main.js:4:11 ]
    │
  4 │ const x = el.clientXYZ;
    │           ──────┬─────  
-   │                 ╰─────── Property 'clientXYZ' not found in type {addEventListener: (String, (DomEvent<a>) => Undefined, Boolean | ListenerOptions?) => Undefined, after: (a) => Undefined, append: (a) => Undefined, appendChild: (a) => a, async: Boolean, autofocus: Boolean, … and 124 more}
+   │                 ╰─────── Property 'clientXYZ' not found in type {addEventListener: (String, (DomEvent<a>) => Undefined, Boolean | ListenerOptions?) => Undefined, after: (a?, a?, a?, a?, a?, a?, a?, a?) => Undefined, append: (a?, a?, a?, a?, a?, a?, a?, a?) => Undefined, appendChild: (a) => a, async: Boolean, autofocus: Boolean, … and 124 more}
 ───╯
