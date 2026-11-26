@@ -241,6 +241,9 @@ unterminated-comment error.
 - A module with type errors is reported against itself, and its importers
   see what it typed. It used to fail whole, every name imported from it
   `Error`.
+- Hover on a member's property (`s.startsWith`, `o.a.b`) shows its type.
+  It showed nothing: hover knew only names, and a method call's callee
+  (`obj.m`) wasn't among the expression types inference records.
 - `/** const a: …, b: … */` no longer splits a declarator at a comma inside a
   string literal type (`"a, b"`) or after an arrow inside type arguments
   (`Pair<() => A, B>`).

@@ -17,6 +17,8 @@ use crate::resolver::Resolution;
 /// program parsed) the inference state needed to answer hover queries.
 pub struct Analysis {
     pub errors: Vec<IntyError>,
+    /// The document as checked: hover reads a member's property off it.
+    text: String,
     program: Option<Program>,
     final_env: Option<TypeEnv>,
     state: Option<InferState>,
@@ -51,7 +53,7 @@ impl Analysis {
             Ok(p) => p,
             Err(e) => {
                 errors.push(e);
-                return Analysis::errors_only(errors);
+                return Analysis::errors_only(text, errors);
             }
         };
 
@@ -74,6 +76,7 @@ impl Analysis {
                 errors.push(e);
                 return Analysis {
                     errors,
+                    text: text.to_string(),
                     program: Some(program),
                     final_env: None,
                     state: None,
@@ -88,6 +91,9 @@ impl Analysis {
         // only returns the first via `Result::Err`. Drain the
         // accumulated list so every diagnostic surfaces as an LSP
         // squiggly, not just the first.
+        // Every expression's type, for hover on a member's property
+        // (`s.startsWith`). Only this document's: its imports are checked.
+        state.expr_types = Some(Default::default());
         let infer_result = state.infer_program_with_env(&env, &program);
         let collected: Vec<IntyError> = state
             .take_located_errors()
@@ -103,6 +109,7 @@ impl Analysis {
                 errors.extend(collected);
                 Analysis {
                     errors,
+                    text: text.to_string(),
                     program: Some(program),
                     final_env: Some(final_env),
                     state: Some(state),
@@ -119,6 +126,7 @@ impl Analysis {
                 let final_env = state.take_env_after_errors();
                 Analysis {
                     errors,
+                    text: text.to_string(),
                     program: Some(program),
                     final_env,
                     state: Some(state),
@@ -143,9 +151,10 @@ impl Analysis {
         }
     }
 
-    fn errors_only(errors: Vec<IntyError>) -> Self {
+    fn errors_only(text: &str, errors: Vec<IntyError>) -> Self {
         Analysis {
             errors,
+            text: text.to_string(),
             program: None,
             final_env: None,
             state: None,
@@ -209,12 +218,26 @@ impl Analysis {
         // (e.g. for unresolved free identifiers we still want a
         // best-effort type from the final env).
         let program = self.program.as_ref()?;
-        let (name, span) = find_identifier(program, byte_offset)?;
-        let scheme = env.lookup(&name)?;
+        let at = At {
+            offset: byte_offset,
+            text: &self.text,
+        };
+        let hit = find_identifier(program, &at)?;
+        let type_str = match hit.member {
+            // A member's property is typed as the whole `obj.prop` is.
+            Some(member) => {
+                let ty = state
+                    .expr_types
+                    .as_ref()?
+                    .get(&(member.start, member.end))?;
+                format_type(state, state.display_type(ty))
+            }
+            None => format_scheme(state, state.display_scheme(env.lookup(&hit.name)?)),
+        };
         Some(HoverResult {
-            name,
-            span,
-            type_str: format_scheme(state, state.display_scheme(scheme)),
+            name: hit.name,
+            span: hit.span,
+            type_str,
         })
     }
 
@@ -958,30 +981,54 @@ fn this_document(error: IntyError, source: Option<inty::error::SourceFile>) -> I
     }
 }
 
-fn find_identifier(program: &Program, offset: usize) -> Option<(String, Span)> {
-    let mut best: Option<(String, Span)> = None;
+/// Where hover is asked: the offset, in the document's text.
+struct At<'a> {
+    offset: usize,
+    text: &'a str,
+}
+
+/// What hover found at an offset: a name, or a member's property, typed
+/// as the whole `member` expression is.
+struct Hit {
+    name: String,
+    span: Span,
+    member: Option<Span>,
+}
+
+impl Hit {
+    fn name(name: String, span: Span) -> Self {
+        Hit {
+            name,
+            span,
+            member: None,
+        }
+    }
+}
+
+fn find_identifier(program: &Program, at: &At) -> Option<Hit> {
+    let mut best: Option<Hit> = None;
     for stmt in &program.statements {
-        visit_stmt(stmt, offset, &mut best);
+        visit_stmt(stmt, at, &mut best);
     }
     best
 }
 
-fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
+fn visit_stmt(stmt: &Stmt, at: &At, best: &mut Option<Hit>) {
     match stmt {
         Stmt::Var { declarations, .. } => {
             for d in declarations {
-                if span_contains(d.name_span(), offset) {
-                    consider(best, d.name.clone(), d.name_span());
+                if span_contains(d.name_span(), at.offset) {
+                    consider(best, Hit::name(d.name.clone(), d.name_span()));
                 }
                 if let Some(init) = &d.init {
-                    visit_expr(init, offset, best);
+                    visit_expr(init, at, best);
                 }
             }
         }
-        Stmt::Expr { expression, .. } => visit_expr(expression, offset, best),
+        Stmt::Expr { expression, .. } => visit_expr(expression, at, best),
         Stmt::Block { body, .. } => {
             for s in body {
-                visit_stmt(s, offset, best);
+                visit_stmt(s, at, best);
             }
         }
         Stmt::If {
@@ -990,15 +1037,15 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
             alternate,
             ..
         } => {
-            visit_expr(test, offset, best);
-            visit_stmt(consequent, offset, best);
+            visit_expr(test, at, best);
+            visit_stmt(consequent, at, best);
             if let Some(e) = alternate {
-                visit_stmt(e, offset, best);
+                visit_stmt(e, at, best);
             }
         }
         Stmt::While { test, body, .. } | Stmt::DoWhile { test, body, .. } => {
-            visit_expr(test, offset, best);
-            visit_stmt(body, offset, best);
+            visit_expr(test, at, best);
+            visit_stmt(body, at, best);
         }
         Stmt::For {
             init,
@@ -1012,46 +1059,46 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
                 match init {
                     ForInit::VarDecl(decls) => {
                         for d in decls {
-                            if span_contains(d.name_span(), offset) {
-                                consider(best, d.name.clone(), d.name_span());
+                            if span_contains(d.name_span(), at.offset) {
+                                consider(best, Hit::name(d.name.clone(), d.name_span()));
                             }
                             if let Some(e) = &d.init {
-                                visit_expr(e, offset, best);
+                                visit_expr(e, at, best);
                             }
                         }
                     }
-                    ForInit::Expr(e) => visit_expr(e, offset, best),
+                    ForInit::Expr(e) => visit_expr(e, at, best),
                 }
             }
             if let Some(t) = test {
-                visit_expr(t, offset, best);
+                visit_expr(t, at, best);
             }
             if let Some(u) = update {
-                visit_expr(u, offset, best);
+                visit_expr(u, at, best);
             }
-            visit_stmt(body, offset, best);
+            visit_stmt(body, at, best);
         }
         Stmt::ForIn { right, body, .. } | Stmt::ForOf { right, body, .. } => {
-            visit_expr(right, offset, best);
-            visit_stmt(body, offset, best);
+            visit_expr(right, at, best);
+            visit_stmt(body, at, best);
         }
         Stmt::Return {
             argument: Some(v), ..
-        } => visit_expr(v, offset, best),
+        } => visit_expr(v, at, best),
         Stmt::Return { argument: None, .. } => {}
-        Stmt::Throw { argument, .. } => visit_expr(argument, offset, best),
+        Stmt::Throw { argument, .. } => visit_expr(argument, at, best),
         Stmt::Try {
             block,
             handler,
             finalizer,
             ..
         } => {
-            visit_stmt(block, offset, best);
+            visit_stmt(block, at, best);
             if let Some(h) = handler {
-                visit_stmt(&h.body, offset, best);
+                visit_stmt(&h.body, at, best);
             }
             if let Some(f) = finalizer {
-                visit_stmt(f, offset, best);
+                visit_stmt(f, at, best);
             }
         }
         Stmt::Switch {
@@ -1059,57 +1106,75 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
             cases,
             ..
         } => {
-            visit_expr(discriminant, offset, best);
+            visit_expr(discriminant, at, best);
             for c in cases {
                 if let Some(t) = &c.test {
-                    visit_expr(t, offset, best);
+                    visit_expr(t, at, best);
                 }
                 for s in &c.consequent {
-                    visit_stmt(s, offset, best);
+                    visit_stmt(s, at, best);
                 }
             }
         }
-        Stmt::Labeled { body, .. } => visit_stmt(body, offset, best),
+        Stmt::Labeled { body, .. } => visit_stmt(body, at, best),
         Stmt::FunctionDecl { name, body, .. } => {
             let name_span = stmt.function_name_span().expect("a function declaration");
-            if span_contains(name_span, offset) {
-                consider(best, name.clone(), name_span);
+            if span_contains(name_span, at.offset) {
+                consider(best, Hit::name(name.clone(), name_span));
             }
-            visit_stmt(body, offset, best);
+            visit_stmt(body, at, best);
         }
         _ => {}
     }
 }
 
-fn visit_expr(expr: &Expr, offset: usize, best: &mut Option<(String, Span)>) {
-    if !span_contains(expr.span(), offset) {
+fn visit_expr(expr: &Expr, at: &At, best: &mut Option<Hit>) {
+    if !span_contains(expr.span(), at.offset) {
         return;
     }
     match expr {
-        Expr::Ident { name, span } => consider(best, name.clone(), *span),
+        Expr::Ident { name, span } => consider(best, Hit::name(name.clone(), *span)),
         Expr::Array { elements, .. } => {
             for e in elements.iter().flatten() {
-                visit_expr(e, offset, best);
+                visit_expr(e, at, best);
             }
         }
         Expr::Object { properties, .. } => {
             use inty::ast::PropDef;
             for p in properties {
                 match p {
-                    PropDef::Property { value, .. } => visit_expr(value, offset, best),
+                    PropDef::Property { value, .. } => visit_expr(value, at, best),
                     PropDef::Method { body, .. }
                     | PropDef::Getter { body, .. }
-                    | PropDef::Setter { body, .. } => visit_stmt(body, offset, best),
-                    PropDef::Spread { argument, .. } => visit_expr(argument, offset, best),
+                    | PropDef::Setter { body, .. } => visit_stmt(body, at, best),
+                    PropDef::Spread { argument, .. } => visit_expr(argument, at, best),
                 }
             }
         }
-        Expr::Member { object, .. } => visit_expr(object, offset, best),
+        Expr::Member {
+            object,
+            property,
+            span,
+        } => {
+            if let Some(prop) = property_span(at.text, *span, property) {
+                if span_contains(prop, at.offset) {
+                    consider(
+                        best,
+                        Hit {
+                            name: property.clone(),
+                            span: prop,
+                            member: Some(*span),
+                        },
+                    );
+                }
+            }
+            visit_expr(object, at, best)
+        }
         Expr::ComputedMember {
             object, property, ..
         } => {
-            visit_expr(object, offset, best);
-            visit_expr(property, offset, best);
+            visit_expr(object, at, best);
+            visit_expr(property, at, best);
         }
         Expr::Call {
             callee, arguments, ..
@@ -1117,23 +1182,23 @@ fn visit_expr(expr: &Expr, offset: usize, best: &mut Option<(String, Span)>) {
         | Expr::New {
             callee, arguments, ..
         } => {
-            visit_expr(callee, offset, best);
+            visit_expr(callee, at, best);
             for a in arguments {
-                visit_expr(a, offset, best);
+                visit_expr(a, at, best);
             }
             for (_, v) in expr.keyword_args() {
-                visit_expr(v, offset, best);
+                visit_expr(v, at, best);
             }
         }
-        Expr::Function { body, .. } => visit_stmt(body, offset, best),
-        Expr::Unary { argument, .. } => visit_expr(argument, offset, best),
+        Expr::Function { body, .. } => visit_stmt(body, at, best),
+        Expr::Unary { argument, .. } => visit_expr(argument, at, best),
         Expr::Binary { left, right, .. } => {
-            visit_expr(left, offset, best);
-            visit_expr(right, offset, best);
+            visit_expr(left, at, best);
+            visit_expr(right, at, best);
         }
         Expr::Assign { left, right, .. } => {
-            visit_expr(left, offset, best);
-            visit_expr(right, offset, best);
+            visit_expr(left, at, best);
+            visit_expr(right, at, best);
         }
         Expr::Conditional {
             test,
@@ -1141,18 +1206,18 @@ fn visit_expr(expr: &Expr, offset: usize, best: &mut Option<(String, Span)>) {
             alternate,
             ..
         } => {
-            visit_expr(test, offset, best);
-            visit_expr(consequent, offset, best);
-            visit_expr(alternate, offset, best);
+            visit_expr(test, at, best);
+            visit_expr(consequent, at, best);
+            visit_expr(alternate, at, best);
         }
         Expr::Sequence { expressions, .. } => {
             for e in expressions {
-                visit_expr(e, offset, best);
+                visit_expr(e, at, best);
             }
         }
         Expr::TemplateLiteral { expressions, .. } => {
             for e in expressions {
-                visit_expr(e, offset, best);
+                visit_expr(e, at, best);
             }
         }
         _ => {}
@@ -1167,10 +1232,19 @@ fn span_len(span: Span) -> usize {
     span.end.saturating_sub(span.start)
 }
 
-fn consider(best: &mut Option<(String, Span)>, name: String, span: Span) {
+/// A member's property: `member` ends with the property's name, as the
+/// source shows it (`obj.prop`, `obj\n  .prop`). `None` for a member
+/// that doesn't, one the front end made up.
+fn property_span(text: &str, member: Span, property: &str) -> Option<Span> {
+    let start = member.end.checked_sub(property.len())?;
+    (start >= member.start && text.get(start..member.end) == Some(property))
+        .then(|| Span::new(start, member.end))
+}
+
+fn consider(best: &mut Option<Hit>, hit: Hit) {
     match best {
-        Some((_, current)) if span_len(*current) <= span_len(span) => {}
-        _ => *best = Some((name, span)),
+        Some(current) if span_len(current.span) <= span_len(hit.span) => {}
+        _ => *best = Some(hit),
     }
 }
 
@@ -1357,6 +1431,36 @@ const func = function() { return {id: '123', name: 'hello'}; };";
         }
         let x = analysis.hover_at(src.find("x =").unwrap()).unwrap();
         assert_eq!(x.type_str, "Number");
+    }
+
+    /// A member's property answers hover with the member's type: a
+    /// method (`s.startsWith`, typed where the call checks it), a field,
+    /// each link of a chain, and one on a line of its own.
+    #[test]
+    fn hover_on_a_member_s_property() {
+        let src = "const s = 'abc';\n\
+                   const b = s.startsWith('a');\n\
+                   const o = {a: {b: 'x'}};\n\
+                   const n = o.a.b.length;\n\
+                   const d = o\n  .a;\n";
+        let analysis = Analysis::check(src);
+        assert!(analysis.errors.is_empty(), "{:?}", analysis.errors);
+        for (needle, name, ty) in [
+            (
+                "startsWith",
+                "startsWith",
+                "(this: String, String, Number?) => Boolean",
+            ),
+            ("a.b.length", "a", "{b: String}"),
+            ("b.length", "b", "String"),
+            ("length", "length", "Number"),
+            ("a;", "a", "{b: String}"),
+        ] {
+            let hover = analysis
+                .hover_at(src.find(needle).unwrap() + 1)
+                .unwrap_or_else(|| panic!("hover on `{needle}`"));
+            assert_eq!((hover.name.as_str(), hover.type_str.as_str()), (name, ty));
+        }
     }
 
     /// `check_lang` routes to the right frontend: a Lua document parses
