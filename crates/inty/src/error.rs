@@ -11,10 +11,16 @@ use thiserror::Error;
 /// attempts and dropped. An error that is reported is rendered once
 /// ([`crate::infer::InferState::render_error`]), which makes its types
 /// [`ShownType::Text`]. Unrendered, a type prints as it is.
+///
+/// An error no one will see keeps no types ([`ShownType::Elided`]): one a
+/// speculative attempt raised at the top of the types it compared (it is
+/// dropped), or one past where a member path stops (its member's types
+/// replace it). Copying large types there made speculation slow.
 #[derive(Debug, Clone)]
 pub enum ShownType {
     Type(Box<Type>),
     Text(String),
+    Elided,
 }
 
 impl ShownType {
@@ -27,6 +33,7 @@ impl ShownType {
         match self {
             ShownType::Text(s) => s.as_str().into(),
             ShownType::Type(t) => t.to_string().into(),
+            ShownType::Elided => "…".into(),
         }
     }
 }
@@ -36,6 +43,7 @@ impl std::fmt::Display for ShownType {
         match self {
             ShownType::Type(t) => write!(f, "{t}"),
             ShownType::Text(s) => f.write_str(s),
+            ShownType::Elided => f.write_str("…"),
         }
     }
 }

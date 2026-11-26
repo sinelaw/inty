@@ -1266,8 +1266,8 @@ impl InferState {
         // Rendered (classes by name, variables renamed `a`, `b`, …) if
         // reported: see `render_error`.
         Err(crate::error::TypeError::BranchMismatch {
-            left: crate::error::ShownType::ty(&t1),
-            right: crate::error::ShownType::ty(&t2),
+            left: self.error_type(&t1, &None),
+            right: self.error_type(&t2, &None),
             span,
         }
         .into())
@@ -1415,7 +1415,28 @@ impl InferState {
             Ok(()) => return Ok(()),
             Err(e) => e,
         };
-        if self.quiet == 0 {
+        // Reported (not speculating), the error is resolved under the
+        // attempt's bindings, and so are the two whole types it is in.
+        if self.quiet == 0 && names_member(&first_err) {
+            // The attempt was `unify(sub, sup)`: its expected side is
+            // `sub`'s, the value supplied; the whole types are `sup`
+            // and `sub`.
+            if let Some(crate::error::TypeError::UnificationError {
+                expected,
+                found,
+                whole,
+                expected_origin,
+                found_origin,
+                ..
+            }) = first_err.as_type_mut()
+            {
+                std::mem::swap(expected, found);
+                std::mem::swap(expected_origin, found_origin);
+                *whole = Some(Box::new((
+                    crate::error::ShownType::ty(sup),
+                    crate::error::ShownType::ty(sub),
+                )));
+            }
             self.settle_error(&mut first_err);
         }
         self.restore_snapshot(snap);
@@ -1553,43 +1574,19 @@ impl InferState {
             // the original sub/sup pair so the user sees the union.
         }
 
-        // Direction matters for the error labels. `subsume(sub, sup)`
-        // is "the value of type `sub` flows into a slot of type `sup`"
-        // — so the natural reading is `expected = sup` (what the slot
-        // wants) and `found = sub` (what was supplied). `unify` itself
-        // is symmetric, but its rendered error uses its arg order as
-        // `(expected, found)`; passing `(sup, sub)` here matches the
-        // call-site semantics. The internal `unify` attempt above used
-        // `(sub, sup)` for the constraint direction (literal-vs-base
-        // is one-directional in `unify`), but its error was discarded
-        // on rollback, so the only user-visible label comes from this
-        // line.
         // Inside two records (an object passed where a class's uses
         // expect one): the member that doesn't fit, and its types, rather
-        // than the two whole records.
-        if names_member(&first_err) {
-            // The attempt was `unify(sub, sup)`: its expected side is
-            // `sub`'s, the value supplied.
-            // And the whole types are `sup` and `sub`.
-            if let Some(crate::error::TypeError::UnificationError {
-                expected,
-                found,
-                whole,
-                expected_origin,
-                found_origin,
-                ..
-            }) = first_err.as_type_mut()
-            {
-                std::mem::swap(expected, found);
-                std::mem::swap(expected_origin, found_origin);
-                *whole = Some(Box::new((
-                    crate::error::ShownType::ty(&sup),
-                    crate::error::ShownType::ty(&sub),
-                )));
-            }
-            return Err(first_err);
-        }
-        let mut err = self.unification_error(span, &sup, &sub);
+        // than the two whole records (prepared above). Speculating, the
+        // error is dropped: the plain one below will do.
+        //
+        // Otherwise, `expected = sup` (what the slot wants) and `found =
+        // sub` (what was supplied).
+        let member_err = self.quiet == 0 && names_member(&first_err);
+        let mut err = if member_err || self.quiet > 0 {
+            first_err
+        } else {
+            self.unification_error(span, &sup, &sub)
+        };
         if self.quiet == 0 {
             let note = match self.row_difference(&sup, &sub) {
                 Some(note) => Some(note),

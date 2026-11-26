@@ -1,0 +1,24 @@
+
+Error: Type mismatch in member `cb`: expected '({x: String}) => Number', found '({x: Number}) => Number'
+   ╭─[ main.js:7:3 ]
+   │
+ 7 │ f(v);
+   │   ┬  
+   │   ╰── Type mismatch in member `cb`: expected '({x: String}) => Number', found '({x: Number}) => Number'
+   │ 
+   │ Note: `cb` is a member of the types compared: expected '{cb: ({x: String}) => Number}', found '{cb: ({x: Number}) => Number}'
+───╯
+
+
+Error: Type mismatch in member `xs`: expected '(Number | String)[]', found 'Number[]'
+    ╭─[ main.js:15:3 ]
+    │
+ 15 │ g(w);
+    │   ┬  
+    │   ╰── Type mismatch in member `xs`: expected '(Number | String)[]', found 'Number[]'
+    │ 
+    │ Help: a record's fields can be assigned, so each field's type must match exactly (an assignment through the expected type could store a value this record doesn't allow). If it's a function parameter whose fields are only read, make it generic: `function f<a>(r: {x: a}) => …`. Otherwise declare the record with the wider type
+    │ 
+    │ Note: `xs` is a member of the types compared: expected '{xs: (Number | String)[]}', found '{xs: Number[]}'
+────╯
+

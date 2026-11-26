@@ -58,14 +58,16 @@
   neither.
 - A type mismatch inside two records (an object passed to a constructor
   or function whose parameter type is a large record) names the member
-  that doesn't fit and shows that member's two types, `Type mismatch in
-  member 'ask': expected '(String) => String', found '(Number) =>
-  Number'`, with the two whole records, trimmed to that member, in a note.
-  The error used to show the two whole records.
+  that doesn't fit and shows that member's two types: ``Type mismatch in
+  member `ask`: expected '(String) => String', found '(Number) =>
+  Number'``, with the two whole records, trimmed to that member, in a note
+  (and the note on record invariance when that is the cause). The error
+  used to show the two whole records. A mismatch in a member's function
+  parameters or array elements is that member's (`cb`, not `cb.x`).
 - Type errors hold the types they compare and are rendered once, when
   reported, instead of when raised: a speculative attempt's error costs
-  no rendering, so `subsume` can keep it, which is what lets it name the
-  member.
+  no rendering (and keeps no types where it can't be seen), so `subsume`
+  can keep it, which is what lets it name the member.
 
 ### DOM declarations
 
