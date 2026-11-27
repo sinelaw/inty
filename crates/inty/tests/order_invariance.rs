@@ -1073,6 +1073,11 @@ fn schemes_alike_but_for_their_variables_names_are_equivalent() {
     // Generalised or not differ, and so do which variables are.
     assert!(!equivalent("<a>(a) => a", "(a) => a"));
     assert!(!equivalent("<a, b>(a, b) => a", "<a>(a, b) => a"));
+    assert!(!equivalent("<a>(a, b) => a", "<b>(a, b) => a"));
+    assert!(!equivalent(
+        "<a, b, c, d, e, f, g, h>(a, b, c, d, e, f, g, h, i) => a",
+        "<a, b, c, d, e, f, g, i>(a, b, c, d, e, f, g, h, i) => a",
+    ));
     assert!(!equivalent(
         "<a, b, c, d, e, f, g, h>(a, b, c, d, e, f, g, h) => a",
         "<a, b, c, d, e, f, g>(a, b, c, d, e, f, g, h) => a",

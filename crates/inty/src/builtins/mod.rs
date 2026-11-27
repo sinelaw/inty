@@ -1912,6 +1912,40 @@ mod tests {
         assert!(env.lookup("undefined").is_some());
     }
 
+    /// A read left at a module's end, on a receiver no importer sees, is
+    /// made a field as a read needs it: present, of any kind. A class's
+    /// method or a getter the receiver is found to be afterwards (as the
+    /// rest of the module's constraints resolve) fits it; an own field
+    /// that takes stores, as a store would need, it wouldn't.
+    #[test]
+    fn a_read_left_at_a_modules_end_takes_a_classs_method() {
+        let mut state = InferState::new();
+        let v = state.fresh_flex();
+        let r = state.fresh_type_var();
+        state.add_constraint(
+            TypePred::has_prop(Type::Var(v.clone()), "setTop", r),
+            Span::new(0, 0),
+        );
+        state
+            .resolve_constraints_keeping(&std::collections::HashSet::new())
+            .expect("the read is defaulted");
+        let method = Type::Row(crate::types::RowType::closed_entries(
+            std::collections::BTreeMap::from([(
+                crate::types::PropName("setTop".to_string()),
+                crate::types::FieldEntry {
+                    presence: Presence::Pre,
+                    ty: Type::Number,
+                    writable: Presence::Abs,
+                    own: Presence::Abs,
+                },
+            )]),
+        ));
+        assert!(
+            state.unify(Span::new(0, 0), &Type::Var(v), &method).is_ok(),
+            "a class's method fits the read"
+        );
+    }
+
     #[test]
     fn test_resolve_plus_number_and_string() {
         let mut state = InferState::new();

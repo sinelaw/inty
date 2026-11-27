@@ -4424,6 +4424,124 @@ mod tests {
         );
     }
 
+    /// A body found closed is found again once a binding it went through
+    /// is replaced (`rebind_var`), or the body itself redefined: either
+    /// may give it a variable.
+    #[test]
+    fn a_body_found_closed_is_reopened_by_a_rebinding_or_a_redefinition() {
+        let mut state = InferState::new();
+        let alpha = state.fresh_flex();
+        let beta = state.fresh_flex();
+        let gamma = state.fresh_flex();
+        let id = state.fresh_type_id();
+        let body_of = |v: &TVarName| {
+            Type::Row(crate::types::RowType::closed(
+                [(
+                    crate::types::PropName("x".to_string()),
+                    Type::Var(v.clone()),
+                )]
+                .into_iter()
+                .collect(),
+            ))
+        };
+        state.register_named_type(TypeDef::recursive(id, vec![], body_of(&alpha)));
+        state
+            .extend_subst(Span::default(), alpha.clone(), Type::Number)
+            .expect("binds");
+        let env = crate::infer::EnvFree {
+            named: [id].into_iter().collect(),
+            ..Default::default()
+        };
+        let fixed = |state: &mut InferState| state.env_fixed_vars(&env, &Type::Undefined).0;
+        assert!(fixed(&mut state).is_empty(), "the body is closed");
+
+        state.rebind_var(alpha.clone(), Type::Var(beta.clone()));
+        assert!(fixed(&mut state).contains(&beta), "the body reaches `beta`");
+
+        state.register_named_type(TypeDef::recursive(id, vec![], body_of(&gamma)));
+        assert!(
+            fixed(&mut state).contains(&gamma),
+            "the redefined body reaches `gamma`"
+        );
+    }
+
+    /// A binding that closes a cycle through bindings the environment's
+    /// fixed variables were found through before is gone through again
+    /// whole: a cycle's bound variables are all reached, wherever a walk
+    /// enters it (`Subst::reach`), so they are as a fresh walk finds them.
+    #[test]
+    fn a_binding_closing_a_cycle_keeps_the_envs_fixed_variables() {
+        let mut state = InferState::new();
+        let a = state.fresh_flex();
+        let b = state.fresh_flex();
+        let row = |k: &str, v: &TVarName| {
+            Type::Row(crate::types::RowType::closed(
+                [(crate::types::PropName(k.to_string()), Type::Var(v.clone()))]
+                    .into_iter()
+                    .collect(),
+            ))
+        };
+        state
+            .extend_subst(Span::default(), a.clone(), row("f", &b))
+            .expect("binds");
+        let env = crate::infer::EnvFree {
+            vars: [a.clone()].into_iter().collect(),
+            ..Default::default()
+        };
+        let before = state.env_fixed_vars(&env, &Type::Undefined).0;
+        assert!(before.contains(&b), "{before:?}");
+
+        // (Written to the substitution alone: the cycles of bindings a
+        // program makes, among rows' tails, the union-find mirror keeps
+        // apart.)
+        state.main_subst.insert(b.clone(), row("g", &a));
+        let mut fresh = crate::types::subst::Reach::default();
+        state.main_subst.reach(&Type::Var(a.clone()), &mut fresh);
+        let after = state.env_fixed_vars(&env, &Type::Undefined).0;
+        assert!(fresh.vars.contains(&a) && fresh.vars.contains(&b));
+        for v in &fresh.vars {
+            assert!(after.contains(v), "{v:?} is reached");
+        }
+    }
+
+    /// A pending constraint's cached reach is found again when a binding
+    /// it went through is replaced (`rebind_var`).
+    #[test]
+    fn a_rebinding_updates_a_pending_constraints_reach() {
+        let mut state = InferState::new();
+        let x = state.fresh_flex();
+        let y = state.fresh_flex();
+        let z = state.fresh_flex();
+        let row = |v: &TVarName| {
+            Type::Row(crate::types::RowType::closed(
+                [(
+                    crate::types::PropName("f".to_string()),
+                    Type::Var(v.clone()),
+                )]
+                .into_iter()
+                .collect(),
+            ))
+        };
+        state
+            .extend_subst(Span::default(), x.clone(), row(&y))
+            .expect("binds");
+        state.add_constraint(TypePred::testable(Type::Var(x.clone())), Span::default());
+        let reached = |state: &InferState| -> std::collections::HashSet<TVarName> {
+            state
+                .pending_constraint_reaches()
+                .iter()
+                .flat_map(|rs| rs.iter())
+                .flat_map(|r| r.vars.iter().cloned())
+                .collect()
+        };
+        assert!(reached(&state).contains(&y));
+
+        state.rebind_var(x.clone(), row(&z));
+        let after = reached(&state);
+        assert!(after.contains(&z), "reaches `z`: {after:?}");
+        assert!(!after.contains(&y), "no longer reaches `y`: {after:?}");
+    }
+
     #[test]
     fn test_fresh_vars() {
         let mut state = InferState::new();

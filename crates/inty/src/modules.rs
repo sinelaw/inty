@@ -1169,6 +1169,73 @@ mod tests {
         }
     }
 
+    /// What a module does to a value an importer gives, beyond reading it,
+    /// is checked against the importer's value as well: a store to one of
+    /// its fields or elements, and a test of its truthiness, each wait for
+    /// it rather than pass as on a value nothing gives.
+    #[test]
+    fn an_imported_values_stores_and_tests_are_checked() {
+        let dir = tempdir();
+        for (body, arg, ok) in [
+            ("v[0] = \"a\"; return 1;", "\"abc\"", false),
+            ("v[0] = \"a\"; return 1;", "[\"b\"]", true),
+            ("v.k = 1; return 1;", "\"abc\"", false),
+            ("v.k = 1; return 1;", "{k: 2}", true),
+            ("if (v) { return 1; } return 2;", "() => 1", false),
+            ("if (v) { return 1; } return 2;", "1", true),
+        ] {
+            write_file(
+                dir.path(),
+                "lib.js",
+                &format!(
+                    "let v; export function set(x) {{ v = x; }} export function use() {{ {body} }}"
+                ),
+            );
+            write_file(
+                dir.path(),
+                "main.js",
+                &format!("import {{ set, use }} from \"./lib.js\"; set({arg}); use();"),
+            );
+            let main_path = dir.path().join("main.js");
+            let mut state = InferState::new();
+            let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+                .and_then(|_| state.resolve_constraints());
+            assert_eq!(
+                r.is_ok() && state.errors.is_empty(),
+                ok,
+                "{body} given {arg}: {r:?} {:?}",
+                state.errors
+            );
+        }
+    }
+
+    /// A method call on what a library's class holds for an importer (its
+    /// elements, iterated) asks only to read the method: a class's
+    /// method, which takes no stores, fits it.
+    #[test]
+    fn a_class_method_fits_a_call_on_what_a_library_holds() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "lib.js",
+            "export class A {\n  constructor() { this.vs = []; }\n  add(v) { this.vs.push(v); }\n  go() { for (const v of this.vs) { v.setTop(0); } }\n}\n",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { A } from \"./lib.js\";\nclass D { setTop(n) { return n; } }\nconst a = new A();\na.add(new D());\na.go();\n",
+        );
+        let main_path = dir.path().join("main.js");
+        let mut state = InferState::new();
+        let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+            .and_then(|_| state.resolve_constraints());
+        assert!(
+            r.is_ok() && state.errors.is_empty(),
+            "{r:?} {:?}",
+            state.errors
+        );
+    }
+
     /// A module imported first by one that doesn't use what a value
     /// reaches (`b`, importing `hello` only) doesn't decide that value's
     /// reads: the importer that gives it (`main`, importing `b` first) does,

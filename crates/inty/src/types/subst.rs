@@ -1837,6 +1837,30 @@ mod reach_tests {
         v
     }
 
+    /// `may_reach` says a type may reach a variable whenever a binding,
+    /// written or linked (`link_equal`, a binding replaced by an equal
+    /// type), lets it: else an occurs check it lets be skipped would be
+    /// missed.
+    #[test]
+    fn may_reach_sees_written_and_linked_bindings() {
+        for linked in [false, true] {
+            let mut s = Subst::with_trail();
+            let a = TVarName::Flex(1);
+            let b = TVarName::Flex(2);
+            let ty = row(&[("f", Type::flex(2))], None);
+            if linked {
+                s.link_equal(a.clone(), ty);
+            } else {
+                s.insert(a.clone(), ty);
+            }
+            assert!(
+                s.may_reach(&b, &row(&[("g", Type::flex(1))], None)),
+                "linked: {linked}"
+            );
+            assert!(!s.may_reach(&b, &Type::flex(3)), "linked: {linked}");
+        }
+    }
+
     /// A cycle of bindings (`a = {f: b}`, `b = {g: a, h: c}`, as type
     /// variables 1, 2 and 3): what it reaches is its free variable and
     /// all of its bound ones, wherever a walk enters it, and whatever walks
