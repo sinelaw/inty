@@ -217,6 +217,20 @@ unterminated-comment error.
 
 ### Fixes
 
+- Checking is faster where many functions are generalised with inferred
+  recursive types around (an object whose methods take it as `this`), and
+  inside large functions: Fresh's web client took 340 s, now 14 s (its
+  `App` 30 s to 3 s, `Pane` 13 s to under 1 s). To find what the
+  environment fixes, generalising walked through the substitution from
+  each of the environment's variables, each such type's body, and each
+  waiting constraint's types, on walks of their own, at every
+  generalisation (nested functions' too). They are now one walk, and what
+  it reaches is kept from one generalisation to the next, brought up to
+  date from the bindings made since. A record's fields are shared between
+  copies of it until one is changed: an object with many methods was
+  copied whole at each binding read and each unification. And binding a
+  variable to a row no longer copies the row's fields first to check
+  whether it ends in that variable, which it rarely does.
 - A method call on a value an importing module decides
   (`editor.say("hi")` on a `let editor` an importer sets) takes a
   function that uses no `this` as well as a method of the receiver, as

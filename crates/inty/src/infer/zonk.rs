@@ -363,7 +363,10 @@ fn zonk_row_with_visited(
                 .collect(),
         ),
     };
-    RowType { props, tail }
+    RowType {
+        props: props.into(),
+        tail,
+    }
 }
 
 /// Zonk a type scheme. Quantified vars are *not* looked up in the
@@ -545,7 +548,10 @@ fn zonk_row_filtered(
                 .collect(),
         ),
     };
-    RowType { props, tail }
+    RowType {
+        props: props.into(),
+        tail,
+    }
 }
 
 #[cfg(test)]

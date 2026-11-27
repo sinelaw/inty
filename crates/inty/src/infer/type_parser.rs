@@ -1713,7 +1713,7 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
                 ),
             };
             Type::Row(RowType {
-                props: new_props,
+                props: new_props.into(),
                 tail: new_tail,
             })
         }

@@ -196,7 +196,10 @@ fn close_call_tails(ty: &Type) -> Type {
                 (RowTail::Open(_), true) => RowTail::Closed,
                 (t, _) => t.clone(),
             };
-            Type::Row(RowType { props, tail })
+            Type::Row(RowType {
+                props: props.into(),
+                tail,
+            })
         }
         Type::Func {
             this_type,

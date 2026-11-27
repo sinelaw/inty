@@ -1272,7 +1272,7 @@ impl InferState {
         let mut props = std::collections::BTreeMap::new();
         props.insert(PropName(key), self.read_entry(element.clone()));
         let wanted = Type::Row(RowType {
-            props,
+            props: props.into(),
             tail: RowTail::Open(rest),
         });
         self.unify(span, container, &wanted)

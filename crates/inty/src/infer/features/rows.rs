@@ -348,7 +348,7 @@ impl InferState {
                         (props, row_tail) = self.merge_written_fields(*spread_span, base, props)?;
                     }
                     let so_far = RowType {
-                        props: std::mem::take(&mut props),
+                        props: std::mem::take(&mut props).into(),
                         tail: row_tail,
                     };
                     if matches!(resolved, Type::Var(TVarName::Flex(_))) {
@@ -377,7 +377,7 @@ impl InferState {
                     } else {
                         let spread_row = self.coerce_to_row(&resolved, *spread_span)?;
                         let merged = self.merge_spread(*spread_span, so_far, spread_row)?;
-                        props = merged.props;
+                        props = std::sync::Arc::unwrap_or_clone(merged.props.into_map());
                         row_tail = merged.tail;
                     }
                 }
@@ -551,7 +551,7 @@ impl InferState {
         let base_row =
             self.extend_row_with(span, RowType::empty_open(base), written.keys().cloned())?;
         let base_row = self.row_view(base_row);
-        let mut props = base_row.props;
+        let mut props = std::sync::Arc::unwrap_or_clone(base_row.props.into_map());
         props.extend(written);
         Ok((props, base_row.tail))
     }
