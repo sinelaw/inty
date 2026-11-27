@@ -104,6 +104,14 @@ pub struct Subst {
     /// (the default) records nothing; the inference state's main
     /// substitution enables it (`with_trail`).
     trail: Option<Vec<SubstUndo>>,
+    /// Each trail entry's serial number (never reused), so a
+    /// [`SubstStamp`] can tell whether the writes before it are still in
+    /// effect.
+    serials: Vec<u64>,
+    next_serial: u64,
+    /// Counts the writes and undos that can change what a type reaches
+    /// (not path compression): see [`Self::version`].
+    version: u64,
     /// Apply each binding once, not again to what it is bound to: a
     /// simultaneous substitution of parameters by arguments, which may
     /// mention the parameters themselves (`Subst::simultaneous`).
@@ -115,7 +123,34 @@ pub struct Subst {
 #[derive(Clone, Debug)]
 enum SubstUndo {
     Type(TVarName, Option<Arc<Type>>),
+    /// Path compression (`resolve`): a binding replaced by the end of
+    /// its chain, which reaches the same.
+    Compressed(TVarName, Arc<Type>),
     Presence(PVarName, Option<Presence>),
+}
+
+/// A write to a [`Subst`], as [`Subst::writes_since`] lists it.
+#[derive(Clone, Copy, Debug)]
+pub enum SubstWrite<'a> {
+    /// A variable that was free bound.
+    Bound(&'a TVarName),
+    /// A bound variable's binding replaced, or removed.
+    Rebound(&'a TVarName),
+    /// A binding replaced by the end of its chain (path compression):
+    /// what it reaches is the same.
+    Compressed,
+    /// A presence variable that was free bound.
+    PresenceBound(&'a PVarName),
+    /// A bound presence variable's binding replaced.
+    PresenceRebound(&'a PVarName),
+}
+
+/// A point in a [`Subst`]'s trail, and the serial number of the write
+/// just before it (see [`Subst::stamp`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SubstStamp {
+    len: usize,
+    last: Option<u64>,
 }
 
 /// A point in a [`Subst`]'s undo log (see [`Subst::mark`]).
@@ -129,6 +164,9 @@ impl Subst {
             map: HashMap::new(),
             presences: HashMap::new(),
             trail: None,
+            serials: Vec::new(),
+            next_serial: 0,
+            version: 0,
             simultaneous: false,
         }
     }
@@ -166,8 +204,10 @@ impl Subst {
             return;
         };
         while trail.len() > mark.0 {
+            self.version += 1;
+            self.serials.pop();
             match trail.pop().expect("trail not empty") {
-                SubstUndo::Type(var, Some(prev)) => {
+                SubstUndo::Type(var, Some(prev)) | SubstUndo::Compressed(var, prev) => {
                     self.map.insert(var, prev);
                 }
                 SubstUndo::Type(var, None) => {
@@ -183,11 +223,54 @@ impl Subst {
         }
     }
 
+    /// Changes whenever what a type reaches through the substitution may
+    /// have (a binding written, replaced or undone; not path compression,
+    /// which keeps it): equal versions, equal reaches.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// The current point of the trail, to list the writes since with
+    /// [`Self::writes_since`].
+    pub fn stamp(&self) -> SubstStamp {
+        SubstStamp {
+            len: self.serials.len(),
+            last: self.serials.last().copied(),
+        }
+    }
+
+    /// The writes made since `stamp`, oldest first, if the writes before
+    /// it are all still in effect (`None` if one was undone since, or
+    /// without a trail).
+    pub fn writes_since(&self, stamp: SubstStamp) -> Option<Vec<SubstWrite<'_>>> {
+        let trail = self.trail.as_ref()?;
+        if self.serials.len() < stamp.len
+            || stamp.len.checked_sub(1).map(|i| self.serials[i]) != stamp.last
+        {
+            return None;
+        }
+        Some(
+            trail[stamp.len..]
+                .iter()
+                .map(|w| match w {
+                    SubstUndo::Type(v, None) => SubstWrite::Bound(v),
+                    SubstUndo::Type(v, Some(_)) => SubstWrite::Rebound(v),
+                    SubstUndo::Compressed(..) => SubstWrite::Compressed,
+                    SubstUndo::Presence(p, None) => SubstWrite::PresenceBound(p),
+                    SubstUndo::Presence(p, Some(_)) => SubstWrite::PresenceRebound(p),
+                })
+                .collect(),
+        )
+    }
+
     /// Write `var ↦ ty`, logging the previous entry.
     fn write(&mut self, var: TVarName, ty: Arc<Type>) {
+        self.version += 1;
         let prev = self.map.insert(var.clone(), ty);
         if let Some(trail) = self.trail.as_mut() {
             trail.push(SubstUndo::Type(var, prev));
+            self.serials.push(self.next_serial);
+            self.next_serial += 1;
         }
     }
 
@@ -199,6 +282,9 @@ impl Subst {
             map,
             presences: HashMap::new(),
             trail: None,
+            serials: Vec::new(),
+            next_serial: 0,
+            version: 0,
             simultaneous: false,
         }
     }
@@ -262,7 +348,15 @@ impl Subst {
         // itself (we don't want to write a binding for an unbound
         // variable).
         for k in &chain {
-            self.write(k.clone(), current.clone());
+            let prev = self.map.insert(k.clone(), current.clone());
+            if let Some(trail) = self.trail.as_mut() {
+                trail.push(match prev {
+                    Some(prev) => SubstUndo::Compressed(k.clone(), prev),
+                    None => SubstUndo::Type(k.clone(), None),
+                });
+                self.serials.push(self.next_serial);
+                self.next_serial += 1;
+            }
         }
         Some(current)
     }
@@ -294,17 +388,23 @@ impl Subst {
 
     /// Insert a presence mapping into the substitution.
     pub fn insert_presence(&mut self, pvar: PVarName, pres: Presence) {
+        self.version += 1;
         let prev = self.presences.insert(pvar.clone(), pres);
         if let Some(trail) = self.trail.as_mut() {
             trail.push(SubstUndo::Presence(pvar, prev));
+            self.serials.push(self.next_serial);
+            self.next_serial += 1;
         }
     }
 
     /// Remove a type variable from the substitution.
     pub fn remove(&mut self, var: &TVarName) {
+        self.version += 1;
         let prev = self.map.remove(var);
         if let (Some(trail), Some(prev)) = (self.trail.as_mut(), prev) {
             trail.push(SubstUndo::Type(var.clone(), Some(prev)));
+            self.serials.push(self.next_serial);
+            self.next_serial += 1;
         }
     }
 
@@ -376,6 +476,9 @@ impl Subst {
             map: result,
             presences,
             trail: None,
+            serials: Vec::new(),
+            next_serial: 0,
+            version: 0,
             simultaneous: false,
         }
     }
@@ -407,6 +510,9 @@ impl Subst {
             map,
             presences: self.presences.clone(),
             trail: None,
+            serials: Vec::new(),
+            next_serial: 0,
+            version: 0,
             simultaneous: false,
         }
     }
@@ -715,7 +821,7 @@ struct SizeState {
 /// What a type reaches through a substitution: the free type and
 /// presence variables and the named types of its flattening (see
 /// [`Subst::reach`]).
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Reach {
     pub vars: HashSet<TVarName>,
     pub pvars: HashSet<PVarName>,
@@ -725,12 +831,45 @@ pub struct Reach {
 /// The state of a walk shared by several [`Subst::reach_in`] calls.
 #[derive(Default, Debug)]
 pub struct ReachWalk {
-    /// Bound variables whose bindings have been gone through.
-    done: HashSet<TVarName>,
+    /// Bound variables whose bindings have been gone through, each with
+    /// the layer that went through it: what it reaches is in that
+    /// layer's reach or a lower one's.
+    done: HashMap<TVarName, usize>,
+    /// The layer being walked: a variable a higher layer went through is
+    /// gone through again (so that layer can be forgotten).
+    level: usize,
+    /// The variables each layer went through (some since gone through
+    /// again by a lower one).
+    owned: Vec<Vec<TVarName>>,
     /// Bound variables whose bindings are being gone through (a cycle).
     in_progress: HashSet<TVarName>,
     /// The last call met a variable an earlier call went through.
     pub skipped: bool,
+}
+
+impl ReachWalk {
+    /// Walk as layer `level` from now on.
+    pub fn set_level(&mut self, level: usize) {
+        self.level = level;
+    }
+
+    /// Forget what the layers from `level` up went through.
+    pub fn forget_from(&mut self, level: usize) {
+        while self.owned.len() > level {
+            let gone = self.owned.len() - 1;
+            for v in self.owned.pop().expect("a layer") {
+                if self.done.get(&v) == Some(&gone) {
+                    self.done.remove(&v);
+                }
+            }
+        }
+        self.level = self.level.min(level);
+    }
+
+    /// Whether this walk went through `var`'s binding (in any layer).
+    pub fn went_through(&self, var: &TVarName) -> bool {
+        self.done.contains_key(var)
+    }
 }
 
 impl Subst {
@@ -761,7 +900,7 @@ impl Subst {
             into.vars.insert(name.clone());
             return;
         };
-        if walk.done.contains(name) {
+        if walk.done.get(name).is_some_and(|&l| l <= walk.level) {
             walk.skipped = true;
             return;
         }
@@ -771,7 +910,16 @@ impl Subst {
         }
         self.reach_type(bound, into, walk);
         walk.in_progress.remove(name);
-        walk.done.insert(name.clone());
+        walk.done.insert(name.clone(), walk.level);
+        if walk.owned.len() <= walk.level {
+            walk.owned.resize_with(walk.level + 1, Vec::new);
+        }
+        walk.owned[walk.level].push(name.clone());
+    }
+
+    /// What presence `p` resolves to, if a variable, into `into`.
+    pub fn reach_presence_var(&self, p: &PVarName, into: &mut Reach) {
+        self.reach_presence(&Presence::Var(p.clone()), into);
     }
 
     fn reach_presence(&self, p: &Presence, into: &mut Reach) {
@@ -885,6 +1033,9 @@ impl FromIterator<(TVarName, Type)> for Subst {
             map: iter.into_iter().map(|(v, t)| (v, Arc::new(t))).collect(),
             presences: HashMap::new(),
             trail: None,
+            serials: Vec::new(),
+            next_serial: 0,
+            version: 0,
             simultaneous: false,
         }
     }

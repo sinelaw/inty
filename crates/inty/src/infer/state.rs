@@ -91,10 +91,31 @@ pub struct TypeClass {
 }
 
 /// A pending constraint that needs to be resolved.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct PendingConstraint {
     pub pred: TypePred,
     pub span: Span,
+    /// Which constraint this is (copies share it), for remembering what
+    /// its types reach ([`InferState::pending_constraint_reaches`]).
+    id: u64,
+}
+
+impl PendingConstraint {
+    pub fn new(pred: TypePred, span: Span) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        PendingConstraint {
+            pred,
+            span,
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+}
+
+/// Equal constraints are the same requirement, whichever was posed.
+impl PartialEq for PendingConstraint {
+    fn eq(&self, other: &Self) -> bool {
+        self.pred == other.pred && self.span == other.span
+    }
 }
 
 /// How long checking one top-level declaration took (`--timings`): a
@@ -152,6 +173,45 @@ impl Default for InferConfig {
 /// quantified variables were instantiated.
 pub type Instantiations = HashMap<(usize, usize), Vec<(TVarName, Type)>>;
 
+/// What the environment's variables reach through the substitution, as
+/// [`InferState::env_fixed_vars`] last found it, kept up to date rather
+/// than found again at each generalisation (each function's, nested
+/// ones' too, where the environment is mostly the same and reaches much
+/// of the substitution).
+///
+/// In layers, one per set of variables the environment added: a nested
+/// function's environment is its enclosing one's and its own locals', so
+/// leaving it forgets its layer only. A layer's walk doesn't go through
+/// a binding a lower layer went through (what that reaches is there).
+/// Brought up to date from the substitution's writes since: a variable a
+/// layer reached free that has been bound adds what its binding reaches.
+/// A binding the layers went through that was replaced or undone starts
+/// it afresh.
+#[derive(Default, Debug)]
+pub(crate) struct EnvReach {
+    layers: Vec<EnvReachLayer>,
+    walk: crate::types::subst::ReachWalk,
+    /// The substitution's writes before this are in the layers.
+    mark: Option<crate::types::subst::SubstStamp>,
+}
+
+/// [`InferState::pending_constraint_reaches`]'s last answer.
+#[derive(Debug)]
+struct ConstraintReaches {
+    /// The substitution's trail, and version, it was found at.
+    stamp: crate::types::subst::SubstStamp,
+    version: u64,
+    /// The constraints it was found for, each with its types' reaches.
+    ids: Vec<u64>,
+    reaches: std::sync::Arc<Vec<std::sync::Arc<Vec<crate::types::subst::Reach>>>>,
+}
+
+#[derive(Debug)]
+struct EnvReachLayer {
+    roots: Vec<TVarName>,
+    reach: crate::types::subst::Reach,
+}
+
 /// Inference state tracking type variables, substitution, and constraints.
 pub struct InferState {
     /// Counter for generating fresh type variables.
@@ -204,6 +264,13 @@ pub struct InferState {
     /// declared ones): nothing in them is fixed by an environment that
     /// reaches them, so `env_fixed_vars` needn't resolve them again.
     pub(crate) closed_named: std::collections::HashSet<TypeId>,
+    /// What the environment's variables reach through the substitution,
+    /// kept from one generalisation to the next (see [`EnvReach`]).
+    env_reach: EnvReach,
+    /// The pending constraints' reaches (see
+    /// [`Self::pending_constraint_reaches`]), with what they were found
+    /// for.
+    constraint_reaches: std::cell::RefCell<Option<ConstraintReaches>>,
 
     /// Inferred types for declarations, keyed by span start position.
     /// Used for decorating the AST with type annotations.
@@ -614,6 +681,8 @@ impl InferState {
             caught_exceptions: std::collections::HashSet::new(),
             recording_member_receiver: false,
             closed_named: std::collections::HashSet::new(),
+            env_reach: EnvReach::default(),
+            constraint_reaches: Default::default(),
             decl_types: HashMap::new(),
             decl_schemes: HashMap::new(),
             expr_types: None,
@@ -1402,13 +1471,15 @@ impl InferState {
         self.main_subst.reach(ty, &mut reach);
         let mut vars = reach.vars;
         // Each constraint's reach, found once.
+        let reaches = self.pending_constraint_reaches();
         let mut left: Vec<(&PendingConstraint, crate::types::subst::Reach)> = self
             .pending_constraints
             .iter()
-            .map(|c| {
+            .zip(reaches.iter())
+            .map(|(c, rs)| {
                 let mut r = crate::types::subst::Reach::default();
-                for t in &c.pred.types {
-                    self.main_subst.reach(t, &mut r);
+                for t in rs.iter() {
+                    r.vars.extend(t.vars.iter().cloned());
                 }
                 (c, r)
             })
@@ -2537,7 +2608,7 @@ impl InferState {
     /// Add a pending constraint.
     pub fn add_constraint(&mut self, pred: TypePred, span: Span) {
         self.pending_constraints
-            .push(PendingConstraint { pred, span });
+            .push(PendingConstraint::new(pred, span));
     }
 
     /// Register a type class.
@@ -2585,10 +2656,8 @@ impl InferState {
         // Also instantiate predicates as pending constraints
         for pred in &scheme.body.preds {
             let instantiated_pred = subst.apply(pred);
-            self.pending_constraints.push(PendingConstraint {
-                pred: instantiated_pred,
-                span,
-            });
+            self.pending_constraints
+                .push(PendingConstraint::new(instantiated_pred, span));
         }
 
         (subst.apply(&scheme.body.ty), instantiation)
@@ -2867,12 +2936,12 @@ impl InferState {
             // The variables generalising would quantify: the type's, and
             // those of the constraints it may carry.
             let mut reached = ty.free_vars();
-            for c in &self.pending_constraints {
-                let mut r = crate::types::subst::Reach::default();
-                for t in &c.pred.types {
-                    self.main_subst.reach(t, &mut r);
-                }
-                reached.extend(r.vars);
+            for r in self
+                .pending_constraint_reaches()
+                .iter()
+                .flat_map(|rs| rs.iter())
+            {
+                reached.extend(r.vars.iter().cloned());
             }
             reached.retain(|v| !fixed_vars.contains(v));
             if self.settle_receivers(Some(&reached)) {
@@ -2956,13 +3025,16 @@ impl InferState {
             // Each constraint's variables through the substitution
             // (`reach`: a flattened copy can be far larger), found once:
             // the substitution doesn't change while constraints are taken.
+            let reaches = self.pending_constraint_reaches();
             let mut remaining: Vec<(PendingConstraint, crate::types::subst::Reach)> =
                 std::mem::take(&mut self.pending_constraints)
                     .into_iter()
-                    .map(|c| {
+                    .zip(reaches.iter())
+                    .map(|(c, rs)| {
                         let mut r = crate::types::subst::Reach::default();
-                        for t in &c.pred.types {
-                            self.main_subst.reach(t, &mut r);
+                        for t in rs.iter() {
+                            r.vars.extend(t.vars.iter().cloned());
+                            r.pvars.extend(t.pvars.iter().cloned());
                         }
                         (c, r)
                     })
@@ -3127,6 +3199,241 @@ impl InferState {
         self.env_fixed_vars(&env.free(), &Type::Undefined).0
     }
 
+    /// What each pending constraint's types reach through the
+    /// substitution, in order. Found again only when the substitution or
+    /// the constraints have changed since: generalising asks several
+    /// times (the functional dependencies, the receivers to settle, the
+    /// constraints to take into the scheme), and a function group before
+    /// it (`scheme_too_large`).
+    pub(crate) fn pending_constraint_reaches(
+        &self,
+    ) -> std::sync::Arc<Vec<std::sync::Arc<Vec<crate::types::subst::Reach>>>> {
+        use crate::types::subst::{Reach, SubstWrite};
+        use std::sync::Arc;
+        let version = self.main_subst.version();
+        let same_preds = |c: &ConstraintReaches| {
+            c.ids.len() == self.pending_constraints.len()
+                && c.ids
+                    .iter()
+                    .zip(&self.pending_constraints)
+                    .all(|(id, p)| *id == p.id)
+        };
+        let mut old = self.constraint_reaches.borrow_mut().take();
+        if let Some(c) = &old {
+            if c.version == version && same_preds(c) {
+                let reaches = c.reaches.clone();
+                *self.constraint_reaches.borrow_mut() = old;
+                return reaches;
+            }
+        }
+        // Bring the reaches found before up to date: a variable one
+        // reached free that has been bound since is replaced by what its
+        // binding reaches. A binding replaced, or one undone that they
+        // went through, and they are found afresh.
+        let mut kept: HashMap<u64, Arc<Vec<Reach>>> = HashMap::new();
+        if let Some(c) = old.take() {
+            if let Some(writes) = self.main_subst.writes_since(c.stamp) {
+                let mut bound: Vec<TVarName> = Vec::new();
+                let mut pbound: Vec<crate::types::PVarName> = Vec::new();
+                let mut afresh = false;
+                for w in writes {
+                    match w {
+                        SubstWrite::Compressed => {}
+                        SubstWrite::Bound(v) => bound.push(v.clone()),
+                        SubstWrite::PresenceBound(p) => pbound.push(p.clone()),
+                        SubstWrite::Rebound(_) | SubstWrite::PresenceRebound(_) => {
+                            afresh = true;
+                            break;
+                        }
+                    }
+                }
+                if !afresh {
+                    let mut of_var: HashMap<TVarName, Reach> = HashMap::new();
+                    let mut of_pvar: HashMap<crate::types::PVarName, Reach> = HashMap::new();
+                    let reaches = Arc::try_unwrap(c.reaches).unwrap_or_else(|a| (*a).clone());
+                    let bound_set: std::collections::HashSet<&TVarName> = bound.iter().collect();
+                    let pbound_set: std::collections::HashSet<&crate::types::PVarName> =
+                        pbound.iter().collect();
+                    // The variables of `r` bound since (of the smaller side).
+                    let hit = |r: &Reach| -> Vec<TVarName> {
+                        if r.vars.len() <= bound_set.len() {
+                            r.vars
+                                .iter()
+                                .filter(|v| bound_set.contains(v))
+                                .cloned()
+                                .collect()
+                        } else {
+                            bound
+                                .iter()
+                                .filter(|v| r.vars.contains(*v))
+                                .cloned()
+                                .collect()
+                        }
+                    };
+                    let phit = |r: &Reach| -> Vec<crate::types::PVarName> {
+                        if r.pvars.len() <= pbound_set.len() {
+                            r.pvars
+                                .iter()
+                                .filter(|p| pbound_set.contains(p))
+                                .cloned()
+                                .collect()
+                        } else {
+                            pbound
+                                .iter()
+                                .filter(|p| r.pvars.contains(*p))
+                                .cloned()
+                                .collect()
+                        }
+                    };
+                    for (id, mut rs) in c.ids.into_iter().zip(reaches) {
+                        let touched = rs.iter().any(|r| !hit(r).is_empty() || !phit(r).is_empty());
+                        if touched {
+                            for r in Arc::make_mut(&mut rs) {
+                                for v in hit(r) {
+                                    r.vars.remove(&v);
+                                    let add = of_var.entry(v.clone()).or_insert_with(|| {
+                                        let mut a = Reach::default();
+                                        self.main_subst.reach(&Type::Var(v.clone()), &mut a);
+                                        a
+                                    });
+                                    r.vars.extend(add.vars.iter().cloned());
+                                    r.pvars.extend(add.pvars.iter().cloned());
+                                    r.named.extend(add.named.iter().copied());
+                                }
+                                for p in phit(r) {
+                                    r.pvars.remove(&p);
+                                    let add = of_pvar.entry(p.clone()).or_insert_with(|| {
+                                        let mut a = Reach::default();
+                                        self.main_subst.reach_presence_var(&p, &mut a);
+                                        a
+                                    });
+                                    r.pvars.extend(add.pvars.iter().cloned());
+                                }
+                            }
+                        }
+                        kept.insert(id, rs);
+                    }
+                }
+            }
+        }
+        // Each constraint's: the one found before for it, or found now.
+        let mut ids = Vec::with_capacity(self.pending_constraints.len());
+        let mut reaches = Vec::with_capacity(self.pending_constraints.len());
+        for c in &self.pending_constraints {
+            let rs = match kept.get(&c.id) {
+                Some(rs) => rs.clone(),
+                None => Arc::new(
+                    c.pred
+                        .types
+                        .iter()
+                        .map(|t| {
+                            let mut r = Reach::default();
+                            self.main_subst.reach(t, &mut r);
+                            r
+                        })
+                        .collect(),
+                ),
+            };
+            ids.push(c.id);
+            reaches.push(rs);
+        }
+        let reaches = Arc::new(reaches);
+        *self.constraint_reaches.borrow_mut() = Some(ConstraintReaches {
+            stamp: self.main_subst.stamp(),
+            version,
+            ids,
+            reaches: reaches.clone(),
+        });
+        reaches
+    }
+
+    /// Bring `cache` up to date (see [`EnvReach`]) and make its layers
+    /// the reach of `roots`, the environment's variables (in order).
+    fn update_env_reach(&mut self, cache: &mut EnvReach, roots: &[TVarName]) {
+        use crate::types::subst::SubstWrite;
+        // The writes since: what the variables the layers reached free
+        // have been bound to is reached too.
+        let writes = cache.mark.and_then(|m| self.main_subst.writes_since(m));
+        let mut afresh = writes.is_none();
+        let mut bound: Vec<(usize, TVarName)> = Vec::new();
+        let mut pbound: Vec<(usize, crate::types::PVarName)> = Vec::new();
+        for w in writes.into_iter().flatten() {
+            match w {
+                SubstWrite::Compressed => {}
+                SubstWrite::Bound(v) => {
+                    if let Some(i) = cache.layers.iter().position(|l| l.reach.vars.contains(v)) {
+                        bound.push((i, v.clone()));
+                    }
+                }
+                SubstWrite::PresenceBound(p) => {
+                    if let Some(i) = cache.layers.iter().position(|l| l.reach.pvars.contains(p)) {
+                        pbound.push((i, p.clone()));
+                    }
+                }
+                SubstWrite::Rebound(v) => {
+                    if cache.walk.went_through(v)
+                        || cache.layers.iter().any(|l| l.reach.vars.contains(v))
+                    {
+                        afresh = true;
+                        break;
+                    }
+                }
+                // A presence chain the layers resolved may run through it.
+                SubstWrite::PresenceRebound(_) => {
+                    afresh = true;
+                    break;
+                }
+            }
+        }
+        if afresh {
+            *cache = EnvReach::default();
+        } else {
+            for (i, v) in bound {
+                // Bound, it isn't free: what its binding reaches is.
+                for l in &mut cache.layers {
+                    l.reach.vars.remove(&v);
+                }
+                cache.walk.set_level(i);
+                self.main_subst.reach_in(
+                    &Type::Var(v),
+                    &mut cache.layers[i].reach,
+                    &mut cache.walk,
+                );
+            }
+            for (i, p) in pbound {
+                self.main_subst
+                    .reach_presence_var(&p, &mut cache.layers[i].reach);
+            }
+        }
+        // The layers whose variables the environment still has; then one
+        // for the rest.
+        let root_set: std::collections::HashSet<&TVarName> = roots.iter().collect();
+        let keep = cache
+            .layers
+            .iter()
+            .take_while(|l| l.roots.iter().all(|r| root_set.contains(r)))
+            .count();
+        cache.layers.truncate(keep);
+        cache.walk.forget_from(keep);
+        let have: std::collections::HashSet<&TVarName> =
+            cache.layers.iter().flat_map(|l| l.roots.iter()).collect();
+        let new: Vec<TVarName> = roots
+            .iter()
+            .filter(|r| !have.contains(r))
+            .cloned()
+            .collect();
+        if !new.is_empty() {
+            cache.walk.set_level(keep);
+            let mut reach = crate::types::subst::Reach::default();
+            for v in &new {
+                self.main_subst
+                    .reach_in(&Type::Var(v.clone()), &mut reach, &mut cache.walk);
+            }
+            cache.layers.push(EnvReachLayer { roots: new, reach });
+        }
+        cache.mark = Some(self.main_subst.stamp());
+    }
+
     /// The type and presence variables generalisation must leave alone.
     ///
     /// This is the textbook `ftv(S Γ)` — the environment's free variables
@@ -3182,12 +3489,15 @@ impl InferState {
         // In order of id, as where a shared walk cuts a cycle of bindings
         // depends on the order.
         env_vars.sort_by_key(|v| (v.is_flex(), v.id()));
+        env_vars.dedup();
+        let mut cache = std::mem::take(&mut self.env_reach);
+        self.update_env_reach(&mut cache, &env_vars);
+        vars.extend(env_vars.iter().cloned());
         let mut reach = crate::types::subst::Reach::default();
-        let mut walk = crate::types::subst::ReachWalk::default();
-        for v in &env_vars {
-            vars.insert(v.clone());
-            self.main_subst
-                .reach_in(&Type::Var(v.clone()), &mut reach, &mut walk);
+        for layer in &cache.layers {
+            reach.vars.extend(layer.reach.vars.iter().cloned());
+            reach.pvars.extend(layer.reach.pvars.iter().cloned());
+            reach.named.extend(layer.reach.named.iter().copied());
         }
         // Presence variables bound in the substitution resolve too.
         let bound_pvars: Vec<crate::types::PVarName> = pvars.iter().cloned().collect();
@@ -3205,25 +3515,15 @@ impl InferState {
         named.extend(ty.named_ids());
         // Each pending constraint's types' reaches, found once (for
         // these named types and for the functional dependencies below).
-        let preds: Vec<(ClassName, Vec<crate::types::subst::Reach>)> = self
+        let reaches = self.pending_constraint_reaches();
+        let preds: Vec<(ClassName, &[crate::types::subst::Reach])> = self
             .pending_constraints
             .iter()
-            .map(|c| {
-                let reaches = c
-                    .pred
-                    .types
-                    .iter()
-                    .map(|t| {
-                        let mut r = crate::types::subst::Reach::default();
-                        self.main_subst.reach(t, &mut r);
-                        r
-                    })
-                    .collect();
-                (c.pred.class, reaches)
-            })
+            .zip(reaches.iter())
+            .map(|(c, r)| (c.pred.class, r.as_slice()))
             .collect();
         for (_, reaches) in &preds {
-            for r in reaches {
+            for r in reaches.iter() {
                 named.extend(r.named.iter().copied());
             }
         }
@@ -3236,8 +3536,12 @@ impl InferState {
         // object), and only the union of what they reach is wanted. A
         // walk per body went through the shared part once per body, at
         // every generalisation.
-        // (The environment's walk goes on: the bodies mostly reach what
-        // the environment does.)
+        // (Above the environment's layers: the bodies mostly reach what
+        // the environment does. Forgotten after, as they aren't the
+        // environment.)
+        let top = cache.layers.len();
+        let mut walk = std::mem::take(&mut cache.walk);
+        walk.set_level(top);
         // In order of id: where a shared walk cuts a cycle of bindings
         // depends on the order the bodies are gone through, and the
         // result must not depend on hashing.
@@ -3286,6 +3590,9 @@ impl InferState {
             pvars.extend(free_pvars);
             named.extend(inner.into_iter().map(std::cmp::Reverse));
         }
+        walk.forget_from(top);
+        cache.walk = walk;
+        self.env_reach = cache;
         // Close over the pending constraints' functional dependencies:
         // each type's free variables through the substitution (`reach`,
         // not a flattened copy of it).
@@ -3301,7 +3608,7 @@ impl InferState {
                         .iter()
                         .all(|v| vars.contains(v) || self.main_subst.contains(v))
                 };
-                let determined: Vec<&crate::types::subst::Reach> = match (class, types.as_slice()) {
+                let determined: Vec<&crate::types::subst::Reach> = match (class, *types) {
                     // container → index, element
                     (ClassName::Indexable, [container, index, element]) => {
                         if fixed(container) {
