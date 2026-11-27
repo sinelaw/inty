@@ -916,9 +916,11 @@ impl InferState {
                 // type nothing else constrains, and it can let the
                 // `Indexable`s on the same receivers resolve.
                 // Only the first read of each (receiver, name) becomes the
-                // field: the receiver has no value, so further reads of
-                // the name (`s.slice(i)`, `s.slice(i, j)`) are vacuous and
-                // needn't agree.
+                // field, of a receiver nothing after this module sees: it
+                // has no value, so further reads of the name (`s.slice(i)`,
+                // `s.slice(i, j)`) are vacuous and needn't agree. One an
+                // importing module sees has the importer's values: each
+                // read is of the field.
                 // (Keys are taken before any defaulting binds a receiver.)
                 let keys: Vec<Option<(Type, String)>> = deferred
                     .iter()
@@ -950,11 +952,21 @@ impl InferState {
                         {
                             rest.push(c)
                         }
+                        // A receiver an importing module still sees has the
+                        // importer's values: its reads wait for them, each
+                        // resolved against the value's type (an array's
+                        // `map`, read twice, instantiated for each). Made
+                        // the first read's field, a record, every other
+                        // read's requirement was lost (a `.toUpperCase()` on
+                        // what it gives), and an array or a string given
+                        // didn't fit.
+                        Some(key) if matches!(&key.0, Type::Var(v) if keep.contains(v)) => {
+                            rest.push(c)
+                        }
                         Some(key) => {
                             if !seen.contains(&key) {
-                                let kept = matches!(&key.0, Type::Var(v) if keep.contains(v));
                                 seen.push(key);
-                                self.default_has_prop(&c, kept)?;
+                                self.default_has_prop(&c, false)?;
                             }
                             defaulted = true;
                         }
@@ -978,7 +990,10 @@ impl InferState {
                         .filter(|c| {
                             matches!(
                                 c.pred.class,
-                                ClassName::Inject | ClassName::Strip | ClassName::Spread
+                                ClassName::Inject
+                                    | ClassName::Strip
+                                    | ClassName::Spread
+                                    | ClassName::HasProp
                             ) && matches!(
                                 c.pred.types.first().map(|t| self.zonk_head(t)),
                                 Some(Type::Var(v)) if keep.contains(&v)

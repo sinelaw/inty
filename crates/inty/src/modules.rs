@@ -1075,6 +1075,48 @@ mod tests {
         }
     }
 
+    /// Two reads of a field of a value an importer gives are reads of the
+    /// one field, whichever comes first: what the second does with it
+    /// (`.toUpperCase()`) is still asked of the importer's value. Only the
+    /// first read was kept, so with `r` read first the call below passed.
+    #[test]
+    fn each_read_of_an_imported_receivers_field_is_kept() {
+        let dir = tempdir();
+        for (body, arg, ok) in [
+            (
+                "const r = y.k; const s = y.k.toUpperCase(); return r;",
+                "1",
+                false,
+            ),
+            (
+                "const s = y.k.toUpperCase(); const r = y.k; return r;",
+                "1",
+                false,
+            ),
+        ] {
+            write_file(
+                dir.path(),
+                "lib.js",
+                &format!("export const o = {{ m(y) {{ {body} }} }};"),
+            );
+            write_file(
+                dir.path(),
+                "main.js",
+                &format!("import {{ o }} from \"./lib.js\"; const r = o.m({{k: {arg}}});"),
+            );
+            let main_path = dir.path().join("main.js");
+            let mut state = InferState::new();
+            let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+                .and_then(|_| state.resolve_constraints());
+            assert_eq!(
+                r.is_ok() && state.errors.is_empty(),
+                ok,
+                "{body} with k = {arg}: {r:?} {:?}",
+                state.errors
+            );
+        }
+    }
+
     /// A method call on a value an importer decides (`editor.say(…)`)
     /// takes a function that uses no `this` as well as a method of the
     /// receiver: JavaScript passes the receiver, which an arrow function
