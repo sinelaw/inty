@@ -109,6 +109,10 @@ pub struct Subst {
     /// effect.
     serials: Vec<u64>,
     next_serial: u64,
+    /// With a trail: for each variable, the variables a binding of which
+    /// mentioned it (kept when the binding is undone or replaced, so a
+    /// superset): see [`Self::may_reach`].
+    mentioned_by: HashMap<TVarName, Vec<TVarName>>,
     /// Counts the writes and undos that can change what a type reaches
     /// (not path compression): see [`Self::version`].
     version: u64,
@@ -166,6 +170,7 @@ impl Subst {
             trail: None,
             serials: Vec::new(),
             next_serial: 0,
+            mentioned_by: HashMap::new(),
             version: 0,
             simultaneous: false,
         }
@@ -223,6 +228,34 @@ impl Subst {
         }
     }
 
+    /// Whether `ty` may reach `var` through the substitution: `false`
+    /// only if it doesn't (it mentions neither `var` nor a variable whose
+    /// binding, through others, does). Found from the variables whose
+    /// bindings mention `var`, without walking what `ty` reaches (an
+    /// object's whole type, for each variable bound to a type holding
+    /// it); `true` when there are too many of those to look for. Without
+    /// a trail (no index), always `true`.
+    pub fn may_reach(&self, var: &TVarName, ty: &Type) -> bool {
+        const MAX_MENTIONERS: usize = 512;
+        if self.trail.is_none() {
+            return true;
+        }
+        let mut found: HashSet<&TVarName> = HashSet::new();
+        found.insert(var);
+        let mut queue = vec![var];
+        while let Some(v) = queue.pop() {
+            for by in self.mentioned_by.get(v).into_iter().flatten() {
+                if found.insert(by) {
+                    if found.len() > MAX_MENTIONERS {
+                        return true;
+                    }
+                    queue.push(by);
+                }
+            }
+        }
+        ty.any_var(&mut |v| found.contains(v))
+    }
+
     /// Changes whenever what a type reaches through the substitution may
     /// have (a binding written, replaced or undone; not path compression,
     /// which keeps it): equal versions, equal reaches.
@@ -266,6 +299,16 @@ impl Subst {
     /// Write `var ↦ ty`, logging the previous entry.
     fn write(&mut self, var: TVarName, ty: Arc<Type>) {
         self.version += 1;
+        if self.trail.is_some() {
+            let by = &mut self.mentioned_by;
+            ty.any_var(&mut |u| {
+                let list = by.entry(u.clone()).or_default();
+                if list.last() != Some(&var) {
+                    list.push(var.clone());
+                }
+                false
+            });
+        }
         let prev = self.map.insert(var.clone(), ty);
         if let Some(trail) = self.trail.as_mut() {
             trail.push(SubstUndo::Type(var, prev));
@@ -284,6 +327,7 @@ impl Subst {
             trail: None,
             serials: Vec::new(),
             next_serial: 0,
+            mentioned_by: HashMap::new(),
             version: 0,
             simultaneous: false,
         }
@@ -478,6 +522,7 @@ impl Subst {
             trail: None,
             serials: Vec::new(),
             next_serial: 0,
+            mentioned_by: HashMap::new(),
             version: 0,
             simultaneous: false,
         }
@@ -512,6 +557,7 @@ impl Subst {
             trail: None,
             serials: Vec::new(),
             next_serial: 0,
+            mentioned_by: HashMap::new(),
             version: 0,
             simultaneous: false,
         }
@@ -1038,6 +1084,7 @@ impl FromIterator<(TVarName, Type)> for Subst {
             trail: None,
             serials: Vec::new(),
             next_serial: 0,
+            mentioned_by: HashMap::new(),
             version: 0,
             simultaneous: false,
         }

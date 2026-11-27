@@ -694,6 +694,14 @@ impl InferState {
             return self.var_bind(span, var, &row);
         }
 
+        // A type that can't reach `var` through the substitution (the
+        // usual case) needs neither check below: each walks all the type
+        // reaches (as `row_ends_in` doesn't), and neither looks inside a
+        // recursive type's body.
+        if !self.main_subst.may_reach(&TVarName::Flex(var), ty) {
+            return self.extend_subst(span, TVarName::Flex(var), ty.clone());
+        }
+
         // Check if this would create a recursive type inside a row
         if self.is_inside_row_type(var, ty) {
             // Create a recursive type

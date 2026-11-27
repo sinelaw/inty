@@ -217,6 +217,12 @@ unterminated-comment error.
 
 ### Fixes
 
+- Binding a variable no longer walks everything the type it is bound to
+  reaches (the occurs check, and the check for a recursive type) when the
+  type can't reach the variable, which is what an index of the bindings
+  mentioning each variable says: binding a variable to a type holding a
+  large object went through the whole object each time. Fresh's web
+  client: 12 s to 10 s, its `App` about 2.7 s to 1.7 s.
 - Checking is faster where many functions are generalised with inferred
   recursive types around (an object whose methods take it as `this`), and
   inside large functions: Fresh's web client took 340 s, now 14 s (its

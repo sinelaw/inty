@@ -1817,6 +1817,47 @@ impl Type {
         }
     }
 
+    /// Whether `f` holds of a type variable this type mentions (not
+    /// looking through a substitution), stopping at the first.
+    pub fn any_var(&self, f: &mut impl FnMut(&TVarName) -> bool) -> bool {
+        match self {
+            Type::Number
+            | Type::String
+            | Type::Boolean
+            | Type::Undefined
+            | Type::Null
+            | Type::Regex
+            | Type::NewTarget
+            | Type::ArrowThis
+            | Type::TypedArray(_)
+            | Type::Literal(_)
+            | Type::Error => false,
+            Type::Var(name) => f(name),
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                this_type.as_ref().is_some_and(|t| t.any_var(f))
+                    || params.iter().any(|p| p.ty.any_var(f))
+                    || ret.any_var(f)
+            }
+            Type::Row(row) => {
+                row.props.values().any(|e| e.ty.any_var(f))
+                    || match &row.tail {
+                        RowTail::Open(v) => f(v),
+                        RowTail::Recursive(_, args) => args.iter().any(|a| a.any_var(f)),
+                        RowTail::Closed => false,
+                    }
+            }
+            Type::Array(t) | Type::Maybe(_, t) | Type::Promise(t) | Type::Map(t) => t.any_var(f),
+            Type::Tuple(ts) | Type::Union(ts) | Type::Named(_, ts) => {
+                ts.iter().any(|t| t.any_var(f))
+            }
+            Type::Module(_) => self.free_vars().iter().any(f),
+        }
+    }
+
     fn collect_free_vars(&self, vars: &mut HashSet<TVarName>) {
         match self {
             Type::Number
