@@ -822,13 +822,21 @@ struct SizeState {
 }
 
 /// What a type reaches through a substitution: the free type and
-/// presence variables and the named types of its flattening (see
-/// [`Subst::reach`]).
+/// presence variables and the named types (see [`Subst::reach`]).
 #[derive(Default, Debug, Clone)]
 pub struct Reach {
     pub vars: HashSet<TVarName>,
     pub pvars: HashSet<PVarName>,
     pub named: HashSet<super::TypeId>,
+}
+
+#[cfg(test)]
+impl Reach {
+    fn extend_from(&mut self, other: &Reach) {
+        self.vars.extend(other.vars.iter().cloned());
+        self.pvars.extend(other.pvars.iter().cloned());
+        self.named.extend(other.named.iter().copied());
+    }
 }
 
 /// The state of a walk shared by several [`Subst::reach_in`] calls.
@@ -844,8 +852,17 @@ pub struct ReachWalk {
     /// The variables each layer went through (some since gone through
     /// again by a lower one).
     owned: Vec<Vec<TVarName>>,
-    /// Bound variables whose bindings are being gone through (a cycle).
-    in_progress: HashSet<TVarName>,
+    /// Tarjan's search for the cycles of bindings (strongly connected
+    /// components): each bound variable being gone through, by the order
+    /// it was met in; the ones whose component isn't finished, in that
+    /// order; for each binding being gone through, the earliest of those
+    /// it reaches; and the variables a binding reached while they were
+    /// being gone through (one bound to a type holding itself).
+    index: HashMap<TVarName, usize>,
+    stack: Vec<TVarName>,
+    lows: Vec<usize>,
+    met_again: HashSet<TVarName>,
+    next_index: usize,
     /// The last call met a variable an earlier call went through.
     pub skipped: bool,
 }
@@ -869,6 +886,20 @@ impl ReachWalk {
         self.level = self.level.min(level);
     }
 
+    /// Record that the current layer went through what `other` (a walk of
+    /// its own) went through.
+    fn absorb(&mut self, other: ReachWalk) {
+        if self.owned.len() <= self.level {
+            self.owned.resize_with(self.level + 1, Vec::new);
+        }
+        for (v, _) in other.done {
+            if self.done.get(&v).is_none_or(|&l| l > self.level) {
+                self.done.insert(v.clone(), self.level);
+                self.owned[self.level].push(v);
+            }
+        }
+    }
+
     /// Whether this walk went through `var`'s binding (in any layer).
     pub fn went_through(&self, var: &TVarName) -> bool {
         self.done.contains_key(var)
@@ -876,15 +907,32 @@ impl ReachWalk {
 }
 
 impl Subst {
-    /// `flatten(ty)`'s free variables, free presence variables and named
-    /// type ids, found without building the flattened type: each bound
-    /// variable's binding is walked once. (A flattened type is a tree,
-    /// exponentially larger than the substitution when it mentions a
-    /// large type in many places; a caller that only wants these sets
-    /// shouldn't build it.) A variable whose expansion is cut by a cycle
-    /// counts as free, as it stays in `flatten`'s output.
+    /// The free type and presence variables, and the named type ids, that
+    /// `ty` reaches through the substitution, found without building its
+    /// flattened type: each bound variable's binding is walked once. (A
+    /// flattened type is a tree, exponentially larger than the
+    /// substitution when it mentions a large type in many places; a
+    /// caller that only wants these sets shouldn't build it.)
+    ///
+    /// Every binding met is gone through (a row tail bound to a type that
+    /// isn't a row, a module's variables too). Listed are the free
+    /// variables met, and the bound ones on a cycle of bindings: all of a
+    /// cycle's, as `flatten` keeps a variable where it cuts one, and which
+    /// it cuts depends on where it enters. So what is listed depends only
+    /// on the substitution, not on the order of a walk or of the walks a
+    /// [`ReachWalk`] shares.
     pub fn reach(&self, ty: &Type, into: &mut Reach) {
         self.reach_in(ty, into, &mut ReachWalk::default());
+    }
+
+    /// [`Self::reach`], on a walk of its own, what it went through then
+    /// recorded in `walk`'s current layer: for a type whose bindings may
+    /// close a cycle through ones `walk` went through (and so skips, not
+    /// seeing the cycle).
+    pub fn reach_afresh_in(&self, ty: &Type, into: &mut Reach, walk: &mut ReachWalk) {
+        let mut own = ReachWalk::default();
+        self.reach_type(ty, into, &mut own);
+        walk.absorb(own);
     }
 
     /// [`Self::reach`], as part of `walk`: a bound variable an earlier
@@ -903,21 +951,56 @@ impl Subst {
             into.vars.insert(name.clone());
             return;
         };
+        // Being gone through: a cycle of bindings, closed here.
+        if let Some(&i) = walk.index.get(name) {
+            if let Some(low) = walk.lows.last_mut() {
+                *low = (*low).min(i);
+            }
+            walk.met_again.insert(name.clone());
+            return;
+        }
         if walk.done.get(name).is_some_and(|&l| l <= walk.level) {
             walk.skipped = true;
             return;
         }
-        if !walk.in_progress.insert(name.clone()) {
-            into.vars.insert(name.clone());
+        let i = walk.next_index;
+        walk.next_index += 1;
+        walk.index.insert(name.clone(), i);
+        walk.stack.push(name.clone());
+        walk.lows.push(i);
+        self.reach_type(bound, into, walk);
+        let low = walk.lows.pop().expect("this variable's");
+        if let Some(outer) = walk.lows.last_mut() {
+            *outer = (*outer).min(low);
+        }
+        if low < i {
+            // Part of a cycle through a variable met before: finished
+            // with it.
             return;
         }
-        self.reach_type(bound, into, walk);
-        walk.in_progress.remove(name);
-        walk.done.insert(name.clone(), walk.level);
+        // The variables of this one's component, all gone through now. A
+        // bound variable on a cycle stays in `flatten`'s output (where it
+        // cuts the cycle), so the cycle's variables are reached: all of
+        // them, wherever a walk enters the cycle.
+        let at = walk
+            .stack
+            .iter()
+            .rposition(|v| v == name)
+            .expect("on the stack");
+        let component: Vec<TVarName> = walk.stack.drain(at..).collect();
+        let cyclic = component.len() > 1 || walk.met_again.contains(name);
         if walk.owned.len() <= walk.level {
             walk.owned.resize_with(walk.level + 1, Vec::new);
         }
-        walk.owned[walk.level].push(name.clone());
+        for v in component {
+            walk.index.remove(&v);
+            walk.met_again.remove(&v);
+            walk.done.insert(v.clone(), walk.level);
+            walk.owned[walk.level].push(v.clone());
+            if cyclic {
+                into.vars.insert(v);
+            }
+        }
     }
 
     /// What presence `p` resolves to, if a variable, into `into`.
@@ -926,8 +1009,12 @@ impl Subst {
     }
 
     fn reach_presence(&self, p: &Presence, into: &mut Reach) {
+        // (A chain of presence bindings that cycles ends at a bound one,
+        // which isn't free.)
         if let Presence::Var(v) = self.resolve_presence(p) {
-            into.pvars.insert(v);
+            if !self.presences.contains_key(&v) {
+                into.pvars.insert(v);
+            }
         }
     }
 
@@ -949,14 +1036,7 @@ impl Subst {
                             self.reach_type(a, into, walk);
                         }
                     }
-                    // A tail bound to anything but a row or a variable
-                    // stays as it is in `flatten`'s output.
-                    RowTail::Open(var) => match self.get(var) {
-                        Some(Type::Row(_) | Type::Var(_)) | None => self.reach_var(var, into, walk),
-                        Some(_) => {
-                            into.vars.insert(var.clone());
-                        }
-                    },
+                    RowTail::Open(var) => self.reach_var(var, into, walk),
                 }
             }
             Type::Func {
@@ -988,9 +1068,15 @@ impl Subst {
                 }
             }
             // `flatten` leaves a module as it is.
+            // A module's exports' free variables, through the substitution
+            // as any other.
             Type::Module(_) => {
-                into.vars.extend(ty.free_vars());
-                into.pvars.extend(ty.free_pvars());
+                for v in ty.free_vars() {
+                    self.reach_var(&v, into, walk);
+                }
+                for p in ty.free_pvars() {
+                    self.reach_presence(&Presence::Var(p), into);
+                }
             }
             _ => {}
         }
@@ -1648,5 +1734,92 @@ mod flatten_budget_tests {
             let flat = subst.flatten_bounded(&Type::Var(TVarName::Flex(0)), 4_000);
             assert!(nodes(&flat) < 20_000, "{}", nodes(&flat));
         }
+    }
+}
+
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+    use crate::types::TVarId;
+    use std::collections::BTreeMap;
+
+    fn row(fields: &[(&str, Type)], tail: Option<TVarName>) -> Type {
+        let props: BTreeMap<PropName, Type> = fields
+            .iter()
+            .map(|(k, t)| (PropName(k.to_string()), t.clone()))
+            .collect();
+        Type::Row(match tail {
+            Some(v) => RowType::open(props, v),
+            None => RowType::closed(props),
+        })
+    }
+
+    fn vars(r: &Reach) -> Vec<TVarId> {
+        let mut v: Vec<TVarId> = r.vars.iter().map(|v| v.id()).collect();
+        v.sort();
+        v
+    }
+
+    /// A cycle of bindings (`a = {f: b}`, `b = {g: a, h: c}`, as type
+    /// variables 1, 2 and 3): what it reaches is its free variable and
+    /// all of its bound ones, wherever a walk enters it, and whatever walks
+    /// shared the walk before. (One walk alone cuts it at the variable it
+    /// entered by.)
+    #[test]
+    fn a_cycle_reaches_the_same_from_any_entry() {
+        let mut s = Subst::with_trail();
+        s.insert(TVarName::Flex(1), row(&[("f", Type::flex(2))], None));
+        s.insert(
+            TVarName::Flex(2),
+            row(&[("g", Type::flex(1)), ("h", Type::flex(3))], None),
+        );
+        for entry in [1, 2] {
+            let mut r = Reach::default();
+            s.reach(&Type::flex(entry), &mut r);
+            assert_eq!(vars(&r), vec![1, 2, 3], "entered at {entry}");
+        }
+        for order in [[1, 2], [2, 1]] {
+            let mut walk = ReachWalk::default();
+            let mut all = Reach::default();
+            for entry in order {
+                let mut r = Reach::default();
+                s.reach_in(&Type::flex(entry), &mut r, &mut walk);
+                all.extend_from(&r);
+            }
+            assert_eq!(vars(&all), vec![1, 2, 3], "order {order:?}");
+        }
+        // A variable on a path into the cycle, not on it, isn't listed.
+        s.insert(TVarName::Flex(4), row(&[("p", Type::flex(1))], None));
+        let mut r = Reach::default();
+        s.reach(&Type::flex(4), &mut r);
+        assert_eq!(vars(&r), vec![1, 2, 3]);
+    }
+
+    /// A variable bound to a type holding itself is a cycle of one.
+    #[test]
+    fn a_variable_bound_to_a_type_holding_itself_is_listed() {
+        let mut s = Subst::with_trail();
+        s.insert(
+            TVarName::Flex(1),
+            row(&[("f", Type::flex(1))], Some(TVarName::Flex(2))),
+        );
+        let mut r = Reach::default();
+        s.reach(&Type::flex(1), &mut r);
+        assert_eq!(vars(&r), vec![1, 2]);
+    }
+
+    /// A row tail bound to a type that isn't a row: what that type
+    /// reaches is reached, not the tail itself.
+    #[test]
+    fn a_tail_bound_to_another_type_is_gone_through() {
+        let mut s = Subst::with_trail();
+        s.insert(
+            TVarName::Flex(1),
+            Type::func(Type::Undefined, vec![Type::flex(2)], Type::Number),
+        );
+        let ty = row(&[("x", Type::Number)], Some(TVarName::Flex(1)));
+        let mut r = Reach::default();
+        s.reach(&ty, &mut r);
+        assert_eq!(vars(&r), vec![2]);
     }
 }
