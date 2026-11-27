@@ -1861,6 +1861,24 @@ impl InferState {
             }
         }
 
+        // S-FewerParams: a function taking fewer parameters than its slot
+        // passes fits it, as a function literal checked against the slot
+        // does: JavaScript drops the extra arguments. It fits the slot cut
+        // down to its parameters (each still taking what the slot passes
+        // there, its result still the slot's). Not the other way: a
+        // function needing more arguments than the slot passes would get
+        // `undefined` for them.
+        if let (Some(n), Some(m)) = (callable_arity(&sub), callable_arity(&sup)) {
+            if n < m {
+                let cut = with_callable_arity(&sup, n);
+                let snap = self.snapshot_inference();
+                if self.quietly(|s| s.subsume(span, &sub, &cut)).is_ok() {
+                    return Ok(());
+                }
+                self.restore_snapshot(snap);
+            }
+        }
+
         // S-Unroll: an equi-recursive type (a recursive alias) is its
         // unrolling, so subsume against that — one side at a time, so
         // two recursive types never unroll each other forever (those
@@ -4029,6 +4047,46 @@ fn callable_this(ty: &Type) -> Option<Type> {
             ))
             .and_then(|e| callable_this(&e.ty)),
         _ => None,
+    }
+}
+
+/// How many parameters a function type (or a callable record's call
+/// signature) lists.
+fn callable_arity(ty: &Type) -> Option<usize> {
+    match ty {
+        Type::Func { params, .. } => Some(params.len()),
+        Type::Row(row) => row
+            .props
+            .get(&crate::types::PropName(
+                crate::types::CALLABLE_KEY.to_string(),
+            ))
+            .and_then(|e| callable_arity(&e.ty)),
+        _ => None,
+    }
+}
+
+/// A function type (or a callable record) with only its first `n`
+/// parameters.
+fn with_callable_arity(ty: &Type, n: usize) -> Type {
+    match ty {
+        Type::Func {
+            this_type,
+            params,
+            ret,
+        } => Type::Func {
+            this_type: this_type.clone(),
+            params: params[..n.min(params.len())].to_vec(),
+            ret: ret.clone(),
+        },
+        Type::Row(row) => {
+            let mut row = row.clone();
+            let key = crate::types::PropName(crate::types::CALLABLE_KEY.to_string());
+            if let Some(e) = row.props.get_mut(&key) {
+                e.ty = with_callable_arity(&e.ty, n);
+            }
+            Type::Row(row)
+        }
+        _ => ty.clone(),
     }
 }
 

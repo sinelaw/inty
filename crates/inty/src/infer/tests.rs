@@ -6837,3 +6837,34 @@ fn a_record_of_reads_can_be_iterated() {
         assert!(check_program(&src, &[]).is_err(), "{bad} is accepted");
     }
 }
+
+/// A function value taking fewer parameters than its slot passes fits the
+/// slot, as a function literal does: JavaScript drops the extra arguments.
+/// Its parameters must still take what the slot passes, its result be the
+/// slot's, and it may not need more arguments than the slot passes.
+#[test]
+fn a_function_value_with_fewer_parameters_fits_its_slot() {
+    let head = "/** function lp<T>(items: T[], render: (T, Number) => String) => Undefined */\n\
+                function lp(items, render) { items.forEach((x, i) => { render(x, i); }); }\n\
+                /** function ln(items: Number[], render: (Number, Number) => String) => Undefined */\n\
+                function ln(items, render) { items.forEach((x, i) => { render(x, i); }); }\n";
+    for ok in [
+        "const card = (w) => `${w}`; lp([1], card);",
+        "function card(w) { return `${w}`; } ln([1], card);",
+        "/** function card(w: Number) => String */ function card(w) { return `${w}`; } ln([1], card);",
+        "const f = () => \"x\"; ln([1], f);",
+    ] {
+        let src = format!("{head}{ok}");
+        assert!(check_program(&src, &[]).is_ok(), "{ok}: {:?}", check_program(&src, &[]));
+    }
+    for bad in [
+        "const f = (a, b, c) => `${a + b + c}`; ln([1], f);",
+        "const f = (s) => s.toUpperCase(); ln([1], f);",
+        "const f = (w) => w; ln([1], f);",
+        "/** function f(w: String) => String */ function f(w) { return w; } ln([1], f);",
+        "/** function f(w: Number, v?: String) => String */ function f(w, v) { return `${w}`; } ln([1], f);",
+    ] {
+        let src = format!("{head}{bad}");
+        assert!(check_program(&src, &[]).is_err(), "{bad} is accepted");
+    }
+}

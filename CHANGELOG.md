@@ -251,6 +251,14 @@ unterminated-comment error.
   given to `{ ...ui.BUTTON, onClick: () => { … } }` may take fewer
   parameters than its slot passes. It was inferred on its own and then
   compared, so `(s) => …` didn't fit `(String, Number) => Undefined`.
+- A function value taking fewer parameters than its slot passes fits it
+  (`ui.listProps("cards", ws, card)` with `const card = (w) => …`), as a
+  function literal written in the call does: JavaScript drops the extra
+  arguments. Only a literal was accepted; a named function, or one bound
+  to a `const`, was "expected '(T, Number) => R', found '(T) => R'". Its
+  parameters must still take what the slot passes and its result be the
+  slot's; one needing more arguments than the slot passes is still
+  rejected.
 - Two recursive aliases being compared are assumed equal, while compared,
   as the instances they are, arguments included. Keyed by their ids alone,
   `P<Number>` agreeing with `Q<Number>` let `P<String>` agree with
