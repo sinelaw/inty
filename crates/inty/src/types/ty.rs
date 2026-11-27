@@ -627,13 +627,93 @@ pub enum RowTail {
     Recursive(TypeId, Vec<Type>),
 }
 
+/// A row's fields: a map shared between copies of the row until one is
+/// changed (copy on write). Rows are copied far more often than changed
+/// (each binding read out of the substitution, each unification's rows),
+/// and a record with many fields (an object's methods) was copied whole
+/// each time.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Props(std::sync::Arc<BTreeMap<PropName, FieldEntry>>);
+
+impl Props {
+    pub fn new() -> Self {
+        Props::default()
+    }
+
+    /// The map, shared.
+    pub fn into_map(self) -> std::sync::Arc<BTreeMap<PropName, FieldEntry>> {
+        self.0
+    }
+}
+
+impl std::ops::Deref for Props {
+    type Target = BTreeMap<PropName, FieldEntry>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Props {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+
+impl std::fmt::Debug for Props {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<BTreeMap<PropName, FieldEntry>> for Props {
+    fn from(map: BTreeMap<PropName, FieldEntry>) -> Self {
+        Props(std::sync::Arc::new(map))
+    }
+}
+
+impl FromIterator<(PropName, FieldEntry)> for Props {
+    fn from_iter<I: IntoIterator<Item = (PropName, FieldEntry)>>(iter: I) -> Self {
+        Props(std::sync::Arc::new(iter.into_iter().collect()))
+    }
+}
+
+impl IntoIterator for Props {
+    type Item = (PropName, FieldEntry);
+    type IntoIter = std::collections::btree_map::IntoIter<PropName, FieldEntry>;
+    fn into_iter(self) -> Self::IntoIter {
+        std::sync::Arc::unwrap_or_clone(self.0).into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Props {
+    type Item = (&'a PropName, &'a FieldEntry);
+    type IntoIter = std::collections::btree_map::Iter<'a, PropName, FieldEntry>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut Props {
+    type Item = (&'a PropName, &'a mut FieldEntry);
+    type IntoIter = std::collections::btree_map::IterMut<'a, PropName, FieldEntry>;
+    fn into_iter(self) -> Self::IntoIter {
+        std::sync::Arc::make_mut(&mut self.0).iter_mut()
+    }
+}
+
+impl Extend<(PropName, FieldEntry)> for Props {
+    fn extend<I: IntoIterator<Item = (PropName, FieldEntry)>>(&mut self, iter: I) {
+        std::sync::Arc::make_mut(&mut self.0).extend(iter)
+    }
+}
+
 /// Row type for structural typing of objects.
 /// Represents a set of properties (each with presence + type) and a
 /// tail that controls extensibility.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RowType {
     /// Field name -> (presence, type). See `FieldEntry`.
-    pub props: BTreeMap<PropName, FieldEntry>,
+    pub props: Props,
     /// Row tail for open/closed/recursive rows.
     pub tail: RowTail,
 }
@@ -652,9 +732,9 @@ impl RowType {
     }
 
     /// Create a closed row from a fully-specified entry map.
-    pub fn closed_entries(props: BTreeMap<PropName, FieldEntry>) -> Self {
+    pub fn closed_entries(props: impl Into<Props>) -> Self {
         RowType {
-            props,
+            props: props.into(),
             tail: RowTail::Closed,
         }
     }
@@ -672,9 +752,9 @@ impl RowType {
     }
 
     /// Create an open row from a fully-specified entry map.
-    pub fn open_entries(props: BTreeMap<PropName, FieldEntry>, var: TVarName) -> Self {
+    pub fn open_entries(props: impl Into<Props>, var: TVarName) -> Self {
         RowType {
-            props,
+            props: props.into(),
             tail: RowTail::Open(var),
         }
     }
@@ -682,7 +762,7 @@ impl RowType {
     /// Create an empty open row.
     pub fn empty_open(var: TVarName) -> Self {
         RowType {
-            props: BTreeMap::new(),
+            props: Props::new(),
             tail: RowTail::Open(var),
         }
     }
@@ -690,7 +770,7 @@ impl RowType {
     /// Create an empty closed row.
     pub fn empty_closed() -> Self {
         RowType {
-            props: BTreeMap::new(),
+            props: Props::new(),
             tail: RowTail::Closed,
         }
     }

@@ -14,7 +14,7 @@ pub use subst::{Subst, Substitutable};
 pub use tidy::TidyEnv;
 pub use ty::{
     is_safe_int, ClassName, FieldEntry, FuncParam, LitValue, ModuleType, Nothing, PVarId, PVarName,
-    Presence, PropName, QualType, RowTail, RowType, TVarId, TVarName, Type, TypeDef, TypeId,
+    Presence, PropName, Props, QualType, RowTail, RowType, TVarId, TVarName, Type, TypeDef, TypeId,
     TypePred, TypeScheme, TypedArrayKind,
 };
 pub use type_ast::TypeAst;

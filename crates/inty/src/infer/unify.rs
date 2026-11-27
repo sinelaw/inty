@@ -2408,7 +2408,7 @@ mod tests {
                 crate::types::PropName("a".to_string()),
                 crate::types::FieldEntry::pre(field_a.clone()),
             ))
-            .collect(),
+            .collect::<crate::types::Props>(),
             tail1,
         ));
         let r2 = Type::Row(crate::types::RowType::open_entries(
@@ -2416,7 +2416,7 @@ mod tests {
                 crate::types::PropName("a".to_string()),
                 crate::types::FieldEntry::pre(Type::Number),
             ))
-            .collect(),
+            .collect::<crate::types::Props>(),
             tail2,
         ));
 

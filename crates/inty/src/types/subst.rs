@@ -722,7 +722,10 @@ impl Subst {
             },
         };
 
-        RowType { props, tail }
+        RowType {
+            props: props.into(),
+            tail,
+        }
     }
 }
 
@@ -1182,7 +1185,10 @@ impl Substitutable for RowType {
             }
         };
 
-        RowType { props, tail }
+        RowType {
+            props: props.into(),
+            tail,
+        }
     }
 
     fn free_vars(&self) -> HashSet<TVarName> {

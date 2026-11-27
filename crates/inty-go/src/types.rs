@@ -424,7 +424,10 @@ fn resolve_depth(state: &mut InferState, ty: &Type, depth: usize) -> Type {
                 let args = args.iter().map(|a| resolve_depth(state, a, d)).collect();
                 tail = RowTail::Recursive(*id, args);
             }
-            Type::Row(RowType { props, tail })
+            Type::Row(RowType {
+                props: props.into(),
+                tail,
+            })
         }
         Type::Func {
             this_type,
@@ -507,7 +510,10 @@ pub fn apply_mapping(ty: &Type, m: &Mapping) -> Type {
                     _ => break,
                 }
             }
-            Type::Row(RowType { props, tail })
+            Type::Row(RowType {
+                props: props.into(),
+                tail,
+            })
         }
         Type::Func {
             this_type,
