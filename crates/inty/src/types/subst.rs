@@ -140,8 +140,9 @@ pub enum SubstWrite<'a> {
     Bound(&'a TVarName),
     /// A bound variable's binding replaced, or removed.
     Rebound(&'a TVarName),
-    /// A binding replaced by the end of its chain (path compression):
-    /// what it reaches is the same.
+    /// A binding replaced by the end of its chain (path compression), or
+    /// by a link to a variable whose type is equal (`link_equal`): the free
+    /// variables it reaches are the same.
     Compressed,
     /// A presence variable that was free bound.
     PresenceBound(&'a PVarName),
@@ -418,6 +419,35 @@ impl Subst {
     /// Check if a presence variable is in the domain.
     pub fn contains_presence(&self, pvar: &PVarName) -> bool {
         self.presences.contains_key(pvar)
+    }
+
+    /// Replace a bound variable's binding by a link to another variable
+    /// whose type unifying has just shown equal to it (`link_bound`):
+    /// the free variables it reaches are the same, as for path
+    /// compression, so it is written as one (see
+    /// [`SubstWrite::Compressed`]).
+    pub fn link_equal(&mut self, var: TVarName, ty: Type) {
+        self.version += 1;
+        let ty = Arc::new(ty);
+        if self.trail.is_some() {
+            let by = &mut self.mentioned_by;
+            ty.any_var(&mut |u| {
+                let list = by.entry(u.clone()).or_default();
+                if list.last() != Some(&var) {
+                    list.push(var.clone());
+                }
+                false
+            });
+        }
+        let prev = self.map.insert(var.clone(), ty);
+        if let Some(trail) = self.trail.as_mut() {
+            trail.push(match prev {
+                Some(prev) => SubstUndo::Compressed(var, prev),
+                None => SubstUndo::Type(var, None),
+            });
+            self.serials.push(self.next_serial);
+            self.next_serial += 1;
+        }
     }
 
     /// Insert a type mapping into the substitution.

@@ -241,7 +241,7 @@ impl InferState {
         }
         self.var_table.link_to_root(ra, rb);
         self.main_subst
-            .insert(TVarName::Flex(ra), Type::Var(TVarName::Flex(rb)));
+            .link_equal(TVarName::Flex(ra), Type::Var(TVarName::Flex(rb)));
     }
 
     /// Whether the type `from` is bound to mentions the variable `to`,

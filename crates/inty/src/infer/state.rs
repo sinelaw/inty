@@ -2812,7 +2812,6 @@ impl InferState {
                 this,
                 receiver,
                 span,
-                unknown_is_method,
             } = pending.clone();
             let result = match self.zonk_head(&this) {
                 Type::Var(TVarName::Flex(id))
@@ -2831,20 +2830,11 @@ impl InferState {
                     self.unify_this(span, &this, &receiver)
                 }
                 Type::Var(v) if v.is_flex() => {
-                    // (A call on a value an importer decides waits for the
-                    // importers: at the end of an imported module, the one
-                    // that decides it may still be to come.)
-                    if reached.is_some_and(|r| !r.contains(&v))
-                        || (unknown_is_method && reached.is_none() && self.module_depth > 0)
-                    {
+                    if reached.is_some_and(|r| !r.contains(&v)) {
                         keep.push(pending);
                         continue;
                     }
-                    if unknown_is_method {
-                        self.unify_this(span, &this, &receiver)
-                    } else {
-                        self.unify(span, &Type::Var(v), &Type::ArrowThis)
-                    }
+                    self.unify(span, &Type::Var(v), &Type::ArrowThis)
                 }
                 _ => self.unify_this(span, &this, &receiver),
             };
@@ -3282,18 +3272,37 @@ impl InferState {
             if let Some(writes) = self.main_subst.writes_since(c.stamp) {
                 let mut bound: Vec<TVarName> = Vec::new();
                 let mut pbound: Vec<crate::types::PVarName> = Vec::new();
+                let mut rebound: Vec<TVarName> = Vec::new();
                 let mut afresh = false;
                 for w in writes {
                     match w {
                         SubstWrite::Compressed => {}
                         SubstWrite::Bound(v) => bound.push(v.clone()),
                         SubstWrite::PresenceBound(p) => pbound.push(p.clone()),
-                        SubstWrite::Rebound(_) | SubstWrite::PresenceRebound(_) => {
+                        // A binding replaced (`rebind_var`): only the reaches
+                        // that went through it are found again.
+                        SubstWrite::Rebound(v) => rebound.push(v.clone()),
+                        SubstWrite::PresenceRebound(_) => {
                             afresh = true;
                             break;
                         }
                     }
                 }
+                // The constraints whose types may reach a replaced binding
+                // (`Subst::may_reach`: no constraint it says can't reach
+                // one ever could, as its index keeps what was undone).
+                let types_of: HashMap<u64, &[Type]> = self
+                    .pending_constraints
+                    .iter()
+                    .map(|c| (c.id, c.pred.types.as_slice()))
+                    .collect();
+                let through_rebound = |id: &u64| {
+                    !rebound.is_empty()
+                        && types_of.get(id).is_none_or(|ts| {
+                            ts.iter()
+                                .any(|t| rebound.iter().any(|x| self.main_subst.may_reach(x, t)))
+                        })
+                };
                 if !afresh {
                     let mut of_var: HashMap<TVarName, Reach> = HashMap::new();
                     let mut of_pvar: HashMap<crate::types::PVarName, Reach> = HashMap::new();
@@ -3333,6 +3342,9 @@ impl InferState {
                         }
                     };
                     for (id, mut rs) in c.ids.into_iter().zip(reaches) {
+                        if through_rebound(&id) {
+                            continue;
+                        }
                         let touched = rs.iter().any(|r| !hit(r).is_empty() || !phit(r).is_empty());
                         if touched {
                             for r in Arc::make_mut(&mut rs) {
@@ -3404,12 +3416,25 @@ impl InferState {
         reaches: &[std::sync::Arc<Vec<crate::types::subst::Reach>>],
     ) {
         assert_eq!(reaches.len(), self.pending_constraints.len());
+        // (The free variables: a binding replaced by a link to an equal
+        // type reaches the same ones, though not always through the same
+        // named types or bound variables.)
+        let free =
+            |vs: &std::collections::HashSet<TVarName>| -> std::collections::HashSet<TVarName> {
+                vs.iter()
+                    .filter(|v| !self.main_subst.contains(v))
+                    .cloned()
+                    .collect()
+            };
+        let pfree = |ps: &std::collections::HashSet<crate::types::PVarName>| -> std::collections::HashSet<crate::types::PVarName> {
+            ps.iter().filter(|p| !self.main_subst.contains_presence(p)).cloned().collect()
+        };
         for (c, rs) in self.pending_constraints.iter().zip(reaches) {
             for (t, r) in c.pred.types.iter().zip(rs.iter()) {
                 let mut fresh = crate::types::subst::Reach::default();
                 self.main_subst.reach(t, &mut fresh);
                 assert!(
-                    fresh.vars == r.vars && fresh.pvars == r.pvars && fresh.named == r.named,
+                    free(&fresh.vars) == free(&r.vars) && pfree(&fresh.pvars) == pfree(&r.pvars),
                     "a kept reach of {:?} differs from a walk's: {:?} vs {:?}",
                     c.pred,
                     r,
@@ -3542,15 +3567,29 @@ impl InferState {
                 for l in &mut cache.layers {
                     l.reach.vars.remove(&v);
                 }
-                // On a walk of its own: its binding may close a cycle through
-                // bindings the layers went through (listed then, as a
-                // fresh walk lists them).
+                // A binding that may close a cycle (one that may reach the
+                // variable it binds, `Subst::may_reach`) is gone through on a
+                // walk of its own: the cycle may run through bindings the
+                // layers went through, which their walk skips (and a fresh
+                // walk lists). Any other is gone through as part of theirs.
                 cache.walk.set_level(i);
-                self.main_subst.reach_afresh_in(
-                    &Type::Var(v),
-                    &mut cache.layers[i].reach,
-                    &mut cache.walk,
-                );
+                let closes_cycle = self
+                    .main_subst
+                    .get(&v)
+                    .is_some_and(|b| self.main_subst.may_reach(&v, b));
+                if closes_cycle {
+                    self.main_subst.reach_afresh_in(
+                        &Type::Var(v),
+                        &mut cache.layers[i].reach,
+                        &mut cache.walk,
+                    );
+                } else {
+                    self.main_subst.reach_in(
+                        &Type::Var(v),
+                        &mut cache.layers[i].reach,
+                        &mut cache.walk,
+                    );
+                }
             }
             for (i, p) in pbound {
                 self.main_subst
@@ -4519,13 +4558,12 @@ mod tests {
 
 /// A method call whose callee's `this` wasn't known at the call (see
 /// `InferState::settle_receivers`): its `this`, the receiver, and where.
-/// One still unknown when settled is, unless `unknown_is_method`, a
-/// function that uses no `this`; if it is, a method of the receiver (a
-/// call on a value an importer decided, whose callee was read off it).
+/// One still unknown when settled is a function that uses no `this`. (A
+/// call on a value an importer decides waits as a `HasProp`, resolved
+/// against the importer's value.)
 #[derive(Debug, Clone)]
 pub(crate) struct PendingReceiver {
     pub(crate) this: Type,
     pub(crate) receiver: Type,
     pub(crate) span: Span,
-    pub(crate) unknown_is_method: bool,
 }

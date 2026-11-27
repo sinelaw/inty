@@ -6901,3 +6901,28 @@ fn a_spread_fixes_the_slots_of_the_fields_after_it() {
         assert!(check_program(&src, &[]).is_err(), "{bad} is accepted");
     }
 }
+
+/// A method call a generic function makes on its parameter is resolved
+/// when the argument is known, and checked as a direct method call is: a
+/// method of another object, reading its `this` (`new K().say` detached),
+/// doesn't fit a receiver without what it reads. Only the arguments and
+/// the result were related, and the call ran with the wrong `this`.
+#[test]
+fn a_deferred_method_call_checks_the_methods_this() {
+    let class = "class K { constructor() { this.n = 1; } say(t) { return this.n + t.length; } }\n";
+    let through_generic =
+        format!("{class}function hello(ed) {{ return ed.say(\"hi\"); }}\nconst x = hello({{ say: new K().say }});");
+    let direct = format!("{class}const ed = {{ say: new K().say }};\nconst x = ed.say(\"hi\");");
+    for src in [through_generic, direct] {
+        assert!(check_program(&src, &["x"]).is_err(), "accepted:\n{src}");
+    }
+    // A function that uses no `this`, or a method of the receiver itself,
+    // still fits.
+    let ok = "function hello(ed) { return ed.say(\"hi\"); }\n\
+              const a = hello({ say: (t) => t.length });\n\
+              const b = hello({ n: 1, say(t) { return this.n + t.length; } });";
+    assert_eq!(
+        check_program(ok, &["a", "b"]),
+        Ok(vec!["Number".into(), "Number".into()])
+    );
+}

@@ -966,7 +966,7 @@ impl InferState {
                         Some(key) => {
                             if !seen.contains(&key) {
                                 seen.push(key);
-                                self.default_has_prop(&c, false)?;
+                                self.default_has_prop(&c)?;
                             }
                             defaulted = true;
                         }
@@ -1072,11 +1072,7 @@ impl InferState {
     /// on any receiver as well as detached, so the callee's `this` waits
     /// as an unknown callee's does (`settle_receivers`, at the end of the
     /// importer) rather than making it a method of the receiver now.
-    fn default_has_prop(
-        &mut self,
-        c: &crate::infer::PendingConstraint,
-        kept: bool,
-    ) -> Result<(), IntyError> {
+    fn default_has_prop(&mut self, c: &crate::infer::PendingConstraint) -> Result<(), IntyError> {
         let (recv, name, result) = c
             .pred
             .as_has_prop()
@@ -1086,22 +1082,52 @@ impl InferState {
         let row = Type::object_open([(name, result.clone())], tail);
         self.unify(c.span, recv, &row)?;
         if let Some(this) = c.pred.method_this() {
-            match self.zonk_head(this) {
-                Type::Var(v) if kept && v.is_flex() => {
-                    // Settled as a method of the receiver, as without an
-                    // importer, unless what the importer gives first is a
-                    // function that uses no `this`.
-                    self.pending_receivers.push(crate::infer::PendingReceiver {
-                        this: Type::Var(v),
-                        receiver: recv.clone(),
-                        span: c.span,
-                        unknown_is_method: true,
-                    });
-                }
-                _ => self.unify_this(c.span, this, recv)?,
-            }
+            self.unify_this(c.span, this, recv)?;
         }
         Ok(())
+    }
+
+    /// A read's type not fitting the field it reads, said as a mismatch
+    /// at that member of the receiver (the record the read asks for, and
+    /// the receiver), with where each side came from: a read resolved
+    /// late (the receiver an importer's value) is reported as a direct
+    /// one is.
+    fn as_member_mismatch(
+        &mut self,
+        e: &mut IntyError,
+        name: &str,
+        result: &Type,
+        receiver: &Type,
+    ) {
+        use crate::error::ShownType;
+        let tail = self.fresh_flex();
+        self.note_field_read(&tail, name, result);
+        let asked = Type::object_open([(name, result.clone())], tail);
+        // Where the receiver's field came from (an object literal's, kept
+        // on the field's type as it was written).
+        let field_origin = match self.zonk_head(receiver) {
+            Type::Row(row) => row
+                .props
+                .get(&crate::types::PropName(name.to_string()))
+                .and_then(|f| self.get_origin(&f.ty).cloned()),
+            _ => None,
+        };
+        if let Some(TypeError::UnificationError {
+            member,
+            whole,
+            found_origin,
+            ..
+        }) = e.as_type_mut()
+        {
+            if member.is_none() {
+                *member = Some(name.to_string());
+                *whole = Some(Box::new((ShownType::ty(&asked), ShownType::ty(receiver))));
+                if found_origin.is_none() {
+                    *found_origin = field_origin;
+                }
+                self.settle_error(e);
+            }
+        }
     }
 
     /// A constraint that must wait for its first type (an `Indexable`'s
@@ -1208,8 +1234,21 @@ impl InferState {
                 self.apply_deferred_call(span, result, &found)?;
                 let receiver = self.method_receiver(&receiver);
                 self.unify_this(span, this, &receiver)?;
+                // The method's own `this` is the receiver too, as in a
+                // direct call (`apply_deferred_call` relates the
+                // arguments and the result): a method of another object,
+                // reading its `this` (`new K().say`), doesn't fit.
+                let callee = self.zonk_head(&found);
+                if let Some((Some(callee_this), _, _)) = crate::infer::extract_callable(&callee) {
+                    self.unify_this(span, &callee_this, &receiver)?;
+                }
             }
-            None => self.unify(span, result, &found)?,
+            None => {
+                if let Err(mut e) = self.unify(span, result, &found) {
+                    self.as_member_mismatch(&mut e, name, result, &receiver);
+                    return Err(e);
+                }
+            }
         }
         // A deferred `p.then(cb)`: the call was checked already.
         self.settle_promise_results(promise_mark, span)?;

@@ -217,6 +217,26 @@ unterminated-comment error.
 
 ### Fixes
 
+- A module's reads of a field of a value an importing module gives
+  (`y.k` in a method an importer calls) wait for the importer's value,
+  each resolved against its type. The first read of each name became the
+  field of a record and the others were dropped: what they asked of the
+  value was lost (with `const r = y.k; y.k.toUpperCase();`, an importer's
+  `{k: 1}` was accepted, and rejected with the two reads the other way
+  round), and an array or a string given didn't fit the record (an
+  array's `map` read twice, at two types). Fresh's web client: 22 errors
+  to 11.
+- A method call a generic function makes on its parameter (`ed.say(…)`)
+  checks the method's own `this` against the receiver when the argument
+  is known, as a direct call does: a method of another object, read off
+  it (`new K().say`), was accepted, and ran with the wrong `this`.
+- Generalising no longer depends on the order the checker meets things
+  in: what a type reaches through a cycle of bindings is the same
+  wherever a walk enters it, and a recursive type's body found to have no
+  free variable during a speculative attempt is looked at again once the
+  attempt is undone (a variable it held could be generalised). A
+  type annotation's variables escaping into the context are found through
+  any binding, not only the one of a variable's own.
 - Binding a variable no longer walks everything the type it is bound to
   reaches (the occurs check, and the check for a recursive type) when the
   type can't reach the variable, which is what an index of the bindings

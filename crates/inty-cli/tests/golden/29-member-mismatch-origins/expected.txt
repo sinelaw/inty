@@ -1,22 +1,12 @@
 
 Error: Type mismatch in member `count`: expected 'Number', found 'String'
-   ╭─[ main.js:6:30 ]
-   │
- 6 │ export const c = new Counter(source);
-   │                              ───┬──  
-   │                                 ╰──── Type mismatch in member `count`: expected 'Number', found 'String'
-   │
-   ├─[ panel.js:5:20 ]
+   ╭─[ panel.js:5:20 ]
    │
  5 │   total() { return source.count * 2; }
    │                    ──────┬─────  
+   │                          ╰─────── Type mismatch in member `count`: expected 'Number', found 'String'
+   │                          │       
    │                          ╰─────── Expected type: from property access '.count'
-   │
-   ├─[ main.js:6:30 ]
-   │
- 5 │ const source = { count: "three" };
-   │                  ───────┬──────  
-   │                         ╰──────── Found type: from field 'count' of the object literal
    │ 
    │ Note: `count` is a member of the types compared: expected '{count: Number | a}', found '{count: String}'
 ───╯
