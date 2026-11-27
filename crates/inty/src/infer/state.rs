@@ -270,6 +270,9 @@ pub struct InferState {
     /// The types put in `closed_named`, in order, so a snapshot's restore
     /// takes back those found closed since (under bindings it undoes).
     closed_log: Vec<TypeId>,
+    /// The free variables of the bindings of every imported module
+    /// checked so far (see [`Self::importer_reachable_vars`]).
+    imported_roots: crate::infer::EnvFree,
     /// What the environment's variables reach through the substitution,
     /// kept from one generalisation to the next (see [`EnvReach`]).
     env_reach: EnvReach,
@@ -690,6 +693,7 @@ impl InferState {
             recording_member_receiver: false,
             closed_named: std::collections::HashSet::new(),
             closed_log: Vec::new(),
+            imported_roots: Default::default(),
             env_reach: EnvReach::default(),
             constraint_reaches: Default::default(),
             decl_types: HashMap::new(),
@@ -1408,7 +1412,8 @@ impl InferState {
         self.pending_constraints.truncate(snap.constraints);
         self.var_table.restore(snap.trail);
         // A body found closed under bindings now undone may not be.
-        for id in self.closed_log.drain(snap.closed..) {
+        let from = snap.closed.min(self.closed_log.len());
+        for id in self.closed_log.drain(from..) {
             self.closed_named.remove(&id);
         }
         // A pair unified in what was undone isn't unified any more.
@@ -3232,6 +3237,24 @@ impl InferState {
         env: &crate::infer::TypeEnv,
     ) -> std::collections::HashSet<TVarName> {
         self.env_fixed_vars(&env.free(), &Type::Undefined).0
+    }
+
+    /// The type variables an importer may still decide at the end of a
+    /// module imported with `env`: what `env`'s bindings reach, and what
+    /// those of each module imported before do (a later importer may
+    /// import that one, and decide what its bindings reach, whatever the
+    /// module ending now imported of it). `env` is then counted among
+    /// those modules'.
+    pub fn importer_reachable_vars(
+        &mut self,
+        env: &crate::infer::TypeEnv,
+    ) -> std::collections::HashSet<TVarName> {
+        let free = env.free();
+        self.imported_roots.vars.extend(free.vars);
+        self.imported_roots.pvars.extend(free.pvars);
+        self.imported_roots.named.extend(free.named);
+        let roots = self.imported_roots.clone();
+        self.env_fixed_vars(&roots, &Type::Undefined).0
     }
 
     /// What each pending constraint's types reach through the

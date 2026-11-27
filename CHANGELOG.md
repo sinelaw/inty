@@ -224,8 +224,13 @@ unterminated-comment error.
   value was lost (with `const r = y.k; y.k.toUpperCase();`, an importer's
   `{k: 1}` was accepted, and rejected with the two reads the other way
   round), and an array or a string given didn't fit the record (an
-  array's `map` read twice, at two types). Fresh's web client: 22 errors
-  to 11.
+  array's `map` read twice, at two types). So do the module's other
+  requirements on such a value (an `Iterable`, an index, a store, a
+  test), which were dropped at its end, and a module imported in between
+  (one that imports none of what reaches the value) no longer decides
+  them first. A read decided at a module's end leaves the field's kind
+  open, as a read does: a getter or a class's method given for it fits.
+  Fresh's web client: 22 errors to 11.
 - A method call a generic function makes on its parameter (`ed.say(…)`)
   checks the method's own `this` against the receiver when the argument
   is known, as a direct call does: a method of another object, read off

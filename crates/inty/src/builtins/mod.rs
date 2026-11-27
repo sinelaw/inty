@@ -974,27 +974,23 @@ impl InferState {
                     }
                 }
                 if !defaulted {
-                    // Whatever is left has a container nothing ever pinned
-                    // down: no use of it depends on the element type.
+                    // Whatever is left on a variable nothing will decide has
+                    // a container nothing ever pinned down: no use of it
+                    // depends on the element type, and no value has a type
+                    // nothing fixes (so no run reaches a `Spread` on it, as
+                    // the Lean model leaves its `Merge`s): it is dropped.
+                    // One on a variable an importing module still sees,
+                    // whatever its class, waits for its uses there (an
+                    // `Inject`: `put(true)` deciding what a cell's sum
+                    // holds; an `Iterable` or `Indexable`: what the
+                    // importer's array holds, iterated): dropped, the
+                    // importer's value was never checked against it.
                     self.pending_constraints = rest;
-                    // An `Inject` or a `Strip` on a variable an importing
-                    // module still sees waits for its uses there (`put(true)`
-                    // deciding what a cell's sum holds); dropped, they would
-                    // let a value of no case through. (So does a `Spread`;
-                    // one on a variable nothing will decide is dropped, as
-                    // the Lean model leaves its `Merge`s: no value has a
-                    // type nothing fixes, so no run reaches the spread.)
                     let pending = std::mem::take(&mut self.pending_constraints);
                     self.pending_constraints = pending
                         .into_iter()
                         .filter(|c| {
                             matches!(
-                                c.pred.class,
-                                ClassName::Inject
-                                    | ClassName::Strip
-                                    | ClassName::Spread
-                                    | ClassName::HasProp
-                            ) && matches!(
                                 c.pred.types.first().map(|t| self.zonk_head(t)),
                                 Some(Type::Var(v)) if keep.contains(&v)
                             )
@@ -1079,7 +1075,16 @@ impl InferState {
             .expect("default_has_prop: a HasProp constraint");
         let tail = self.fresh_flex();
         self.note_field_read(&tail, name, result);
-        let row = Type::object_open([(name, result.clone())], tail);
+        // A field as a read leaves it (`read_entry`): whether it takes
+        // stores, and is the object's own, are for its other uses to say.
+        // (An assignable own field, a class's method or getter given for
+        // the receiver later didn't fit: `v.setTop(0, 0)` on the elements
+        // of an array an importer fills with views.)
+        let entry = self.read_entry(result.clone());
+        let row = Type::Row(crate::types::RowType::open_entries(
+            std::collections::BTreeMap::from([(crate::types::PropName(name.to_string()), entry)]),
+            tail,
+        ));
         self.unify(c.span, recv, &row)?;
         if let Some(this) = c.pred.method_this() {
             self.unify_this(c.span, this, recv)?;
@@ -1143,6 +1148,12 @@ impl InferState {
                 | ClassName::Strip
                 | ClassName::Spread
                 | ClassName::Plus
+                // A store, or a test, on a variable waits for it too:
+                // resolved on one, it said nothing and was gone, and a
+                // value an importer gives later wasn't checked.
+                | ClassName::FieldWrite
+                | ClassName::IndexWrite
+                | ClassName::Testable
         ) && pred.types.first().is_some_and(|c| {
             // Only the head matters: follow the variable's bindings (a
             // whole substitution, applied to each pending constraint at

@@ -758,31 +758,65 @@ fn equivalent(a: &str, b: &str) -> bool {
     if a == b {
         return true;
     }
-    // Quantified or not (a binding that isn't generalised prints its free
-    // variables named in the same order), its variables are renamed: the
-    // lists `<a, b, …>` are alike once renamed, so what follows them is
-    // compared.
-    let body = |t: &str| match t.strip_prefix('<') {
-        Some(_) => t
-            .find('>')
-            .map_or(t.to_string(), |i| t[i + 1..].to_string()),
-        None => t.to_string(),
+    // Its variables are renamed, quantified or not (a binding that isn't
+    // generalised prints its free variables named in the same order); a
+    // variable quantified in one must be in the other (one generalised
+    // and one not differ), so the lists `<a, b, …>` are compared as sets
+    // once renamed, and what follows them as it is written.
+    let split = |t: &str| -> (Vec<String>, String) {
+        match t
+            .strip_prefix('<')
+            .and_then(|r| r.find('>').map(|i| (r, i)))
+        {
+            Some((r, i)) => (
+                r[..i].split(',').map(|v| v.trim().to_string()).collect(),
+                r[i + 1..].to_string(),
+            ),
+            None => (Vec::new(), t.to_string()),
+        }
     };
-    let (a, b) = (body(a), body(b));
+    let ((qa, a), (qb, b)) = (split(a), split(b));
+    if qa.len() != qb.len() {
+        return false;
+    }
     let (va, vb) = (variables(&a), variables(&b));
     if va.len() != vb.len() {
         return false;
     }
-    // Too many to try each renaming: the types with their variables left
-    // out are compared.
+    // Too many to try each renaming: the types are compared with their
+    // variables written `Q` (quantified) or `_` (not).
     if va.len() > 7 {
-        return canonical(&rename_all(&a, &va, "_")) == canonical(&rename_all(&b, &vb, "_"));
+        let shape = |t: &str, vs: &[String], q: &[String]| {
+            let to: Vec<String> = vs
+                .iter()
+                .map(|v| {
+                    if q.contains(v) {
+                        "Q".to_string()
+                    } else {
+                        "_".to_string()
+                    }
+                })
+                .collect();
+            let perm: Vec<usize> = (0..vs.len()).collect();
+            canonical(&rename(t, vs, &perm, &to))
+        };
+        return shape(&a, &va, &qa) == shape(&b, &vb, &qb);
     }
     let ca = canonical(&a);
+    let qa: BTreeSet<&String> = qa.iter().collect();
     let mut perm: Vec<usize> = (0..vb.len()).collect();
     loop {
         let renamed = rename(&b, &vb, &perm, &va);
-        if canonical(&renamed) == ca {
+        // `b`'s quantified variables, as renamed.
+        let qb_renamed: BTreeSet<&String> = qb
+            .iter()
+            .filter_map(|q| {
+                vb.iter()
+                    .position(|v| v == q)
+                    .map(|j| &va[perm.iter().position(|&p| p == j).expect("a permutation")])
+            })
+            .collect();
+        if canonical(&renamed) == ca && qb_renamed == qa {
             return true;
         }
         if !next_permutation(&mut perm) {
@@ -1036,6 +1070,13 @@ fn schemes_alike_but_for_their_variables_names_are_equivalent() {
         "<a, b, c, d, e, f> where a has {k: b}, c has {v: d, v: e, v: f} => (a, c) => Boolean",
     ));
     assert!(equivalent("{k: a, m: (b) => c}", "{k: c, m: (a) => b}"));
+    // Generalised or not differ, and so do which variables are.
+    assert!(!equivalent("<a>(a) => a", "(a) => a"));
+    assert!(!equivalent("<a, b>(a, b) => a", "<a>(a, b) => a"));
+    assert!(!equivalent(
+        "<a, b, c, d, e, f, g, h>(a, b, c, d, e, f, g, h) => a",
+        "<a, b, c, d, e, f, g>(a, b, c, d, e, f, g, h) => a",
+    ));
 }
 
 /// The generator's programs mostly check, with generic types among them:
