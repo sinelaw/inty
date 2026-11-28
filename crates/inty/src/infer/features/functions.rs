@@ -2044,10 +2044,7 @@ impl InferState {
                                 self.unify(span, &this, &Type::NewTarget)?;
                             }
                         }
-                        // Written out whole, as `generalize` sees it: a
-                        // bound row tail (a method's `this`, bound to the
-                        // instance's row) isn't a variable of the class.
-                        let ty = self.flatten_type(&ty);
+                        let ty = self.zonk(&ty);
                         let (fixed, _) = self.env_fixed_vars(&base_free, &ty);
                         self.brand_class_factory(name, &ty, &fixed)
                     } else {
@@ -2138,17 +2135,27 @@ impl InferState {
         };
 
         // Generalised type vars of the return row become brand params.
-        // A variable still bound is where writing the row out cut a
-        // cycle (a method's `this` is the instance, whose row holds the
-        // method): the instance itself, not a type the class leaves
-        // open.
         let mut brand_vars: Vec<TVarName> = ret
             .free_vars()
             .into_iter()
             .filter(|v| v.is_flex() && !env_free.contains(v))
-            .filter(|v| self.main_subst.resolve(v).is_none())
             .collect();
         brand_vars.sort_by_key(|v| v.id());
+        // A method reading `this` has the instance as its receiver, a
+        // row tail bound to the instance's row, which holds the method:
+        // that tail is no type the class leaves open. When the instance,
+        // written out whole (where the cycle is cut at a variable still
+        // bound), has no variable of its own, the class has no
+        // parameters. (One that has keeps its receiver tails as
+        // parameters too, so each instance's methods have their own.)
+        if !brand_vars.is_empty() {
+            let open = self.flatten_type(ret).free_vars().into_iter().any(|v| {
+                v.is_flex() && !env_free.contains(&v) && self.main_subst.resolve(&v).is_none()
+            });
+            if !open {
+                brand_vars.clear();
+            }
+        }
 
         // The id reserved for the class before the program's aliases
         // were parsed, so they could name it (`type C = { m: InsertIx }`).

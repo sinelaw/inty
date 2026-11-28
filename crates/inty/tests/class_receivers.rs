@@ -169,3 +169,22 @@ fn a_method_reading_this_leaves_the_class_without_parameters() {
     );
     assert!(r.is_err(), "B's `pick` is generic");
 }
+
+/// A class that does leave a type open (here the type of `buf`) keeps
+/// its methods' receivers as parameters: an instance kept by another
+/// class still calls its methods. (Dropping them made Fresh's `View`'s
+/// methods expect the class's original row.)
+#[test]
+fn a_generic_class_s_methods_read_their_own_instance() {
+    let r = check(
+        "class V {\n  constructor(buf) { this.buf = buf; this.block = []; this.top = 0; }\n  \
+         shift(op) { this.top = this.top + op; }\n  \
+         setTop(t) { this.top = t; this.block = []; }\n}\n\
+         class Split {\n  constructor() { this.views = []; }\n  \
+         track(v) { v.buf.follow((op) => { v.shift(op); }); }\n  \
+         open(buf) {\n    const v = this.views.find((x) => x.buf === buf) ?? new V(buf);\n    \
+         this.views.push(v);\n    this.track(v);\n    v.setTop(1);\n    return v;\n  }\n}\n\
+         const v = new Split().open({ follow: (f) => { f(1); } });\n",
+    );
+    assert!(r.is_ok(), "{:?}", r);
+}
