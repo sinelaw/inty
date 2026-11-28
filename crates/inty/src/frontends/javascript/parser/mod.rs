@@ -79,6 +79,10 @@ pub struct Parser {
     /// Whether the body being parsed is a generator's own (not a
     /// function's nested in it): `yield` is an operator there.
     in_generator: bool,
+    /// Where each `/** this.x: T */` annotation a constructor's
+    /// `this.x = …` line took starts: any other is reported (see
+    /// [`Self::parse_program`]).
+    this_annotations_used: std::collections::HashSet<usize>,
     /// Lexical depth of `class { … }` bodies we're currently inside.
     /// Private identifiers (`#name`) can only be referenced when this
     /// is > 0; outside any class body, `#name` is a parse error
@@ -128,6 +132,7 @@ impl Parser {
             next_fn_is_async: false,
             next_fn_is_generator: false,
             in_generator: false,
+            this_annotations_used: std::collections::HashSet::new(),
             class_depth: 0,
             class_brands: Vec::new(),
             class_decls: Vec::new(),
@@ -177,6 +182,22 @@ impl Parser {
 
         while !self.is_at_end() {
             statements.push(self.parse_statement()?);
+        }
+        // A `/** this.x: T */` annotation types a field only above a
+        // constructor's `this.x = …` line: one anywhere else would be
+        // ignored, so it is an error.
+        if let Some(ann) = self.type_annotations.iter().find(|a| {
+            a.name.starts_with("this.") && !self.this_annotations_used.contains(&a.span.start)
+        }) {
+            return Err(ParseError::UnexpectedToken {
+                found: format!("`/** {}: {} */`", ann.name, ann.content),
+                expected: format!(
+                    "a field annotation directly above a constructor's `{} = …` line",
+                    ann.name
+                ),
+                span: ann.span,
+            }
+            .into());
         }
 
         let end = if statements.is_empty() {
@@ -1206,8 +1227,9 @@ impl Parser {
         let mut ctor_params: Vec<Param> = Vec::new();
         // Each field's settings, in the order JavaScript runs them: the
         // class-body fields' initialisers, then the constructor's
-        // `this.NAME = …` lines. (name, value, span)
-        let mut field_sets: Vec<(String, Expr, Span)> = Vec::new();
+        // `this.NAME = …` lines. (name, value, span, and a constructor
+        // line's `/** this.NAME: T */` annotation)
+        let mut field_sets: Vec<(String, Expr, Span, Option<TypeAnnotation>)> = Vec::new();
         // The constructor's other statements, each with the number of
         // field settings that run before it.
         let mut ctor_stmts: Vec<(usize, Stmt)> = Vec::new();
@@ -1535,7 +1557,7 @@ impl Parser {
                     Some(init) => {
                         outer_names
                             .extend(crate::ast::free_idents::free_identifiers_in_expr(&init));
-                        field_sets.push((key_name, init, member_span));
+                        field_sets.push((key_name, init, member_span, None));
                     }
                     None => {
                         // Declaration-only: `undefined` until something
@@ -1548,6 +1570,7 @@ impl Parser {
                                 span: member_span,
                             },
                             member_span,
+                            None,
                         ));
                     }
                 }
@@ -1643,7 +1666,10 @@ impl Parser {
                 };
                 // A `this.NAME = …` line sets a field; any other
                 // statement runs where it stands, between the fields set
-                // before and after it (see `ctor_stmts`).
+                // before and after it (see `ctor_stmts`). A line may have
+                // a `/** this.NAME: T */` annotation directly above it
+                // (after the statement before it).
+                let mut after = body_stmt.span().start;
                 for s in stmts {
                     let field = match &s {
                         Stmt::Expr { expression, .. } => {
@@ -1651,10 +1677,15 @@ impl Parser {
                         }
                         _ => None,
                     };
+                    let stmt_span = s.span();
                     match field {
-                        Some(set) => field_sets.push(set),
+                        Some((field, value, at)) => {
+                            let ann = self.this_field_annotation(&field, after, stmt_span.start);
+                            field_sets.push((field, value, at, ann));
+                        }
                         None => ctor_stmts.push((field_sets.len(), s)),
                     }
+                    after = after.max(stmt_span.end);
                 }
             } else {
                 method_props.push(PropDef::Method {
@@ -1736,7 +1767,10 @@ impl Parser {
                 _ => None,
             })
             .collect();
-        if let Some((n, _, at)) = field_sets.iter().find(|(n, _, _)| member_names.contains(n)) {
+        if let Some((n, _, at, _)) = field_sets
+            .iter()
+            .find(|(n, _, _, _)| member_names.contains(n))
+        {
             return Err(ParseError::Unsupported {
                 feature: format!(
                     "a field `{}` of class `{}` with the same name as one of its methods or \
@@ -1748,6 +1782,23 @@ impl Parser {
             .into());
         }
 
+        // A constructor line's annotation is its field's: one field is
+        // annotated once.
+        for (field, _, at, ann) in &field_sets {
+            let Some(ann) = ann else { continue };
+            if field_annotations.contains_key(field) {
+                return Err(ParseError::Unsupported {
+                    feature: format!(
+                        "a second annotation of the field `{}` of class `{}` (annotate it once)",
+                        field, name
+                    ),
+                    span: *at,
+                }
+                .into());
+            }
+            field_annotations.insert(field.clone(), ann.clone());
+        }
+
         // Set the fields one by one, as JavaScript does, each value kept
         // in a local, and build the instance from the last value of each:
         // `const $field$0 = …; …; return {x: $field$0, …, methods};`.
@@ -1757,7 +1808,7 @@ impl Parser {
         let mut last: std::collections::HashMap<String, PropDef> = std::collections::HashMap::new();
         let mut body_stmts: Vec<Stmt> = Vec::new();
         let mut ctor_stmts = ctor_stmts.into_iter().peekable();
-        for (i, (field, mut value, at)) in field_sets.into_iter().enumerate() {
+        for (i, (field, mut value, at, line_annotation)) in field_sets.into_iter().enumerate() {
             while let Some((_, mut st)) = ctor_stmts.next_if(|(before, _)| *before == i) {
                 class_fields::rewrite_stmt(&mut st, &set, &name)?;
                 body_stmts.push(st);
@@ -1807,7 +1858,9 @@ impl Parser {
                 declarations: vec![VarDeclarator {
                     name: local.clone(),
                     init: Some(value),
-                    type_annotation: None,
+                    // An annotated constructor line's value is checked
+                    // against it, as a `const`'s is.
+                    type_annotation: line_annotation,
                     type_ast: None,
                     kind: VarKind::Const,
                     span: at,
@@ -1872,6 +1925,26 @@ impl Parser {
             name_span,
             span,
         })
+    }
+
+    /// The `/** this.FIELD: T */` annotation written between `after` and
+    /// `before` (directly above a constructor's `this.FIELD = …` line),
+    /// marked as taken.
+    fn this_field_annotation(
+        &mut self,
+        field: &str,
+        after: usize,
+        before: usize,
+    ) -> Option<TypeAnnotation> {
+        let name = format!("this.{field}");
+        let ann = self
+            .type_annotations
+            .iter()
+            .rev()
+            .find(|a| a.name == name && a.span.start >= after && a.span.end <= before)?
+            .clone();
+        self.this_annotations_used.insert(ann.span.start);
+        Some(ann)
     }
 
     /// Match `this.FIELD = EXPR` exactly and return `(FIELD, EXPR, span)`.

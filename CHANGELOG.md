@@ -254,6 +254,12 @@ unterminated-comment error.
 
 ### Fixes
 
+- `/** this.x: T */` above a constructor's `this.x = …` line was ignored
+  (read as a prose doc comment), so a field set from an unannotated
+  constructor parameter stayed generic and the class took a type
+  parameter for it. It now types the field: the value set there is
+  checked against `T`, and so is the constructor parameter that flows
+  into it. One anywhere else is an error rather than ignored.
 - `Object.freeze({fg, wavy: null})` returned where a `{fg: String | Null,
   wavy: String | Null}` is expected was rejected (`wavy`'s `Null` isn't
   `String | Null`), though the literal itself was accepted there: a call
