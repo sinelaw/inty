@@ -55,6 +55,18 @@ pub const ITER_KEY: &str = "\x03iter\x03";
 /// can't name it.
 pub const ASYNC_RETURN: &str = "\x04async_return\x04";
 
+/// A generator function's body, as the parser lowers it: `function* g()
+/// { … }` is `function g() { return GENERATOR(() => { … }); }`, typed as
+/// an `Iterator<T>` of what its `yield`s give (see `infer_generator`).
+pub const GENERATOR: &str = "\x04generator\x04";
+
+/// `yield e` (or `yield`) in a generator's body: `YIELD(e)` (`YIELD()`).
+pub const YIELD: &str = "\x04yield\x04";
+
+/// `yield* it` in a generator's body: `YIELD_STAR(it)`, each of `it`'s
+/// elements yielded.
+pub const YIELD_STAR: &str = "\x04yield_star\x04";
+
 /// Prefix for private-field sentinel keys produced by the class-body
 /// lowering of `#name`. Starts with `\x02` so JS source can't tokenise
 /// it; the parser emits these names from `Token::PrivateIdent` only.

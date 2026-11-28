@@ -672,11 +672,16 @@ Typed arrays are `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `
 - an array (its elements), a typed array (numbers), a tuple (its components, all of one type);
 - a string (its characters, as strings: code points);
 - a `Set<T>` (`T`s), a `Map<K, V>` (`[K, V]` pairs), and what their `keys()`, `values()` and `entries()` give;
+- an `Iterator<T>`, what a generator gives (below);
 - any record whose type says what iterating it gives with a `[Symbol.iterator]: T` field. A declaration says a host collection is iterable this way without claiming it is an array: `/** type NodeList = {length: Number, item: (Number) => Element | Null, [Symbol.iterator]: Element} */`.
 
 Not a `Dict<V>` or another plain object (`for … of` throws on one): iterate `Object.keys(o)`, `Object.values(o)` or `Object.entries(o)`. A function that iterates its parameter takes any iterable: its scheme says `where Iterable a b` (a `where` clause in an annotation may say it too).
 
 `new Set(items?)` and `new Map(entries?)` take any iterable of items or of `[K, V]` pairs (an array literal of pairs is checked as one). `Array.from(it)` gives an array of `it`'s elements; `Array.from(it, (x, i) => …)` an array of the map function's results, and also takes an array-like object, `Array.from({length: n}, (_, i) => i)` (whose elements are `undefined`).
+
+### Generators
+
+A generator, `function* g(…) { … }` (a declaration, an expression, an `export`, or a `*m() { … }` method of a class or an object literal), gives an `Iterator<T>`: `{next: () => {done: Boolean, value: T}, [Symbol.iterator]: T}`, where `T` is what it yields. Each `yield e` gives a `T` (one generator yields one type, or the union its annotation says), `yield* it` gives each element of the iterable `it`, a bare `yield` gives `undefined`, and `return` ends it. A `yield` expression's own value is `undefined` (`next()` takes no argument). An annotation names the result: `/** function rows(n: Number) => Iterator<Row> */`; each `yield` is then checked against `Row`, as a `return` is against a declared result. `async function*` isn't taken.
 
 ### Function types
 

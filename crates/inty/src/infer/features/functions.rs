@@ -778,6 +778,9 @@ impl InferState {
         if let Some(result) = self.infer_wasm_instantiate(env, callee, arguments, keywords, span) {
             return result;
         }
+        if let Some(result) = self.infer_generator_marker(env, callee, arguments, None, span) {
+            return result;
+        }
         if let (Expr::Ident { name, .. }, [value]) = (callee, arguments) {
             if name == crate::types::ASYNC_RETURN {
                 let ty = self.infer_expr(env, value)?;
@@ -1167,6 +1170,98 @@ impl InferState {
             );
             self.check_expr(env, map_fn, &callback)?;
             Ok(Type::array(self.zonk_head(&result)))
+        })())
+    }
+
+    /// What a generator's iterator is, `Iterator<T>` (the stdlib's), for
+    /// elements `element`; without the stdlib, a record iterating them.
+    pub(in crate::infer) fn iterator_type(&mut self, element: Type) -> Type {
+        use crate::types::{FieldEntry, PropName, RowType, ITER_KEY};
+        match self.type_aliases.get("Iterator").cloned() {
+            Some(def) if def.params.len() == 1 => match def.rec_id.or(def.nominal_id) {
+                Some(id) => Type::Named(id, vec![element]),
+                None => {
+                    let subst = HashMap::from([(def.params[0], element)]);
+                    super::super::type_parser::substitute_alias_body(&def.body, &subst)
+                }
+            },
+            _ => Type::Row(RowType::closed_entries(std::collections::BTreeMap::from([
+                (PropName(ITER_KEY.to_string()), FieldEntry::pre(element)),
+            ]))),
+        }
+    }
+
+    /// The calls a generator is lowered to (see
+    /// [`crate::types::GENERATOR`]): `GENERATOR(() => body)`, an
+    /// `Iterator<T>` of what `body`'s `yield`s give (`expected`, when
+    /// known, says what `T` is before the body is inferred, so each
+    /// `yield`'s value is checked against it); `YIELD(e)`, `e` one of the
+    /// innermost generator's elements; `YIELD_STAR(it)`, each element of
+    /// the iterable `it` one. A `yield` gives `undefined` (what `next()`
+    /// is called with). `None` for any other call.
+    pub(in crate::infer) fn infer_generator_marker(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Expr,
+        arguments: &[Expr],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> Option<InferResult<Type>> {
+        let Expr::Ident { name, .. } = callee else {
+            return None;
+        };
+        let name = name.as_str();
+        if ![
+            crate::types::GENERATOR,
+            crate::types::YIELD,
+            crate::types::YIELD_STAR,
+        ]
+        .contains(&name)
+        {
+            return None;
+        }
+        Some((|| {
+            if name == crate::types::GENERATOR {
+                let element = self.fresh_type_var();
+                let iterator = self.iterator_type(element.clone());
+                if let Some(expected) = expected {
+                    self.unify(span, &iterator, expected)?;
+                }
+                self.generator_elements.push(element);
+                let body = arguments
+                    .first()
+                    .map(|f| self.infer_expr(env, f))
+                    .transpose();
+                self.generator_elements.pop();
+                body?;
+                return Ok(self.zonk_head_into(iterator));
+            }
+            let element = self
+                .generator_elements
+                .last()
+                .cloned()
+                .unwrap_or_else(|| self.fresh_type_var());
+            let element = self.zonk_head(&element);
+            match (name, arguments) {
+                (_, []) => self.subsume(span, &Type::Undefined, &element)?,
+                (n, [value]) if n == crate::types::YIELD => {
+                    self.check_expr(env, value, &element)
+                        .map_err(|e| self.locate_in_value(value, e))?;
+                }
+                (_, [iterable]) => {
+                    let it = self.infer_expr(env, iterable)?;
+                    let each = self.fresh_type_var();
+                    self.require_iterable(&it, &each, iterable.span())?;
+                    let each = self.zonk_head(&each);
+                    self.subsume(iterable.span(), &each, &element)?;
+                }
+                _ => {
+                    for a in arguments {
+                        self.infer_expr(env, a)?;
+                    }
+                }
+            }
+            Ok(Type::Undefined)
         })())
     }
 

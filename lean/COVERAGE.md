@@ -66,6 +66,7 @@ Beside the rules: `Expr.assignsMutable` is `check_assignment_target`;
 | `infer_array_from` | `Array.from` with a map function (the standard library and iteration: remaining) |
 | `infer_typed_array_new` | `new` of a typed array, whose parameters its first argument's type picks (typed arrays and the standard library: not in the model) |
 | `check_identity_call` | a call of a function giving back its argument, `<a>(a) => a`, checked against what is expected through its argument (calls are synthesised in the model) |
+| `infer_generator_marker` | a generator (`function*`, `yield`, `yield*`), lowered to calls the model doesn't have (generators: not in the model) |
 | `infer_wasm_instantiate` | `WebAssembly.instantiate`, whose result its first argument's type picks (the standard library: remaining) |
 | `check_alias_refs` | an unknown name in a Python / Starlark type alias's body, reported (aliases: not in the model) |
 | `infer_keyword_call` | Python's keyword arguments |

@@ -1526,6 +1526,36 @@ impl InferState {
         if let Some(ty) = self.check_identity_call(env, expr, expected)? {
             return Ok(ty);
         }
+        // A generator's body, where its iterator's type is expected (an
+        // annotated generator's `=> Iterator<T>`): its `yield`s are
+        // checked against `T`.
+        if let Expr::Call {
+            callee,
+            arguments,
+            keywords,
+            span,
+        } = expr
+        {
+            let known = !matches!(
+                self.zonk_head(expected),
+                Type::Var(crate::types::TVarName::Flex(_))
+            );
+            if known && keywords.is_empty() {
+                if let Expr::Ident { name, .. } = callee.as_ref() {
+                    if name == crate::types::GENERATOR {
+                        if let Some(r) = self.infer_generator_marker(
+                            env,
+                            callee,
+                            arguments,
+                            Some(expected),
+                            *span,
+                        ) {
+                            return r;
+                        }
+                    }
+                }
+            }
+        }
         // Only these push what is expected into them; anything else is
         // synthesised and subsumed, which resolves `expected` as far as
         // it goes (not whole, up front).
@@ -1760,7 +1790,8 @@ impl InferState {
             return Ok(None);
         };
         let plain_callee = match callee.as_ref() {
-            Expr::Ident { .. } => true,
+            // (Not a marker the parser lowers a construct to.)
+            Expr::Ident { name, .. } => !name.starts_with('\x04'),
             Expr::Member { object, .. } => matches!(object.as_ref(), Expr::Ident { .. }),
             _ => false,
         };

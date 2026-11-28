@@ -198,3 +198,31 @@ fn annotations_keep_the_sources_line_endings() {
         "{out:?}"
     );
 }
+
+/// A generator is printed as one (`function*`, `*m()`, `yield`, `yield*`),
+/// not as what the parser lowers it to, and the printed program checks.
+#[test]
+fn a_generator_is_printed_as_written() {
+    let src = "/** function nums(n: Number) => Iterator<Number> */\n\
+               function* nums(n) { for (let i = 0; i < n; i++) yield i; }\n\
+               function* both() { yield 0; yield* nums(2); }\n\
+               function* ticks() { const x = yield; }\n\
+               export function* names() { yield \"a\"; }\n\
+               const o = { *gen() { yield true; } };\n\
+               const f = function* () { yield 1; };\n\
+               const all = [...both(), ...f()];\n";
+    let out = print(src);
+    for written in [
+        "function* nums(n)",
+        "yield i;",
+        "function* both()",
+        "yield* nums(2);",
+        "const x = yield;",
+        "export function* names()",
+        "*gen() {",
+        "function*() {",
+    ] {
+        assert!(out.contains(written), "{written:?} not in:\n{out}");
+    }
+    assert!(checks(&out), "the printed program checks:\n{out}");
+}

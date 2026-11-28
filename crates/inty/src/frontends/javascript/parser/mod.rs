@@ -72,6 +72,13 @@ pub struct Parser {
     /// (and immediately cleared) by that parser to decide whether the
     /// body it's about to read should start in an async context.
     next_fn_is_async: bool,
+    /// One-shot, as `next_fn_is_async`: the function whose body is
+    /// parsed next is a generator (`function*`, `*m() {}`), in which
+    /// `yield` is an operator.
+    next_fn_is_generator: bool,
+    /// Whether the body being parsed is a generator's own (not a
+    /// function's nested in it): `yield` is an operator there.
+    in_generator: bool,
     /// Lexical depth of `class { … }` bodies we're currently inside.
     /// Private identifiers (`#name`) can only be referenced when this
     /// is > 0; outside any class body, `#name` is a parse error
@@ -119,6 +126,8 @@ impl Parser {
             temp_counter: 0,
             async_depth: 0,
             next_fn_is_async: false,
+            next_fn_is_generator: false,
+            in_generator: false,
             class_depth: 0,
             class_brands: Vec::new(),
             class_decls: Vec::new(),
@@ -1270,6 +1279,8 @@ impl Parser {
             if is_async {
                 self.advance();
             }
+            // `*name() { … }`: a generator method.
+            let is_generator = self.consume_if(&Token::Star);
 
             // Accessor declarations: `get foo() { ... }` or
             // `set foo(v) { ... }`. Recognised before the regular
@@ -1321,6 +1332,14 @@ impl Parser {
                 self.expect_ident_or_keyword()?
             };
             let key_span = self.prev_span();
+            if is_generator && (is_async || accessor_kind.is_some() || key_name == "constructor") {
+                return Err(ParseError::Unsupported {
+                    feature: "an async generator, or a generator getter, setter or constructor"
+                        .to_string(),
+                    span: key_span,
+                }
+                .into());
+            }
             if is_async && (accessor_kind.is_some() || key_name == "constructor") {
                 return Err(ParseError::UnexpectedToken {
                     found: "async".to_string(),
@@ -1603,11 +1622,14 @@ impl Parser {
             if is_async {
                 self.next_fn_is_async = true;
             }
+            self.next_fn_is_generator = is_generator;
             let body_stmt =
                 Self::prepend_param_destructuring(self.parse_function_body_block()?, prefix);
             let member_span = Span::new(member_start, self.prev_span().end);
             let body_stmt = if is_async {
                 *Self::wrap_body_in_promise_resolve(Box::new(body_stmt), member_span)
+            } else if is_generator {
+                *Self::wrap_generator_body(Box::new(body_stmt), member_span)
             } else {
                 body_stmt
             };
@@ -1883,6 +1905,11 @@ impl Parser {
     fn parse_export_function_declaration(&mut self, start: usize, is_async: bool) -> Result<Stmt> {
         let func_start = self.current_span();
         self.advance(); // consume `function`
+        if is_async {
+            self.next_fn_is_async = true;
+        }
+        let generator = self.parse_generator_star()?;
+        self.next_fn_is_async = false;
         let name = self.expect_ident()?;
         let name_span = self.prev_span();
         let type_annotation = self.try_get_type_annotation_for_function(func_start, &name);
@@ -1904,6 +1931,8 @@ impl Parser {
             // non-exported async path uses, so inference produces
             // `(...) => Promise<T>` without any new rules.
             Self::wrap_body_in_promise_resolve(body, func_start)
+        } else if generator {
+            Self::wrap_generator_body(body, Span::new(start, self.prev_span().end))
         } else {
             body
         };
@@ -2075,6 +2104,7 @@ impl Parser {
         let func_span = self.current_span();
 
         self.expect(&Token::Function)?;
+        let generator = self.parse_generator_star()?;
 
         let name = self.expect_ident()?;
         let name_span = self.prev_span();
@@ -2090,6 +2120,11 @@ impl Parser {
             self.parse_function_body_block()?,
             prefix,
         ));
+        let body = if generator {
+            Self::wrap_generator_body(body, Span::new(start, self.prev_span().end))
+        } else {
+            body
+        };
 
         Ok(Stmt::FunctionDecl {
             name,
@@ -2235,11 +2270,104 @@ impl Parser {
     /// nested in an async one correctly errors.
     fn parse_function_body_block(&mut self) -> Result<Stmt> {
         let saved = self.async_depth;
+        let saved_generator = self.in_generator;
         let is_async = std::mem::replace(&mut self.next_fn_is_async, false);
+        self.in_generator = std::mem::replace(&mut self.next_fn_is_generator, false);
         self.async_depth = if is_async { 1 } else { 0 };
         let result = self.parse_block_statement();
         self.async_depth = saved;
+        self.in_generator = saved_generator;
         result
+    }
+
+    /// After `function`: a `*` makes it a generator, whose body is parsed
+    /// next (see [`Self::wrap_generator_body`]). An `async` one isn't
+    /// taken.
+    fn parse_generator_star(&mut self) -> Result<bool> {
+        if !self.check(&Token::Star) {
+            return Ok(false);
+        }
+        let span = self.current_span();
+        self.advance();
+        if self.next_fn_is_async {
+            return Err(ParseError::Unsupported {
+                feature: "an async generator function (`async function*`)".to_string(),
+                span,
+            }
+            .into());
+        }
+        self.next_fn_is_generator = true;
+        Ok(true)
+    }
+
+    /// A generator's body `{ … }` as inference reads it:
+    /// `{ return GENERATOR(() => { … }); }` (see
+    /// [`crate::types::GENERATOR`]), its `yield e` already
+    /// `YIELD(e)`. An arrow, so the body keeps the function's `this`.
+    fn wrap_generator_body(body: Box<Stmt>, span: Span) -> Box<Stmt> {
+        let arrow = Expr::Function {
+            name: None,
+            params: vec![],
+            body,
+            type_annotation: None,
+            arrow: true,
+            span,
+        };
+        let call = Expr::Call {
+            callee: Box::new(Expr::Ident {
+                name: crate::types::GENERATOR.to_string(),
+                span,
+            }),
+            arguments: vec![arrow],
+            keywords: vec![],
+            span,
+        };
+        Box::new(Stmt::Block {
+            body: vec![Stmt::Return {
+                argument: Some(call),
+                span,
+            }],
+            span,
+        })
+    }
+
+    /// `yield`, `yield e` or `yield* e` in a generator's body: a call of
+    /// [`crate::types::YIELD`] (or [`crate::types::YIELD_STAR`]) with the
+    /// value, if any.
+    fn parse_yield_expression(&mut self) -> Result<Expr> {
+        let start = self.current_span().start;
+        self.advance(); // `yield`
+        let delegate = self.consume_if(&Token::Star);
+        let ends = matches!(
+            self.current(),
+            Token::RParen
+                | Token::RBracket
+                | Token::RBrace
+                | Token::Comma
+                | Token::Semicolon
+                | Token::Colon
+                | Token::Eof
+        );
+        let arguments = if ends && !delegate {
+            vec![]
+        } else {
+            vec![self.parse_assignment_expression()?]
+        };
+        let span = Span::new(start, self.prev_span().end);
+        let name = if delegate {
+            crate::types::YIELD_STAR
+        } else {
+            crate::types::YIELD
+        };
+        Ok(Expr::Call {
+            callee: Box::new(Expr::Ident {
+                name: name.to_string(),
+                span: Span::new(start, start + 5),
+            }),
+            arguments,
+            keywords: vec![],
+            span,
+        })
     }
 
     /// Thin wrapper for sites that know they don't have patterns (e.g.
@@ -2874,6 +3002,9 @@ impl Parser {
     }
 
     fn parse_assignment_expression(&mut self) -> Result<Expr> {
+        if self.in_generator && matches!(self.current(), Token::Ident(n) if n == "yield") {
+            return self.parse_yield_expression();
+        }
         // Arrow functions are the only expression whose start overlaps with
         // a parenthesised expression or a bare identifier, so we look ahead
         // for a `=>` and take that path before falling back to the regular
@@ -3644,11 +3775,13 @@ impl Parser {
         if is_async {
             self.advance();
         }
+        // `*name() { … }`: a generator method.
+        let is_generator = !is_async && self.consume_if(&Token::Star);
 
         let key = self.parse_property_key()?;
 
         // Check for method shorthand
-        if is_async || self.check(&Token::LParen) {
+        if is_async || is_generator || self.check(&Token::LParen) {
             // Its annotation: a `@type`, else one by name
             // (`/** function m(x: T) => R */`) written above it.
             let type_annotation = match (pending_jsdoc, &key) {
@@ -3673,12 +3806,15 @@ impl Parser {
             if is_async {
                 self.next_fn_is_async = true;
             }
+            self.next_fn_is_generator = is_generator;
             let body = Box::new(Self::prepend_param_destructuring(
                 self.parse_function_body_block()?,
                 prefix,
             ));
             let body = if is_async {
                 Self::wrap_body_in_promise_resolve(body, Span::new(start, self.prev_span().end))
+            } else if is_generator {
+                Self::wrap_generator_body(body, Span::new(start, self.prev_span().end))
             } else {
                 body
             };
@@ -3965,6 +4101,8 @@ impl Parser {
         let saved_async = self.async_depth;
         let is_async = std::mem::replace(&mut self.next_fn_is_async, false);
         self.async_depth = if is_async { 1 } else { 0 };
+        // An arrow is never a generator: `yield` in it is a name.
+        let saved_generator = std::mem::replace(&mut self.in_generator, false);
 
         // Body: block `{ ... }` or a single expression.
         let body = if self.check(&Token::LBrace) {
@@ -3989,6 +4127,7 @@ impl Parser {
         };
 
         self.async_depth = saved_async;
+        self.in_generator = saved_generator;
 
         let span = Span::new(start, self.prev_span().end);
         let body = if is_async {
@@ -4012,6 +4151,7 @@ impl Parser {
         let func_span = self.current_span();
 
         self.expect(&Token::Function)?;
+        let generator = self.parse_generator_star()?;
 
         let name = if let Token::Ident(name) = self.current().clone() {
             self.advance();
@@ -4035,6 +4175,11 @@ impl Parser {
             self.parse_function_body_block()?,
             prefix,
         ));
+        let body = if generator {
+            Self::wrap_generator_body(body, Span::new(start, self.prev_span().end))
+        } else {
+            body
+        };
 
         Ok(Expr::Function {
             name,

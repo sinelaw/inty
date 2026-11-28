@@ -125,6 +125,17 @@
   `MessageChannel<M>`; a worker's own scope, `self` (a
   `WorkerScope<I, O>`) and `postMessage`, with `--lib builtin:worker`.
 
+### Generators
+
+- `function*` declarations, expressions and `export`s, and `*m() { … }`
+  methods of classes and object literals; `yield e`, `yield* it`, a bare
+  `yield`, and `return` in them. A generator gives an `Iterator<T>` of
+  what it yields (`{next: () => {done: Boolean, value: T},
+  [Symbol.iterator]: T}`, in the stdlib), which `for … of`, a spread and
+  `Array.from` iterate; an annotation `=> Iterator<T>` checks each
+  `yield` against `T`. The printed program writes them as written.
+  `async function*` isn't taken.
+
 ### DOM declarations
 
 - `el.focus({preventScroll, focusVisible})`; an event's `detail` (a

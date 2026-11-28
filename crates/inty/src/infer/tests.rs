@@ -7004,3 +7004,55 @@ fn an_identity_call_checks_its_argument_against_what_is_expected() {
         assert!(check_with_stdlib(bad, &[]).is_err(), "{}", bad);
     }
 }
+
+/// Generators: `function*`, generator methods, `yield`, `yield*` and
+/// `return` in one give an `Iterator<T>` of what they yield, which
+/// `for … of`, a spread and `Array.from` iterate and `next()` steps.
+#[test]
+fn generators_give_an_iterator_of_what_they_yield() {
+    let src = "/** type Row = {n: Number, text: String} */\n\
+               /** function rows(n: Number) => Iterator<Row> */\n\
+               function* rows(n) {\n\
+                 for (let i = 0; i < n; i++) {\n\
+                   if (i > 5) return;\n\
+                   yield { n: i, text: String(i) };\n\
+                 }\n\
+               }\n\
+               function* nums() { yield 1; yield* [2, 3]; yield* new Set([4]); }\n\
+               let total = 0;\n\
+               for (const r of rows(3)) { if (r.n > 1) break; total += r.text.length; }\n\
+               const all = [...nums()];\n\
+               const ns = Array.from(rows(2), (r) => r.n);\n\
+               const step = nums().next();\n\
+               const v = step.done ? 0 : step.value;\n\
+               class Tree {\n\
+                 constructor() { this.kids = [\"a\"]; }\n\
+                 *each() { for (const k of this.kids) yield k; }\n\
+               }\n\
+               const ks = [...new Tree().each()];\n\
+               const o = { *flags() { yield true; } };\n\
+               const fs = [...o.flags()];\n\
+               /** type Kind = {kind: \"a\"} | {kind: \"b\", n: Number} */\n\
+               /** function kinds() => Iterator<Kind> */\n\
+               function* kinds() { yield { kind: \"a\" }; yield { kind: \"b\", n: 1 }; }";
+    let t = check_with_stdlib(src, &["all", "ns", "v", "ks", "fs"]).unwrap();
+    assert_eq!(
+        t,
+        ["Number[]", "Number[]", "Number", "String[]", "Boolean[]"]
+    );
+    for bad in [
+        // What it yields must be what the annotation says.
+        "/** function f() => Iterator<Number> */ function* f() { yield \"s\"; }",
+        // One generator yields one type.
+        "function* f() { yield 1; yield \"s\"; }",
+        // `yield*` takes an iterable.
+        "function* f() { yield* 3; }",
+        // Its elements are what it yields.
+        "function* f() { yield 1; } for (const x of f()) { x.length; }",
+        // `yield` is an operator only in a generator's own body.
+        "function f() { yield 1; }",
+        "function* f() { [1].forEach((x) => { yield x; }); }",
+    ] {
+        assert!(check_with_stdlib(bad, &[]).is_err(), "{}", bad);
+    }
+}

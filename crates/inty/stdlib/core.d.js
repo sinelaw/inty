@@ -76,6 +76,14 @@ const Object;
     } */
 const Array;
 
+// Iteration. A generator (`function* g() { … yield x; … }`, a `*m()`
+// method) gives an `Iterator<T>` of what it yields: `for … of`, a spread
+// and `Array.from` iterate it, and `next()` steps it by hand. Annotate
+// one as `/** function g(…) => Iterator<T> */`.
+// (`next()`'s `value` is read once `done` is false: the record has no
+// type for the value a finished generator returns.)
+/** type Iterator<T> = {next: () => {done: Boolean, value: T}, [Symbol.iterator]: T} */
+
 // Raw binary data, as `fetch`, `WebSocket` and WebAssembly memory hand
 // it out; read and write it through a typed-array view.
 /** type ArrayBuffer = {byteLength: Number, slice: (begin: Number, end?: Number) => ArrayBuffer} */

@@ -488,6 +488,10 @@ pub struct InferState {
     /// under an annotation, an external `class X;`): the only bases an
     /// external class may extend.
     pub(in crate::infer) ambient: std::collections::HashSet<crate::infer::env::Key>,
+    /// The element type of each generator whose body is being inferred,
+    /// innermost last: what a `yield` in it gives (see
+    /// [`crate::types::GENERATOR`]).
+    pub(in crate::infer) generator_elements: Vec<Type>,
     pub(in crate::infer) forward_locals:
         HashMap<crate::ast::resolve::BindingId, (Type, String, Span)>,
     /// Bindings some read found only in `local_types`. The environment
@@ -739,6 +743,7 @@ impl InferState {
             local_types: HashMap::new(),
             forward_locals: HashMap::new(),
             ambient: std::collections::HashSet::new(),
+            generator_elements: Vec::new(),
             escaped_locals: Default::default(),
             local_decl_spans: HashMap::new(),
             annotation_env: None,
