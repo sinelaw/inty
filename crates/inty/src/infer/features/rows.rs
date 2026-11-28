@@ -1258,6 +1258,56 @@ impl InferState {
         Some(self.declared_callbacks_detached(&method))
     }
 
+    /// A member of the standard library's `FinalizationRegistry<T>`
+    /// (`obj_type`), each read with a fresh type for what it takes that
+    /// the registry doesn't fix: `register(target, held: T, token?)` and
+    /// `unregister(token) => Boolean`, a method of the registry. `None`
+    /// for anything else.
+    fn finalization_member(&mut self, obj_type: &Type, property: &str) -> Option<Type> {
+        use crate::types::FuncParam;
+        let Type::Named(id, args) = obj_type else {
+            return None;
+        };
+        let registry = self
+            .stdlib_aliases
+            .get("FinalizationRegistry")?
+            .nominal_id?;
+        let ([held], true) = (args.as_slice(), *id == registry) else {
+            return None;
+        };
+        let held = held.clone();
+        let (params, ret) = match property {
+            "register" => {
+                let target = self.fresh_type_var();
+                let token = self.fresh_type_var();
+                let optional = self.fresh_pvar();
+                (
+                    vec![
+                        FuncParam::required(target),
+                        FuncParam::required(held),
+                        FuncParam::optional(optional, token),
+                    ],
+                    Type::Undefined,
+                )
+            }
+            "unregister" => (
+                vec![FuncParam::required(self.fresh_type_var())],
+                Type::Boolean,
+            ),
+            _ => return None,
+        };
+        // A method of the registry: its `this` is the receiver as a call
+        // binds it, the brand seen through (`method_receiver`).
+        let this = self
+            .unroll_named(*id, args)
+            .unwrap_or_else(|| obj_type.clone());
+        Some(Type::wrap_callable(Type::raw_func_with_params(
+            Some(this),
+            params,
+            ret,
+        )))
+    }
+
     pub(crate) fn infer_member_on_type(
         &mut self,
         obj_type: &Type,
@@ -1281,6 +1331,9 @@ impl InferState {
         // synthesising singletons.
         if let Type::Literal(lit) = obj_type {
             return self.infer_member_on_type(&lit.base_type(), property, span);
+        }
+        if let Some(member) = self.finalization_member(obj_type, property) {
+            return Ok(member);
         }
 
         // Union elimination: read the property from every member and

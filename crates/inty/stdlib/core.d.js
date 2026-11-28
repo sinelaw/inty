@@ -351,6 +351,22 @@ const WeakMap;
 /** const WeakSet: <T>() => WeakSet<T> */
 const WeakSet;
 
+// A weak reference: `deref()` gives the target, or `undefined` once it is
+// collected.
+/** type WeakRef<T> = {deref: (this: WeakRef<T>) => T | Undefined} */
+/** const WeakRef: <T>(T) => WeakRef<T> */
+const WeakRef;
+
+// A finalization registry: `new FinalizationRegistry(cleanup)`, then
+// `r.register(target, held, token?)` calls `cleanup(held)` some time after
+// `target` (any object) is collected, unless `r.unregister(token)` came
+// first. `register` takes a target of any type at each call, which no
+// record field can say: its members are typed by a rule
+// (`finalization_member`), and the type itself is opaque.
+/** nominal type FinalizationRegistry<T> = {} */
+/** const FinalizationRegistry: <T, R>((T) => R) => FinalizationRegistry<T> */
+const FinalizationRegistry;
+
 // Proxy. The handler shape is opaque (H) — modelling all the trap
 // signatures correctly requires variadic arguments and self-reference,
 // neither of which inty has. The result row is whatever T the target

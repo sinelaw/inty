@@ -271,6 +271,43 @@ fn a_worker_scope() {
     bad("self.postMessage(1);", "self");
 }
 
+#[test]
+fn finalization_registry_and_weak_ref() {
+    // Fresh's markers.js: a registry of cleanups, registering any object.
+    ok(
+        "/** const collected: FinalizationRegistry<() => Undefined> */\n\
+        const collected = new FinalizationRegistry((drop) => { drop(); });\n\
+        const obj = {a: 1};\n\
+        collected.register(obj, () => undefined);\n\
+        collected.register([1, 2], () => undefined, obj);\n\
+        const gone = collected.unregister(obj);",
+    );
+    // What is held is what the cleanup takes.
+    bad(
+        "/** const collected: FinalizationRegistry<() => Undefined> */\n\
+         const collected = new FinalizationRegistry((drop) => { drop(); });\n\
+         collected.register({a: 1}, 5);",
+        "() => Undefined",
+    );
+    ok("const r = new FinalizationRegistry((n) => n + 1); r.register({}, 3); r.register([], 4);");
+    bad(
+        "const r = new FinalizationRegistry((n) => n + 1); r.register({}, \"s\");",
+        "Number",
+    );
+    // `register` is a method of the registry.
+    bad(
+        "const r = new FinalizationRegistry((n) => n + 1); const reg = r.register; reg({}, 1);",
+        "method",
+    );
+    bad(
+        "const r = new FinalizationRegistry((n) => n + 1); r.forget({});",
+        "forget",
+    );
+    // A weak reference may have lost its target.
+    ok("const w = new WeakRef({n: 1}); const t = w.deref(); const n = t === undefined ? 0 : t.n;");
+    bad("const w = new WeakRef({n: 1}); w.deref().n;", "undefined");
+}
+
 /// The rules that make one of the standard library's types (a
 /// generator's iterator, a typed array's buffer, a WebAssembly module)
 /// make the library's, not a program's own alias of the same name.
