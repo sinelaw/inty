@@ -1,0 +1,19 @@
+$ inty crates/inty-cli/tests/soundness/throw-in-branch-result.js
+exit: 1
+--- stdout
+--- stderr
+Error: Property 'n' not found in type Null | {n: Number}: the value may be null
+   ╭─[ crates/inty-cli/tests/soundness/throw-in-branch-result.js:7:11 ]
+   │
+ 7 │ const c = check({n: 1});
+   │           ──┬──  
+   │             ╰──── Property 'n' not found in type Null | {n: Number}: the value may be null
+   │
+   ├─[ crates/inty-cli/tests/soundness/throw-in-branch-result.js:7:11 ]
+   │
+ 5 │ function check(o) { if (o.n < 0) { throw new Error("x"); } return o; }
+   │                         ─┬─  
+   │                          ╰─── required here, in the body of the function this uses
+   │ 
+   │ Help: test it first (`if (x !== null) x.n`) or give a default (`(x ?? fallback).n`); to test a property, copy it into a `const` and test that
+───╯

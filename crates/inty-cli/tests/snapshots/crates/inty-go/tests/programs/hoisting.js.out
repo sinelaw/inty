@@ -1,0 +1,22 @@
+$ inty crates/inty-go/tests/programs/hoisting.js
+exit: 0
+--- stdout
+/** function pick(Number) => String */
+function pick(i) {
+  return NAMES[i % NAMES.length];
+}
+/** function count() => Number */
+function count() {
+  return WEIGHTS.length;
+}
+/** const NAMES: String[] */
+const NAMES = ["alpha", "beta", "gamma"];
+/** const WEIGHTS: Number[] */
+const WEIGHTS = [0.5, 1.5, 2.5, 3.5];
+/** var i: Number */
+for (var i = 0; i < 5; i++) {
+  console.log(pick(i));
+}
+console.log(count());
+All checks passed: crates/inty-go/tests/programs/hoisting.js (4 symbols) in <time>
+--- stderr

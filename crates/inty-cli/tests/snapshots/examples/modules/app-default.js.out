@@ -1,0 +1,10 @@
+$ inty examples/modules/app-default.js
+exit: 0
+--- stdout
+import hello from "./greet.js";
+import version from "./version.js";
+/** const banner: String */
+const banner = `${hello("world")} (v${version})`;
+console.log(banner);
+All checks passed: examples/modules/app-default.js (1 symbol) in <time>
+--- stderr

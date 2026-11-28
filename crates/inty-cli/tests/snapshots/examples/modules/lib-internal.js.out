@@ -1,0 +1,28 @@
+$ inty examples/modules/lib-internal.js
+exit: 0
+--- stdout
+export function double(n) {
+  return n + n;
+}
+export function triple(n) {
+  return (n + n) + n;
+}
+export const TAG = "internal-v1";
+export default function describe() {
+  return `lib (${TAG})`;
+};
+All checks passed: examples/modules/lib-internal.js (5 symbols) in <time>
+--- stderr
+
+$ inty declarations examples/modules/lib-internal.js
+exit: 0
+--- stdout
+/** const double: <g12> where Plus g12 => (g12) => g12 */
+const double;
+/** const triple: <k12> where Plus k12 => (k12) => k12 */
+const triple;
+/** const TAG: String */
+const TAG;
+/** const default: () => String */
+const default;
+--- stderr

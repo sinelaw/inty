@@ -1,0 +1,195 @@
+$ inty examples/go-backend/dijkstra.js
+exit: 0
+--- stdout
+/** const N: Number */
+const N = 700;
+/** const V: Number */
+const V = N * N;
+/** let seed: Number */
+let seed = 12345;
+/** function rand() => Number */
+function rand() {
+  seed = (seed * 16807) % 2147483647;
+  return seed / 2147483647;
+}
+/** const offsets: Number[] */
+const offsets = [];
+/** const targets: Number[] */
+const targets = [];
+/** const weights: Number[] */
+const weights = [];
+/** var v: Number */
+for (var v = 0; v < V; v++) {
+  offsets.push(targets.length);
+  /** const x: Number */
+  const x = v % N;
+  /** const y: Number */
+  const y = (v - x) / N;
+  if (x > 0) {
+    targets.push(v - 1);
+    weights.push(1 + Math.floor(rand() * 9));
+  }
+  if (x < (N - 1)) {
+    targets.push(v + 1);
+    weights.push(1 + Math.floor(rand() * 9));
+  }
+  if (y > 0) {
+    targets.push(v - N);
+    weights.push(1 + Math.floor(rand() * 9));
+  }
+  if (y < (N - 1)) {
+    targets.push(v + N);
+    weights.push(1 + Math.floor(rand() * 9));
+  }
+}
+offsets.push(targets.length);
+/** function heapPush(Number[], Number[], Number, Number) => Undefined */
+function heapPush(heapKey, heapVal, k, v) {
+  heapKey.push(k);
+  heapVal.push(v);
+  /** let i: Number */
+  let i = heapKey.length - 1;
+  while (i > 0) {
+    /** const parent: Number */
+    const parent = Math.floor((i - 1) / 2);
+    if (heapKey[parent] <= heapKey[i]) {
+      break;
+    }
+    /** const tk: Number */
+    const tk = heapKey[parent];
+    heapKey[parent] = heapKey[i];
+    heapKey[i] = tk;
+    /** const tv: Number */
+    const tv = heapVal[parent];
+    heapVal[parent] = heapVal[i];
+    heapVal[i] = tv;
+    i = parent;
+  }
+}
+/** let popKey: Number */
+let popKey = 0;
+/** function heapPop(Number[], Number[]) => Number */
+function heapPop(heapKey, heapVal) {
+  /** const top: Number */
+  const top = heapVal[0];
+  popKey = heapKey[0];
+  /** const lastK: Number */
+  const lastK = heapKey[heapKey.length - 1];
+  /** const lastV: Number */
+  const lastV = heapVal[heapVal.length - 1];
+  heapKey.pop();
+  heapVal.pop();
+  /** const n: Number */
+  const n = heapKey.length;
+  if (n > 0) {
+    heapKey[0] = lastK;
+    heapVal[0] = lastV;
+    /** let i: Number */
+    let i = 0;
+    while (true) {
+      /** const l: Number */
+      const l = (2 * i) + 1;
+      /** const r: Number */
+      const r = l + 1;
+      /** let m: Number */
+      let m = i;
+      if ((l < n) && (heapKey[l] < heapKey[m])) {
+        m = l;
+      }
+      if ((r < n) && (heapKey[r] < heapKey[m])) {
+        m = r;
+      }
+      if (m === i) {
+        break;
+      }
+      /** const tk: Number */
+      const tk = heapKey[m];
+      heapKey[m] = heapKey[i];
+      heapKey[i] = tk;
+      /** const tv: Number */
+      const tv = heapVal[m];
+      heapVal[m] = heapVal[i];
+      heapVal[i] = tv;
+      i = m;
+    }
+  }
+  return top;
+}
+/** function shortestPaths<a> where Indexable a Number Number, IndexWrite a => (Number, a) => Number */
+function shortestPaths(source, dist) {
+  /** const heapKey: Number[] */
+  const heapKey = [];
+  /** const heapVal: Number[] */
+  const heapVal = [];
+  /** var v: Number */
+  for (var v = 0; v < V; v++) {
+    dist[v] = Infinity;
+  }
+  dist[source] = 0;
+  heapPush(heapKey, heapVal, 0, source);
+  /** let settled: Number */
+  let settled = 0;
+  while (heapKey.length > 0) {
+    /** const u: Number */
+    const u = heapPop(heapKey, heapVal);
+    /** const d: Number */
+    const d = popKey;
+    if (d > dist[u]) {
+      continue;
+    }
+    settled++;
+    /** var e: Number */
+    for (var e = offsets[u]; e < offsets[u + 1]; e++) {
+      /** const v: Number */
+      const v = targets[e];
+      /** const nd: Number */
+      const nd = d + weights[e];
+      if (nd < dist[v]) {
+        dist[v] = nd;
+        heapPush(heapKey, heapVal, nd, v);
+      }
+    }
+  }
+  return settled;
+}
+/** function main() => String */
+function main() {
+  /** const lines: String[] */
+  const lines = [];
+  /** const dist: Number[] */
+  const dist = [];
+  /** var v: Number */
+  for (var v = 0; v < V; v++) {
+    dist.push(0);
+  }
+  /** const sources: Number[] */
+  const sources = [0, V - 1, Math.floor(V / 2) + Math.floor(N / 3)];
+  /** var s: Number */
+  for (var s of sources) {
+    /** const settled: Number */
+    const settled = shortestPaths(s, dist);
+    /** let far: Number */
+    let far = 0;
+    /** let sum: Number */
+    let sum = 0;
+    /** var v: Number */
+    for (var v = 0; v < V; v++) {
+      far = Math.max(far, dist[v]);
+      sum += dist[v];
+    }
+    lines.push(`source ${s}: settled ${settled}, farthest ${far}, mean ${Math.round(sum / V)}`);
+  }
+  return lines.join("\n");
+}
+/** let report: String */
+let report = "";
+/** var iteration: Number */
+for (var iteration = 0; iteration < 4; iteration++) {
+  /** const t0: Number */
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);
+All checks passed: examples/go-backend/dijkstra.js (13 symbols) in <time>
+--- stderr

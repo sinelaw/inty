@@ -1,0 +1,13 @@
+$ inty examples/playground/features/callable-rows.js
+exit: 0
+--- stdout
+/** var c: String */
+var c = String.fromCharCode(65);
+/** var s: String */
+var s = String(42);
+/** var arr: Number[] */
+var arr = [1, 2, 3];
+/** var stringified: String[] */
+var stringified = arr.map(String);
+All checks passed: examples/playground/features/callable-rows.js (4 symbols) in <time>
+--- stderr

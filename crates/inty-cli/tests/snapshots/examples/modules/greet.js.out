@@ -1,0 +1,15 @@
+$ inty examples/modules/greet.js
+exit: 0
+--- stdout
+export default function greet(name) {
+  return `hi ${name}`;
+};
+All checks passed: examples/modules/greet.js (2 symbols) in <time>
+--- stderr
+
+$ inty declarations examples/modules/greet.js
+exit: 0
+--- stdout
+/** const default: <f12>(f12) => String */
+const default;
+--- stderr

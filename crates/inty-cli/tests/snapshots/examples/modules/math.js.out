@@ -1,0 +1,23 @@
+$ inty examples/modules/math.js
+exit: 0
+--- stdout
+/** function square(Number) => Number */
+function square(n) {
+  return n * n;
+}
+/** function cube(Number) => Number */
+function cube(n) {
+  return (n * n) * n;
+}
+export { square, cube as pow3 };
+All checks passed: examples/modules/math.js (2 symbols) in <time>
+--- stderr
+
+$ inty declarations examples/modules/math.js
+exit: 0
+--- stdout
+/** const square: (Number) => Number */
+const square;
+/** const pow3: (Number) => Number */
+const pow3;
+--- stderr

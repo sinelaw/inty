@@ -1,0 +1,34 @@
+$ inty examples/modules/store.js
+exit: 0
+--- stdout
+/** export let state: {
+    count: Number,
+    history: Number[]
+} */
+export let state = {count: 0, history: []};
+export function increment() {
+  state.count = state.count + 1;
+  state.history.push(state.count);
+}
+export function reset() {
+  state.count = 0;
+  state.history = [];
+}
+export function snapshot() {
+  return {count: state.count, history: state.history};
+}
+All checks passed: examples/modules/store.js (4 symbols) in <time>
+--- stderr
+
+$ inty declarations examples/modules/store.js
+exit: 0
+--- stdout
+/** const state: {count: Number, history: Number[]} */
+const state;
+/** const increment: () => Undefined */
+const increment;
+/** const reset: () => Undefined */
+const reset;
+/** const snapshot: () => {count: Number, history: Number[]} */
+const snapshot;
+--- stderr

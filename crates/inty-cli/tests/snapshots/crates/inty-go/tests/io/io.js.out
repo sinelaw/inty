@@ -1,0 +1,42 @@
+$ inty crates/inty-go/tests/io/io.js
+exit: 0
+--- stdout
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import process from "node:process";
+/** const args: String[] */
+const args = process.argv.slice(2);
+if (args.length !== 2) {
+  process.stderr.write("usage: io <input> <outdir>\n");
+  process.exit(2);
+}
+/** const text: String */
+const text = readFileSync(args[0], "utf8");
+/** const lines: String[] */
+const lines = text.trimEnd().split("\n");
+process.stdout.write(`${lines.length} lines
+`);
+/** var line: String */
+for (var line of lines) {
+  /** const $destr$0: String[] */
+  /** const key: String */
+  /** const value: String */
+  const $destr$0 = [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)], key = $destr$0[0], value = $destr$0[1];
+  process.stdout.write(((key.padEnd(6, ".") + "|") + value.trim().padStart(8)) + "|\n");
+}
+/** const csv: String */
+const csv = "a,b,,c";
+console.log(csv.split(",").join(" / "));
+console.log(csv.split(",", 2).join(" / "));
+console.log(("x-y-z".replace("-", "+") + " ") + "x-y-z".replaceAll("-", "[$&]"));
+console.log((((String("banana".lastIndexOf("an")) + " ") + String("banana".indexOf("an", 2))) + " ") + "banana".charAt(3));
+console.log(((("[" + "  pad  ".trimStart()) + "][") + "  pad  ".trimEnd()) + "]");
+console.log((String("http://x".startsWith("//", 5)) + " ") + "ab".concat("cd"));
+/** const out: String */
+const out = args[1] + "/out.txt";
+writeFileSync(out, "first\n");
+appendFileSync(out, "second\n");
+console.log((String(existsSync(out)) + " ") + String(existsSync(args[1] + "/missing")));
+process.stderr.write("done\n");
+process.exit(3);
+All checks passed: crates/inty-go/tests/io/io.js (5 symbols) in <time>
+--- stderr

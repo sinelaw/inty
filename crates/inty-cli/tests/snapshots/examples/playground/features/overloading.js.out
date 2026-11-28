@@ -1,0 +1,13 @@
+$ inty examples/playground/features/overloading.js
+exit: 0
+--- stdout
+/** function add<a> where Plus a => (a, a) => a */
+function add(x, y) {
+  return x + y;
+}
+/** var sum: Number */
+var sum = add(1, 2);
+/** var concat: String */
+var concat = add("foo", "bar");
+All checks passed: examples/playground/features/overloading.js (3 symbols) in <time>
+--- stderr

@@ -1,0 +1,43 @@
+$ inty crates/inty/tests/test_array_length.js
+exit: 0
+--- stdout
+/** var arr: Number[] */
+var arr = [1, 2, 3];
+/** var len: Number */
+var len = arr.length;
+/** var i: Number */
+for (var i = 0; i < arr.length; i++) {
+  /** var x: Number */
+  var x = arr[i];
+}
+var empty = [];
+/** var emptyLen: Number */
+var emptyLen = empty.length;
+/** function makeArray() => Number[] */
+function makeArray() {
+  return [1, 2, 3];
+}
+/** var arrLen: Number */
+var arrLen = makeArray().length;
+/** function getLength<a, b> where a has {length: b} => (a) => b */
+function getLength(arr) {
+  return arr.length;
+}
+/** var numbers: Number[] */
+var numbers = [1, 2, 3];
+/** var numLen: Number */
+var numLen = getLength(numbers);
+function map(arr, fn) {
+  var result = [];
+  /** var i: Number */
+  for (var i = 0; i < arr.length; i++) {
+    result[i] = fn(arr[i]);
+  }
+  return result;
+}
+/** var doubled: Number[] */
+var doubled = map([1, 2, 3], function(x) {
+  return x * 2;
+});
+All checks passed: crates/inty/tests/test_array_length.js (11 symbols) in <time>
+--- stderr

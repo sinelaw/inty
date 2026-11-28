@@ -1,0 +1,27 @@
+$ inty examples/playground/features/jsdoc-at-type.js
+exit: 0
+--- stdout
+/** const api: {add: Null | ((Number, Number) => Number), enabled: Boolean, greet: Null | ((String) => String)} */
+const api = {greet: null, add: null, enabled: true};
+/** function greet(String) => String */
+function greet(name) {
+  return "Hello, " + name;
+}
+/** function add<a> where Plus a => (a, a) => a */
+function add(x, y) {
+  return x + y;
+}
+api.greet = greet;
+api.add = add;
+/** const g: Null | ((String) => String) */
+const g = api.greet;
+/** var msg: String */
+var msg = g ? g("world") : "";
+/** const a: Null | ((Number, Number) => Number) */
+const a = api.add;
+/** var n: Number */
+var n = a ? a(1, 2) : 0;
+/** var on: Boolean */
+var on = api.enabled && true;
+All checks passed: examples/playground/features/jsdoc-at-type.js (8 symbols) in <time>
+--- stderr

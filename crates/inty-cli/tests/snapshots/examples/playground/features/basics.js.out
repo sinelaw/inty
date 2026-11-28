@@ -1,0 +1,23 @@
+$ inty examples/playground/features/basics.js
+exit: 0
+--- stdout
+/** var n: Number */
+var n = 42;
+/** var s: String */
+var s = "hello";
+/** var b: Boolean */
+var b = true;
+/** function square(Number) => Number */
+function square(x) {
+  return x * x;
+}
+/** var nine: Number */
+var nine = square(3);
+/** function greet(String) => String */
+function greet(name) {
+  return "Hello, " + name;
+}
+/** var hi: String */
+var hi = greet("world");
+All checks passed: examples/playground/features/basics.js (7 symbols) in <time>
+--- stderr

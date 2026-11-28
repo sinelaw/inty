@@ -1,0 +1,26 @@
+$ inty examples/go-backend/fib.js
+exit: 0
+--- stdout
+/** function fib(Number) => Number */
+function fib(n) {
+  if (n < 2) {
+    return n;
+  }
+  return fib(n - 1) + fib(n - 2);
+}
+/** function main() => String */
+function main() {
+  return String(fib(38));
+}
+/** let report: String */
+let report = "";
+/** var iteration: Number */
+for (var iteration = 0; iteration < 4; iteration++) {
+  /** const t0: Number */
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);
+All checks passed: examples/go-backend/fib.js (3 symbols) in <time>
+--- stderr

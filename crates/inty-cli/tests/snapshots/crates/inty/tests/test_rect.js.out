@@ -1,0 +1,81 @@
+$ inty crates/inty/tests/test_rect.js
+exit: 1
+--- stdout
+--- stderr
+
+Warning: this comparison is always true: the type of the operand cannot violate it
+    ╭─[ crates/inty/tests/test_rect.js:23:13 ]
+    │
+ 23 │         if (typeof actual === 'number') {
+    │             ─────────────┬────────────  
+    │                          ╰────────────── this comparison is always true: the type of the operand cannot violate it
+────╯
+
+
+Warning: this comparison is always false: the type of the operand cannot satisfy it
+    ╭─[ crates/inty/tests/test_rect.js:27:13 ]
+    │
+ 27 │         if (typeof actual === 'object') {
+    │             ─────────────┬────────────  
+    │                          ╰────────────── this comparison is always false: the type of the operand cannot satisfy it
+────╯
+
+Error: Undefined variable: 'arguments'
+    ╭─[ crates/inty/tests/test_rect.js:15:9 ]
+    │
+ 15 │     if (arguments.length == 1)
+    │         ────┬────  
+    │             ╰────── Undefined variable: 'arguments'
+────╯
+Error: Property 'constructor' not found in type Number
+    ╭─[ crates/inty/tests/test_rect.js:29:17 ]
+    │
+ 29 │             &&  actual.constructor === expected.constructor
+    │                 ─────────┬────────  
+    │                          ╰────────── Property 'constructor' not found in type Number
+────╯
+Error: Property 'constructor' not found in type Number
+    ╭─[ crates/inty/tests/test_rect.js:37:17 ]
+    │
+ 37 │                 get_full_type(actual) + ":|" + actual + "|, expected " +
+    │                 ──────┬──────  
+    │                       ╰──────── Property 'constructor' not found in type Number
+    │
+    ├─[ crates/inty/tests/test_rect.js:37:17 ]
+    │
+  9 │             if (o.constructor && o.constructor.name)
+    │                 ──────┬──────  
+    │                       ╰──────── required here, in the body of the function this uses
+────╯
+Error: Branches have different types: 'Undefined' and 'Boolean'
+    ╭─[ crates/inty/tests/test_rect.js:3:1 ]
+    │
+  3 │ ╭─▶ function assert(actual, expected, message) {
+    ┆ ┆   
+ 40 │ ├─▶ }
+    │ │       
+    │ ╰─────── Branches have different types: 'Undefined' and 'Boolean'
+    │     
+    │     Help: inty doesn't infer a union from branches; annotate the result (e.g. `/** const v: Undefined | Boolean */`) if one is meant
+────╯
+Error: Undefined variable: 'Rectangle'
+    ╭─[ crates/inty/tests/test_rect.js:50:14 ]
+    │
+ 50 │     r1 = new Rectangle(100, 200);
+    │              ────┬────  
+    │                  ╰────── Undefined variable: 'Rectangle'
+────╯
+Error: Undefined variable: 'FilledRectangle'
+    ╭─[ crates/inty/tests/test_rect.js:55:14 ]
+    │
+ 55 │     r2 = new FilledRectangle(100, 200, 0x123456);
+    │              ───────┬───────  
+    │                     ╰───────── Undefined variable: 'FilledRectangle'
+────╯
+Error: Undefined variable: 'Rectangle'
+    ╭─[ crates/inty/tests/test_rect.js:61:12 ]
+    │
+ 61 │     func = Rectangle.getClosure("abcd");
+    │            ────┬────  
+    │                ╰────── Undefined variable: 'Rectangle'
+────╯

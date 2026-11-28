@@ -1,0 +1,54 @@
+$ inty crates/inty-go/tests/programs/arrays.js
+exit: 0
+--- stdout
+/** function show<a, c> where a has {join: {(String) => String | c}} => (a) => String */
+function show(xs) {
+  return ("[" + xs.join(",")) + "]";
+}
+/** const a: Number[] */
+const a = [0, 1, 2, 3, 4, 5, 6, 7];
+console.log((show(a.splice(2, 3)) + " ") + show(a));
+a.splice(1, 0, 10, 11);
+console.log(show(a));
+a.splice(-2, 1, 20);
+console.log(show(a));
+console.log((show(a.splice(3)) + " ") + show(a));
+console.log((show(a.splice(-100, 1, 30, 31, 32, 33)) + " ") + show(a));
+console.log((show(a.splice(100, 5, 40)) + " ") + show(a));
+console.log((show(a.splice(1.7, 1.9)) + " ") + show(a));
+console.log((show(a.splice(1, -3, 50)) + " ") + show(a));
+a.splice(0, a.length);
+console.log((show(a) + " ") + String(a.length));
+/** const recs: {id: Number}[] */
+const recs = [{id: 1}, {id: 2}, {id: 3}];
+/** const moved: {id: Number}[] */
+const moved = recs.splice(0, 1);
+recs.splice(1, 0, moved[0]);
+moved[0].id = 9;
+console.log(recs.map((r) => {
+  return String(r.id);
+}).join(","));
+/** const s: String[] */
+const s = ["b", "c"];
+console.log(s.unshift("a"));
+s.unshift("z");
+console.log(s.join(""));
+/** const big: Number[] */
+const big = [];
+/** var i: Number */
+for (var i = 0; i < 100000; i++) big.push(i % 7);
+/** let sum: Number */
+let sum = 0;
+/** var i: Number */
+for (var i = 0; i < big.length; i++) sum += big[i];
+console.log((String(big.length) + " ") + String(sum));
+/** const n: Number[] */
+const n = [];
+console.log(n.push(5) + n.push(6));
+/** const filled: Number[] */
+const filled = new Array(4).fill(-1);
+filled[2] = 7;
+console.log(filled.join(","));
+console.log(Array(3).fill("ab").join("|"));
+All checks passed: crates/inty-go/tests/programs/arrays.js (9 symbols) in <time>
+--- stderr

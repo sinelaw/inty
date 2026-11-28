@@ -1,0 +1,51 @@
+$ inty examples/go-backend/collatz.js
+exit: 0
+--- stdout
+/** function chainLength(Number) => Number */
+function chainLength(start) {
+  /** let n: Number */
+  let n = start;
+  /** let steps: Number */
+  let steps = 1;
+  while (n !== 1) {
+    if ((n % 2) === 0) {
+      n = n / 2;
+    } else {
+      n = (3 * n) + 1;
+    }
+    steps++;
+  }
+  return steps;
+}
+/** function main() => String */
+function main() {
+  /** const lines: String[] */
+  const lines = [];
+  /** let best: Number */
+  let best = 0;
+  /** let bestStart: Number */
+  let bestStart = 0;
+  /** var i: Number */
+  for (var i = 1; i < 1000000; i++) {
+    /** const len: Number */
+    const len = chainLength(i);
+    if (len > best) {
+      best = len;
+      bestStart = i;
+    }
+  }
+  lines.push(`${bestStart} ${best}`);
+  return lines.join("\n");
+}
+/** let report: String */
+let report = "";
+/** var iteration: Number */
+for (var iteration = 0; iteration < 4; iteration++) {
+  /** const t0: Number */
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);
+All checks passed: examples/go-backend/collatz.js (3 symbols) in <time>
+--- stderr

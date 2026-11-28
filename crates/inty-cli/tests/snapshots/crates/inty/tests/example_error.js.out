@@ -1,0 +1,17 @@
+$ inty crates/inty/tests/example_error.js
+exit: 1
+--- stdout
+--- stderr
+Error: Property 'price' not found in type {cost: Number, name: String}
+    ╭─[ crates/inty/tests/example_error.js:11:13 ]
+    │
+ 11 │ console.log(calculateTotal(item, 2));
+    │             ───────┬──────  
+    │                    ╰──────── Property 'price' not found in type {cost: Number, name: String}
+    │
+    ├─[ crates/inty/tests/example_error.js:11:13 ]
+    │
+  3 │   return product.price * quantity;
+    │          ──────┬──────  
+    │                ╰──────── required here, in the body of the function this uses
+────╯

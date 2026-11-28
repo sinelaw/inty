@@ -1,0 +1,68 @@
+$ inty crates/inty-go/tests/programs/functions.js
+exit: 0
+--- stdout
+/** function makeCounter() => () => Number */
+function makeCounter() {
+  /** let count: Number */
+  let count = 0;
+  return () => {
+  count++;
+  return count;
+};
+}
+/** const next: () => Number */
+const next = makeCounter();
+next();
+next();
+console.log(next());
+/** const fns: (() => Number)[] */
+const fns = [];
+/** var i: Number */
+for (var i = 0; i < 3; i++) {
+  fns.push(() => {
+  return i * 10;
+});
+}
+console.log(fns.map((f) => {
+  return f();
+}).join(","));
+/** function sumTo(Number) => Number */
+function sumTo(n) {
+  function go(i, acc) {
+    if (i > n) {
+      return acc;
+    }
+    return go(i + 1, acc + i);
+  }
+  return go(1, 0);
+}
+console.log(sumTo(100));
+/** const xs: Number[] */
+const xs = [5, 3, 8, 1];
+console.log(xs.filter((x) => {
+  return x > 2;
+}).map((x) => {
+  return x * 2;
+}).reduce((a, b) => {
+  return a + b;
+}, 0));
+console.log(xs.some((x) => {
+  return x === 8;
+}));
+console.log(xs.every((x) => {
+  return x > 0;
+}));
+console.log(xs.findIndex((x) => {
+  return x === 8;
+}));
+xs.forEach((x) => {
+  console.log(x);
+});
+function apply(f, x) {
+  return f(f(x));
+}
+console.log(apply((v) => {
+  return v + 1;
+}, 40));
+All checks passed: crates/inty-go/tests/programs/functions.js (6 symbols) in <time>
+--- stderr

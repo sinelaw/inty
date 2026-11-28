@@ -1,0 +1,112 @@
+$ inty crates/inty-go/tests/programs/loops.js
+exit: 0
+--- stdout
+/** const xs: Number[] */
+const xs = [1];
+/** let s: Number */
+let s = 0;
+/** var i: Number */
+for (var i = 0; i < 5; i++) {
+  xs[xs.length] = i * 10;
+  s += xs[xs.length - 1];
+}
+console.log(`${xs.length} ${s}`);
+/** const a: Number[] */
+const a = [1, 2];
+/** const b: Number[] */
+const b = a;
+/** var i: Number */
+for (var i = 0; i < 4; i++) {
+  a[a.length] = i;
+  b[0] = b[0] + a.length;
+}
+console.log(`${a.length} ${b.length} ${a[0]} ${b[5]}`);
+/** const holder: {items: Number[]} */
+const holder = {items: [7]};
+/** const items: Number[] */
+const items = holder.items;
+/** let t: Number */
+let t = 0;
+/** var i: Number */
+for (var i = 0; i < 3; i++) {
+  holder.items[holder.items.length] = i;
+  t += items[items.length - 1] + items.length;
+}
+console.log(`${t} ${items.length}`);
+/** let grid: Int32Array */
+let grid = new Int32Array(2);
+/** function regrow() => Undefined */
+function regrow() {
+  grid = new Int32Array(grid.length + 1);
+}
+/** let lens: Number */
+let lens = 0;
+/** var i: Number */
+for (var i = 0; i < 3; i++) {
+  regrow();
+  grid[0] = i;
+  lens += grid.length + grid[0];
+}
+console.log(lens);
+/** const counts: Int32Array */
+const counts = new Int32Array(4);
+/** function bucket(Number) => Number */
+function bucket(v) {
+  return v % 4;
+}
+/** var i: Number */
+for (var i = 0; i < 10; i++) {
+  counts[bucket(i)] += 1;
+}
+console.log(`${counts[0]} ${counts[1]} ${counts[2]} ${counts[3]}`);
+/** const m: Number[] */
+const m = [3, 1, 4, 1, 5, 9, 2, 6];
+/** let found: Number */
+let found = -1;
+outer: /** var i: Number */
+for (var i = 0; i < m.length; i++) {
+  /** var j: Number */
+  for (var j = i + 1; j < m.length; j++) {
+    if ((m[i] + m[j]) === 11) {
+      found = (i * 10) + j;
+      break outer;
+    }
+    if (m[j] > m[i]) {
+      continue outer;
+    }
+  }
+}
+console.log(found);
+/** const w: Number[] */
+const w = [5, 4, 3, 2, 1];
+/** let k: Number */
+let k = 0;
+do {
+  /** const tmp: Number */
+  const tmp = w[k];
+  w[k] = w[(w.length - 1) - k];
+  w[(w.length - 1) - k] = tmp;
+  k++;
+} while (k < 2);
+console.log(`${w[0]} ${w[1]} ${w[2]} ${w[3]} ${w[4]}`);
+/** const g: Number[] */
+const g = [1, 2, 3];
+/** var r: Number */
+for (var r = 0; r < 2; r++) {
+  /** let j: Number */
+  let j = 1;
+  /** const x: Number */
+  const x = g[j];
+  g[j] = x + 10;
+  j = g.length;
+  g[j] = x + r;
+  /** let q: Number */
+  let q = g.length;
+  if ((q > 100) && (g[q] > 0)) {
+    q = 0;
+  }
+  g[q] = 7;
+}
+console.log(`${g.length} ${g[1]} ${g[3]} ${g[4]} ${g[5]} ${g[6]}`);
+All checks passed: crates/inty-go/tests/programs/loops.js (17 symbols) in <time>
+--- stderr

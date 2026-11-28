@@ -1,0 +1,15 @@
+$ inty examples/playground/features/structural.js
+exit: 0
+--- stdout
+/** function getName<a, b> where a has {name: b} => (a) => b */
+function getName(obj) {
+  return obj.name;
+}
+/** var alice: String */
+var alice = getName({name: "Alice", age: 30});
+/** var rover: String */
+var rover = getName({name: "Rover", breed: "Labrador"});
+/** var ship: String */
+var ship = getName({name: "USS Enterprise", warpFactor: 9});
+All checks passed: examples/playground/features/structural.js (4 symbols) in <time>
+--- stderr

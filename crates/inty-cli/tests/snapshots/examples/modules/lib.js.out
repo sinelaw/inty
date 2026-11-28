@@ -1,0 +1,21 @@
+$ inty examples/modules/lib.js
+exit: 0
+--- stdout
+export { double, triple as triplicate } from "./lib-internal.js";
+export { default } from "./lib-internal.js";
+export * as internals from "./lib-internal.js";
+All checks passed: examples/modules/lib.js (0 symbols) in <time>
+--- stderr
+
+$ inty declarations examples/modules/lib.js
+exit: 0
+--- stdout
+/** const double: <g12> where Plus g12 => (g12) => g12 */
+const double;
+/** const triplicate: <k12> where Plus k12 => (k12) => k12 */
+const triplicate;
+/** const default: () => String */
+const default;
+/** const internals: module "<root>/examples/modules/lib-internal.js" */
+const internals;
+--- stderr

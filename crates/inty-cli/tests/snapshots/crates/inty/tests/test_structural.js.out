@@ -1,0 +1,21 @@
+$ inty crates/inty/tests/test_structural.js
+exit: 0
+--- stdout
+/** function getName<a, b> where a has {name: b} => (a) => b */
+function getName(obj) {
+  return obj.name;
+}
+/** var person: {age: Number, name: String} */
+var person = {name: "Alice", age: 30};
+/** var dog: {breed: String, name: String} */
+var dog = {name: "Rover", breed: "Labrador"};
+/** var product: {name: String, price: Number} */
+var product = {name: "Widget", price: 9.99};
+/** var name1: String */
+var name1 = getName(person);
+/** var name2: String */
+var name2 = getName(dog);
+/** var name3: String */
+var name3 = getName(product);
+All checks passed: crates/inty/tests/test_structural.js (7 symbols) in <time>
+--- stderr

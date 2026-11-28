@@ -1,0 +1,15 @@
+$ inty examples/modules/app-namespace.js
+exit: 0
+--- stdout
+import * as id from "./identity.js";
+/** const n: Number */
+const n = id.id(42);
+/** const s: String */
+const s = id.id("hello");
+/** const p: Number */
+const p = id.PI;
+console.log(n);
+console.log(s);
+console.log(p);
+All checks passed: examples/modules/app-namespace.js (3 symbols) in <time>
+--- stderr

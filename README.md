@@ -289,7 +289,9 @@ inty is heavily tested against itself: every operator's typing rule is
 cross-checked against an operational semantics, and a property test generates
 well-typed programs by construction and reduces them to verify they never get
 "stuck". See [ARCHITECTURE.md](ARCHITECTURE.md) for the module layout and the
-four test layers.
+four test layers. Every example and test program that inty accepts is also run
+under Node, and what inty prints for each is pinned by a committed snapshot
+([docs/regression-checks.md](docs/regression-checks.md)).
 
 ## Background
 

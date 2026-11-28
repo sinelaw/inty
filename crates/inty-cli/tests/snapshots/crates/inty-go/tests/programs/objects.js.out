@@ -1,0 +1,46 @@
+$ inty crates/inty-go/tests/programs/objects.js
+exit: 0
+--- stdout
+/** function point<a, b>(a, b) => {x: a, y: b} */
+function point(x, y) {
+  return {x: x, y: y};
+}
+/** function norm2<a> where a has {x: Number, y: Number} => (a) => Number */
+function norm2(p) {
+  return (p.x * p.x) + (p.y * p.y);
+}
+/** const pts: {x: Number, y: Number}[] */
+const pts = [point(1, 2), point(3, 4)];
+pts.push(point(5, 6));
+/** let s: Number */
+let s = 0;
+/** var p: {x: Number, y: Number} */
+for (var p of pts) {
+  s += norm2(p);
+}
+console.log(s);
+pts[0].x = 10;
+console.log(pts[0].x + pts.length);
+/** const alias: {x: Number, y: Number}[] */
+const alias = pts;
+alias.push(point(0, 0));
+console.log(pts.length);
+/** const grid: Number[][] */
+const grid = [];
+/** var i: Number */
+for (var i = 0; i < 3; i++) {
+  grid.push([i, i * 2, i * 3]);
+}
+console.log(grid[2][1]);
+/** const filled: Number[] */
+const filled = [];
+filled[0] = 1;
+filled[1] = 2;
+console.log(filled.join("-"));
+/** let last: {x: Number, y: Number} */
+let last = pts[pts.length - 1];
+pts.pop();
+console.log(last.x + last.y);
+console.log(pts.indexOf(pts[1]));
+All checks passed: crates/inty-go/tests/programs/objects.js (8 symbols) in <time>
+--- stderr

@@ -1,0 +1,938 @@
+$ inty crates/inty/tests/test_builtin.js
+exit: 1
+--- stdout
+--- stderr
+
+Warning: this comparison is always true: the type of the operand cannot violate it
+    ╭─[ crates/inty/tests/test_builtin.js:27:13 ]
+    │
+ 27 │         if (typeof actual === 'number') {
+    │             ─────────────┬────────────  
+    │                          ╰────────────── this comparison is always true: the type of the operand cannot violate it
+────╯
+
+
+Warning: this comparison is always false: the type of the operand cannot satisfy it
+    ╭─[ crates/inty/tests/test_builtin.js:31:13 ]
+    │
+ 31 │         if (typeof actual === 'object') {
+    │             ─────────────┬────────────  
+    │                          ╰────────────── this comparison is always false: the type of the operand cannot satisfy it
+────╯
+
+Error: Undefined variable: 'arguments'
+    ╭─[ crates/inty/tests/test_builtin.js:19:9 ]
+    │
+ 19 │     if (arguments.length == 1)
+    │         ────┬────  
+    │             ╰────── Undefined variable: 'arguments'
+────╯
+Error: Property 'constructor' not found in type Number
+    ╭─[ crates/inty/tests/test_builtin.js:33:17 ]
+    │
+ 33 │             &&  actual.constructor === expected.constructor
+    │                 ─────────┬────────  
+    │                          ╰────────── Property 'constructor' not found in type Number
+────╯
+Error: Property 'constructor' not found in type Number
+    ╭─[ crates/inty/tests/test_builtin.js:41:17 ]
+    │
+ 41 │                 get_full_type(actual) + ":|" + actual + "|, expected " +
+    │                 ──────┬──────  
+    │                       ╰──────── Property 'constructor' not found in type Number
+    │
+    ├─[ crates/inty/tests/test_builtin.js:41:17 ]
+    │
+ 13 │             if (o.constructor && o.constructor.name)
+    │                 ──────┬──────  
+    │                       ╰──────── required here, in the body of the function this uses
+────╯
+Error: Branches have different types: 'Undefined' and 'Boolean'
+    ╭─[ crates/inty/tests/test_builtin.js:7:1 ]
+    │
+  7 │ ╭─▶ function assert(actual, expected, message) {
+    ┆ ┆   
+ 44 │ ├─▶ }
+    │ │       
+    │ ╰─────── Branches have different types: 'Undefined' and 'Boolean'
+    │     
+    │     Help: inty doesn't infer a union from branches; annotate the result (e.g. `/** const v: Undefined | Boolean */`) if one is meant
+────╯
+Error: Undefined variable: 'arguments'
+    ╭─[ crates/inty/tests/test_builtin.js:77:24 ]
+    │
+ 77 │         for(i = 0; i < arguments.length; i++)
+    │                        ────┬────  
+    │                            ╰────── Undefined variable: 'arguments'
+────╯
+Error: Property 'call' not found in type (a, a) => a
+    ╭─[ crates/inty/tests/test_builtin.js:87:9 ]
+    │
+ 87 │     r = my_func.call(null, 1, 2);
+    │         ──────┬─────  
+    │               ╰─────── Property 'call' not found in type (a, a) => a
+────╯
+Error: Property 'apply' not found in type (a, a) => a
+    ╭─[ crates/inty/tests/test_builtin.js:90:9 ]
+    │
+ 90 │     r = my_func.apply(null, ["abc", 2]);
+    │         ──────┬──────  
+    │               ╰──────── Property 'apply' not found in type (a, a) => a
+────╯
+Error: Arity mismatch: the function takes 1 argument, but 3 are passed
+    ╭─[ crates/inty/tests/test_builtin.js:93:9 ]
+    │
+ 93 │     r = new Function("a", "b", "return a + b;");
+    │         ───────────────────┬───────────────────  
+    │                            ╰───────────────────── Arity mismatch: the function takes 1 argument, but 3 are passed
+    │ 
+    │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+────╯
+Error: Property 'bind' not found in type (a, b) => c[]
+    ╭─[ crates/inty/tests/test_builtin.js:96:9 ]
+    │
+ 96 │     g = f.bind(1, 2);
+    │         ───┬──  
+    │            ╰──── Property 'bind' not found in type (a, b) => c[]
+────╯
+Error: Property 'bind' not found in type (a) => Undefined
+     ╭─[ crates/inty/tests/test_builtin.js:102:9 ]
+     │
+ 102 │     g = constructor1.bind(null, 1);
+     │         ────────┬────────  
+     │                 ╰────────── Property 'bind' not found in type (a) => Undefined
+─────╯
+Error: Arity mismatch: the function takes 1 argument, but 0 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:103:9 ]
+     │
+ 103 │     r = new g();
+     │         ───┬───  
+     │            ╰───── Arity mismatch: the function takes 1 argument, but 0 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+Error: Property 'call' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+     ╭─[ crates/inty/tests/test_builtin.js:115:9 ]
+     │
+ 115 │     a = new Object();
+     │         ──────┬─────  
+     │               ╰─────── Property 'call' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+─────╯
+Error: Property 'defineProperty' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+     ╭─[ crates/inty/tests/test_builtin.js:121:5 ]
+     │
+ 121 │     Object.defineProperty(a, "y", { value: 3, writable: true, configurable: true, enumerable: true });
+     │     ──────────┬──────────  
+     │               ╰──────────── Property 'defineProperty' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+─────╯
+Error: Property 'defineProperty' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+     ╭─[ crates/inty/tests/test_builtin.js:124:5 ]
+     │
+ 124 │     Object.defineProperty(a, "z", { get: function () { return 4; }, set: function(val) { this.z_val = val; }, configurable: true, enumerable: true });
+     │     ──────────┬──────────  
+     │               ╰──────────── Property 'defineProperty' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+─────╯
+Error: Property 'create' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+     ╭─[ crates/inty/tests/test_builtin.js:135:9 ]
+     │
+ 135 │     b = Object.create(a);
+     │         ──────┬──────  
+     │               ╰──────── Property 'create' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+─────╯
+Error: Property 'setPrototypeOf' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+     ╭─[ crates/inty/tests/test_builtin.js:138:5 ]
+     │
+ 138 │     Object.setPrototypeOf(a, c);
+     │     ──────────┬──────────  
+     │               ╰──────────── Property 'setPrototypeOf' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+─────╯
+
+Error: Type mismatch: expected '{}', found '{x: Number}'
+     ╭─[ crates/inty/tests/test_builtin.js:160:5 ]
+     │
+ 160 │     a = {x: 1};
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected '{}', found '{x: Number}'
+     │ 
+     │ Help: unexpected field 'x' (the expected record type is closed)
+     │ 
+     │ Note: Cannot unify expected '{}' with found '{x: Number}'
+─────╯
+
+
+Error: Type mismatch: expected '{}', found 'Number[]'
+     ╭─[ crates/inty/tests/test_builtin.js:163:5 ]
+     │
+ 163 │     a = [1, 2];
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected '{}', found 'Number[]'
+     │ 
+     │ Note: Cannot unify expected '{}' with found 'Number[]'
+─────╯
+
+Error: Property 'x' not found in type {}
+     ╭─[ crates/inty/tests/test_builtin.js:116:5 ]
+     │
+ 116 │     a.x = 1;
+     │     ─┬─  
+     │      ╰─── Property 'x' not found in type {}
+─────╯
+
+Error: Type mismatch: expected 'Number[]', found '{fill: (a) => a[], length: Number}'
+     ╭─[ crates/inty/tests/test_builtin.js:184:5 ]
+     │
+ 184 │     a = new Array(10);
+     │     ────────┬────────  
+     │             ╰────────── Type mismatch: expected 'Number[]', found '{fill: (a) => a[], length: Number}'
+     │ 
+     │ Note: Cannot unify expected 'Number[]' with found '{fill: (a) => a[], length: Number}'
+─────╯
+
+Error: Arity mismatch: the function takes 1 argument, but 2 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:187:9 ]
+     │
+ 187 │     a = new Array(1, 2);
+     │         ───────┬───────  
+     │                ╰───────── Arity mismatch: the function takes 1 argument, but 2 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+Error: Arity mismatch: the function takes 1 argument, but 3 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:241:9 ]
+     │
+ 241 │     a = a.concat(4, [5, 6], 7);
+     │         ───────────┬──────────  
+     │                    ╰──────────── Arity mismatch: the function takes 1 argument, but 3 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+
+Error: Type mismatch: expected 'String', found 'Number'
+     ╭─[ crates/inty/tests/test_builtin.js:263:50 ]
+     │
+ 263 │     assert([1, 2, 3, 4].every(function(val, k) { log += val; assert(k, (val - 1)); return val != 5 }), true);
+     │                                                  ─────┬────  
+     │                                                       ╰────── Type mismatch: expected 'String', found 'Number'
+     │ 
+     │ Note: Cannot unify expected 'String' with found 'Number'
+─────╯
+
+
+Error: Type mismatch: expected 'String', found 'Number'
+     ╭─[ crates/inty/tests/test_builtin.js:267:49 ]
+     │
+ 267 │     assert([1, 2, 3, 4].some(function(val, k) { log += val; assert(k, (val - 1)); return val == 5 }), false);
+     │                                                 ─────┬────  
+     │                                                      ╰────── Type mismatch: expected 'String', found 'Number'
+     │ 
+     │ Note: Cannot unify expected 'String' with found 'Number'
+─────╯
+
+
+Error: Type mismatch: expected 'String', found 'Number'
+     ╭─[ crates/inty/tests/test_builtin.js:271:52 ]
+     │
+ 271 │     assert([1, 2, 3, 4].forEach(function(val, k) { log += val; assert(k, (val - 1)); }), void 0);
+     │                                                    ─────┬────  
+     │                                                         ╰────── Type mismatch: expected 'String', found 'Number'
+     │ 
+     │ Note: Cannot unify expected 'String' with found 'Number'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'Boolean'
+     ╭─[ crates/inty/tests/test_builtin.js:302:37 ]
+     │
+ 302 │     a.sort(function(a, b) { return (a < b) - (a > b) } );
+     │                                     ───────┬───────  
+     │                                            ╰───────── Type mismatch: expected 'Number', found 'Boolean'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'Boolean'
+─────╯
+
+Error: Array elements have different types: 'String' and 'Undefined'
+     ╭─[ crates/inty/tests/test_builtin.js:306:23 ]
+     │
+ 306 │     a = [ "b0", "z0", undefined, "b1", "a0", undefined, "z1", "a1", "a2"];
+     │                       ────┬────  
+     │                           ╰────── Array elements have different types: 'String' and 'Undefined'
+     │ 
+     │ Help: an array holds one element type. For a fixed group of values annotate a tuple, e.g. `/** const p: [String, Undefined] */` (or `[String, Undefined][]` for a list of them), or use a record `{ a: String, b: Undefined }`; for either type in any position, annotate the element union `(String | Undefined)[]`
+─────╯
+
+Error: Type mismatch: expected 'Number', found 'Boolean'
+     ╭─[ crates/inty/tests/test_builtin.js:307:37 ]
+     │
+ 307 │     a.sort(function(a, b) { return (a[0] > b[0]) - (a[0] < b[0]) } );
+     │                                     ─────────────┬─────────────  
+     │                                                  ╰─────────────── Type mismatch: expected 'Number', found 'Boolean'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'Boolean'
+─────╯
+
+Error: Type 'Number' is not an instance of Indexable
+     ╭─[ crates/inty/tests/test_builtin.js:307:37 ]
+     │
+ 307 │     a.sort(function(a, b) { return (a[0] > b[0]) - (a[0] < b[0]) } );
+     │                                     ──┬─  
+     │                                       ╰─── Type 'Number' is not an instance of Indexable
+─────╯
+Error: Property 'NaN' not found in type Number[]
+     ╭─[ crates/inty/tests/test_builtin.js:318:44 ]
+     │
+ 318 │     assert_throws(TypeError, function () { a.NaN = 1; } );
+     │                                            ──┬──  
+     │                                              ╰──── Property 'NaN' not found in type Number[]
+─────╯
+Error: Property 'Infinity' not found in type Number[]
+     ╭─[ crates/inty/tests/test_builtin.js:320:44 ]
+     │
+ 320 │     assert_throws(TypeError, function () { a.Infinity = 1; } );
+     │                                            ─────┬────  
+     │                                                 ╰────── Property 'Infinity' not found in type Number[]
+─────╯
+
+Error: Type mismatch: expected 'Number', found '"1.2"'
+     ╭─[ crates/inty/tests/test_builtin.js:322:44 ]
+     │
+ 322 │     assert_throws(TypeError, function () { a["1.2"] = 1; } );
+     │                                            ────┬───  
+     │                                                ╰───── Type mismatch: expected 'Number', found '"1.2"'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found '"1.2"'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found '"NaN"'
+     ╭─[ crates/inty/tests/test_builtin.js:323:44 ]
+     │
+ 323 │     assert_throws(TypeError, function () { a["NaN"] = 1; } );
+     │                                            ────┬───  
+     │                                                ╰───── Type mismatch: expected 'Number', found '"NaN"'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found '"NaN"'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found '"Infinity"'
+     ╭─[ crates/inty/tests/test_builtin.js:324:44 ]
+     │
+ 324 │     assert_throws(TypeError, function () { a["Infinity"] = 1; } );
+     │                                            ──────┬──────  
+     │                                                  ╰──────── Type mismatch: expected 'Number', found '"Infinity"'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found '"Infinity"'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found '"-Infinity"'
+     ╭─[ crates/inty/tests/test_builtin.js:325:44 ]
+     │
+ 325 │     assert_throws(TypeError, function () { a["-Infinity"] = 1; } );
+     │                                            ───────┬──────  
+     │                                                   ╰──────── Type mismatch: expected 'Number', found '"-Infinity"'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found '"-Infinity"'
+─────╯
+
+
+Error: Type mismatch: expected 'String', found 'String[]'
+     ╭─[ crates/inty/tests/test_builtin.js:364:5 ]
+     │
+ 364 │     a = "a,b,c".split(",");
+     │     ───────────┬──────────  
+     │                ╰──────────── Type mismatch: expected 'String', found 'String[]'
+     │ 
+     │ Note: Cannot unify expected 'String' with found 'String[]'
+─────╯
+
+
+Error: Type mismatch: expected 'String', found 'String[]'
+     ╭─[ crates/inty/tests/test_builtin.js:366:5 ]
+     │
+ 366 │     a = ",b,c".split(",");
+     │     ──────────┬──────────  
+     │               ╰──────────── Type mismatch: expected 'String', found 'String[]'
+     │ 
+     │ Note: Cannot unify expected 'String' with found 'String[]'
+─────╯
+
+
+Error: Type mismatch: expected 'String', found 'String[]'
+     ╭─[ crates/inty/tests/test_builtin.js:368:5 ]
+     │
+ 368 │     a = "a,b,".split(",");
+     │     ──────────┬──────────  
+     │               ╰──────────── Type mismatch: expected 'String', found 'String[]'
+     │ 
+     │ Note: Cannot unify expected 'String' with found 'String[]'
+─────╯
+
+Error: Undefined variable: 'z'
+     ╭─[ crates/inty/tests/test_builtin.js:476:5 ]
+     │
+ 476 │     z = 2;
+     │     ┬  
+     │     ╰── Undefined variable: 'z'
+─────╯
+
+Error: Type mismatch: expected 'Uint8Array', found 'Int8Array'
+     ╭─[ crates/inty/tests/test_builtin.js:495:5 ]
+     │
+ 495 │     a = new Int8Array(3);
+     │     ──────────┬─────────  
+     │               ╰─────────── Type mismatch: expected 'Uint8Array', found 'Int8Array'
+     │ 
+     │ Note: Cannot unify expected 'Uint8Array' with found 'Int8Array'
+─────╯
+
+
+Error: Type mismatch: expected 'Uint8Array', found 'Int32Array'
+     ╭─[ crates/inty/tests/test_builtin.js:499:5 ]
+     │
+ 499 │     a = new Int32Array(3);
+     │     ──────────┬──────────  
+     │               ╰──────────── Type mismatch: expected 'Uint8Array', found 'Int32Array'
+     │ 
+     │ Note: Cannot unify expected 'Uint8Array' with found 'Int32Array'
+─────╯
+
+
+Error: Type mismatch: expected 'Uint8Array', found 'Uint8ClampedArray'
+     ╭─[ crates/inty/tests/test_builtin.js:504:5 ]
+     │
+ 504 │     a = new Uint8ClampedArray(4);
+     │     ──────────────┬─────────────  
+     │                   ╰─────────────── Type mismatch: expected 'Uint8Array', found 'Uint8ClampedArray'
+     │ 
+     │ Note: Cannot unify expected 'Uint8Array' with found 'Uint8ClampedArray'
+─────╯
+
+
+Error: Type mismatch: expected 'Uint8Array', found 'Uint32Array'
+     ╭─[ crates/inty/tests/test_builtin.js:513:5 ]
+     │
+ 513 │     a = new Uint32Array(buffer, 12, 1);
+     │     ─────────────────┬────────────────  
+     │                      ╰────────────────── Type mismatch: expected 'Uint8Array', found 'Uint32Array'
+     │ 
+     │ Note: Cannot unify expected 'Uint8Array' with found 'Uint32Array'
+─────╯
+
+
+Error: Type mismatch: expected 'Uint8Array', found 'Uint16Array'
+     ╭─[ crates/inty/tests/test_builtin.js:517:5 ]
+     │
+ 517 │     a = new Uint16Array(buffer, 2);
+     │     ───────────────┬──────────────  
+     │                    ╰──────────────── Type mismatch: expected 'Uint8Array', found 'Uint16Array'
+     │ 
+     │ Note: Cannot unify expected 'Uint8Array' with found 'Uint16Array'
+─────╯
+
+
+Error: Type mismatch: expected 'Uint8Array', found 'Float32Array'
+     ╭─[ crates/inty/tests/test_builtin.js:520:5 ]
+     │
+ 520 │     a = new Float32Array(buffer, 8, 1);
+     │     ─────────────────┬────────────────  
+     │                      ╰────────────────── Type mismatch: expected 'Uint8Array', found 'Float32Array'
+     │ 
+     │ Note: Cannot unify expected 'Uint8Array' with found 'Float32Array'
+─────╯
+
+
+Error: Type mismatch: expected 'Uint8Array', found 'Number[]'
+     ╭─[ crates/inty/tests/test_builtin.js:532:15 ]
+     │
+ 532 │         a.set([10, 11], 2);
+     │               ────┬───  
+     │                   ╰───── Type mismatch: expected 'Uint8Array', found 'Number[]'
+     │ 
+     │ Note: Cannot unify expected 'Uint8Array' with found 'Number[]'
+─────╯
+
+
+Error: Type mismatch: expected 'String', found 'Number'
+     ╭─[ crates/inty/tests/test_builtin.js:599:20 ]
+     │
+ 599 │         JSON.parse(tab[0]);
+     │                    ───┬──  
+     │                       ╰──── Type mismatch: expected 'String', found 'Number'
+     │ 
+     │ Note: Cannot unify expected 'String' with found 'Number'
+─────╯
+
+Error: Arity mismatch: the function takes 5 arguments, but 4 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:607:9 ]
+     │
+ 607 │         check_error_pos(e, SyntaxError, tab[1], tab[2]);
+     │         ───────────────────────┬───────────────────────  
+     │                                ╰───────────────────────── Arity mismatch: the function takes 5 arguments, but 4 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+Error: Type 'Null | String[]' is not an instance of Indexable
+     ╭─[ crates/inty/tests/test_builtin.js:659:12 ]
+     │
+ 659 │     assert(a[0], "bbbbbc");
+     │            ──┬─  
+     │              ╰─── Type 'Null | String[]' is not an instance of Indexable
+─────╯
+Error: Type 'Null | String[]' is not an instance of Indexable
+     ╭─[ crates/inty/tests/test_builtin.js:669:12 ]
+     │
+ 669 │     assert(/\c0/.exec("\\c0")[0], "\\c0");
+     │            ──────────┬──────────  
+     │                      ╰──────────── Type 'Null | String[]' is not an instance of Indexable
+─────╯
+
+Error: Type mismatch: expected 'Null | String[]', found 'Regex'
+     ╭─[ crates/inty/tests/test_builtin.js:713:5 ]
+     │
+ 713 │     a = /(?:)/gu;
+     │     ──────┬─────  
+     │           ╰─────── Type mismatch: expected 'Null | String[]', found 'Regex'
+     │ 
+     │ Note: Cannot unify expected 'Null | String[]' with found 'Regex'
+─────╯
+
+Error: Property 'lastIndex' not found in type Null | String[]: the value may be null
+     ╭─[ crates/inty/tests/test_builtin.js:714:5 ]
+     │
+ 714 │     a.lastIndex = 1;
+     │     ─────┬─────  
+     │          ╰─────── Property 'lastIndex' not found in type Null | String[]: the value may be null
+     │ 
+     │ Help: test it first (`if (x !== null) x.lastIndex`) or give a default (`(x ?? fallback).lastIndex`); to test a property, copy it into a `const` and test that
+─────╯
+Error: Property 'exec' not found in type Null | String[]: the value may be null
+     ╭─[ crates/inty/tests/test_builtin.js:715:5 ]
+     │
+ 715 │     a.exec("🐱");
+     │     ───┬──  
+     │        ╰──── Property 'exec' not found in type Null | String[]: the value may be null
+     │ 
+     │ Help: test it first (`if (x !== null) x.exec`) or give a default (`(x ?? fallback).exec`); to test a property, copy it into a `const` and test that
+─────╯
+Error: Arity mismatch: the function takes 2 arguments, but 1 is passed
+     ╭─[ crates/inty/tests/test_builtin.js:724:9 ]
+     │
+ 724 │     a = new RegExp(repeat("(?:", n) + "a+" + repeat(")", n));
+     │         ──────────────────────────┬─────────────────────────  
+     │                                   ╰─────────────────────────── Arity mismatch: the function takes 2 arguments, but 1 is passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+
+Error: Type mismatch: expected 'String', found 'Number'
+     ╭─[ crates/inty/tests/test_builtin.js:756:19 ]
+     │
+ 756 │         (1, eval)(tab[0]);
+     │                   ───┬──  
+     │                      ╰──── Type mismatch: expected 'String', found 'Number'
+     │ 
+     │ Note: Cannot unify expected 'String' with found 'Number'
+─────╯
+
+
+Error: Type mismatch: expected 'String', found 'Number'
+     ╭─[ crates/inty/tests/test_builtin.js:763:44 ]
+     │
+ 763 │         check_error_pos(e, expected_error, tab[1], tab[2], level);
+     │                                            ───┬──  
+     │                                               ╰──── Type mismatch: expected 'String', found 'Number'
+     │ 
+     │ Note: Cannot unify expected 'String' with found 'Number'
+─────╯
+
+
+Error: Type mismatch: expected '{stack: a | b}', found ''c'
+     ╭─[ crates/inty/tests/test_builtin.js:763:9 ]
+     │
+ 763 │         check_error_pos(e, expected_error, tab[1], tab[2], level);
+     │         ───────┬───────  
+     │                ╰───────── Type mismatch: expected '{stack: a | b}', found ''c'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:763:9 ]
+     │
+ 581 │     tab = e.stack.split("\n");
+     │           ───┬───  
+     │              ╰───── required here, in the body of the function this uses
+     │ 
+ 763 │         check_error_pos(e, expected_error, tab[1], tab[2], level);
+     │         ───────┬───────  
+     │                ╰───────── Expected type: from property access '.stack'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:763:9 ]
+     │
+ 759 │         if (!(e instanceof expected_error)) {
+     │               ┬  
+     │               ╰── Found type: from variable 'e'
+     │ 
+     │ Help: a caught exception may be any value that was thrown, so it can be passed on, tested and rethrown, but not used as a number, string or record; `String(e)` gives its text
+     │ 
+     │ Note: Cannot unify expected '{stack: a | b}' with found ''c'
+─────╯
+
+Error: Arity mismatch: the function takes 3 arguments, but 2 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:782:5 ]
+     │
+ 782 │     eval_error("\n 123 @a ", SyntaxError);
+     │     ──────────────────┬──────────────────  
+     │                       ╰──────────────────── Arity mismatch: the function takes 3 arguments, but 2 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+Error: Arity mismatch: the function takes 3 arguments, but 2 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:783:5 ]
+     │
+ 783 │     eval_error("\n  @/*  ", SyntaxError);
+     │     ──────────────────┬─────────────────  
+     │                       ╰─────────────────── Arity mismatch: the function takes 3 arguments, but 2 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+Error: Arity mismatch: the function takes 3 arguments, but 2 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:784:5 ]
+     │
+ 784 │     eval_error("function f  @a", SyntaxError);
+     │     ────────────────────┬────────────────────  
+     │                         ╰────────────────────── Arity mismatch: the function takes 3 arguments, but 2 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+Error: Arity mismatch: the function takes 3 arguments, but 2 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:786:5 ]
+     │
+ 786 │     eval_error("\n  @/aaa]/u", SyntaxError);
+     │     ───────────────────┬───────────────────  
+     │                        ╰───────────────────── Arity mismatch: the function takes 3 arguments, but 2 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:796:11 ]
+     │
+ 796 │     tab = get_string_pos('\n  Error@("hello");');
+     │           ───────┬──────  
+     │                  ╰──────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:796:11 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+Error: Arity mismatch: the function takes 5 arguments, but 4 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:798:5 ]
+     │
+ 798 │     check_error_pos(e, Error, tab[1], tab[2]);
+     │     ────────────────────┬────────────────────  
+     │                         ╰────────────────────── Arity mismatch: the function takes 5 arguments, but 4 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+Error: Arity mismatch: the function takes 3 arguments, but 2 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:800:5 ]
+     │
+ 800 │     eval_error('\n  throw Error@("hello");', Error);
+     │     ───────────────────────┬───────────────────────  
+     │                            ╰───────────────────────── Arity mismatch: the function takes 3 arguments, but 2 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:803:5 ]
+     │
+ 803 │     eval_error('\n  1 + 2 @* poisoned_number;', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:803:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:804:5 ]
+     │
+ 804 │     eval_error('\n  1 + "café" @* poisoned_number;', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:804:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:805:5 ]
+     │
+ 805 │     eval_error('\n  1 + 2 @** poisoned_number;', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:805:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:806:5 ]
+     │
+ 806 │     eval_error('\n  2 * @+ poisoned_number;', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:806:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:807:5 ]
+     │
+ 807 │     eval_error('\n  2 * @- poisoned_number;', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:807:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:808:5 ]
+     │
+ 808 │     eval_error('\n  2 * @~ poisoned_number;', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:808:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:809:5 ]
+     │
+ 809 │     eval_error('\n  2 * @++ poisoned_number;', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:809:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:810:5 ]
+     │
+ 810 │     eval_error('\n  2 * @-- poisoned_number;', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:810:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:811:5 ]
+     │
+ 811 │     eval_error('\n  2 * poisoned_number @++;', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:811:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:812:5 ]
+     │
+ 812 │     eval_error('\n  2 * poisoned_number @--;', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:812:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+Error: Arity mismatch: the function takes 3 arguments, but 2 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:815:5 ]
+     │
+ 815 │     eval_error('\n 1 + null@[0];', TypeError);
+     │     ────────────────────┬────────────────────  
+     │                         ╰────────────────────── Arity mismatch: the function takes 3 arguments, but 2 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+Error: Arity mismatch: the function takes 3 arguments, but 2 are passed
+     ╭─[ crates/inty/tests/test_builtin.js:816:5 ]
+     │
+ 816 │     eval_error('\n 1 + null @. abcd;', TypeError);
+     │     ──────────────────────┬──────────────────────  
+     │                           ╰──────────────────────── Arity mismatch: the function takes 3 arguments, but 2 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:818:5 ]
+     │
+ 818 │     eval_error('var obj = { get a() { throw Error("test"); } }\n 1 + obj @. a;',
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:818:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:820:5 ]
+     │
+ 820 │     eval_error('var obj = { set a(b) { throw Error("test"); } }\n obj @. a = 1;',
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:820:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:824:5 ]
+     │
+ 824 │     eval_error('\n  1 + @not_def', ReferenceError, 0);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:824:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:827:5 ]
+     │
+ 827 │     eval_error('1 + (@not_def = 1)', ReferenceError, 0);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:827:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:828:5 ]
+     │
+ 828 │     eval_error('1 + (@not_def += 2)', ReferenceError, 0);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:828:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'String'
+     ╭─[ crates/inty/tests/test_builtin.js:829:5 ]
+     │
+ 829 │     eval_error('var a;\n 1 + (a @+= poisoned_number);', Error, 1);
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'String'
+     │
+     ├─[ crates/inty/tests/test_builtin.js:829:5 ]
+     │
+ 572 │     s = str.slice(0, p) + str.slice(p + 1);
+     │         ────┬────  
+     │             ╰────── required here, in the body of the function this uses
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'String'
+─────╯
+

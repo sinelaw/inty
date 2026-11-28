@@ -1,0 +1,34 @@
+$ inty examples/playground/features/unions.js
+exit: 0
+--- stdout
+/** function tag(Boolean) => Number | String */
+function tag(c) {
+  return c ? 42 : "err";
+}
+/** var t: Number | String */
+var t = tag(true);
+/** var mixed: (Number | String)[] */
+var mixed = [1, "two", 3];
+/** var first: Number | String */
+var first = mixed[0];
+/** function pick(Boolean) => {x: Number, y: Number} | {x: Number, z: Number} */
+function pick(b) {
+  return b ? {x: 1, y: 2} : {x: 3, z: 4};
+}
+/** var pt: {x: Number, y: Number} | {x: Number, z: Number} */
+var pt = pick(true);
+/** var x: Number */
+var x = pt.x;
+/** function find<a>(xs: a[], v: a) => a | Null */
+function find(xs, v) {
+  for (var x of xs) {
+    if (x === v) return x;
+  }
+  return null;
+}
+/** var hit: Number | Null */
+var hit = find([1, 2], 2);
+/** var n: Number */
+var n = hit ?? 0;
+All checks passed: examples/playground/features/unions.js (10 symbols) in <time>
+--- stderr

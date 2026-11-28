@@ -1,0 +1,20 @@
+$ inty examples/modules/app.js
+exit: 0
+--- stdout
+import { state, increment, reset, snapshot } from "./store.js";
+import { formatCount, formatHistory } from "./format.js";
+increment();
+increment();
+increment();
+/** const summary: String */
+const summary = `count = ${state.count}, ${formatCount(state.count)}`;
+/** const history: String */
+const history = formatHistory(state.history);
+/** const frozen: {count: Number, history: Number[]} */
+const frozen = snapshot();
+console.log(summary);
+console.log(history);
+console.log(frozen);
+reset();
+All checks passed: examples/modules/app.js (2 symbols) in <time>
+--- stderr
