@@ -1779,11 +1779,10 @@ impl InferState {
         let [param] = params.as_slice() else {
             return Ok(None);
         };
-        let uses_no_this = match this.map(|t| self.zonk_head(&t)) {
-            None | Some(Type::ArrowThis) => true,
-            Some(Type::Var(crate::types::TVarName::Flex(_))) => true,
-            _ => false,
-        };
+        let uses_no_this = matches!(
+            this.map(|t| self.zonk_head(&t)),
+            None | Some(Type::ArrowThis) | Some(Type::Var(crate::types::TVarName::Flex(_)))
+        );
         let identity = matches!(
             (self.zonk_head(&param.ty), self.zonk_head(&ret)),
             (Type::Var(crate::types::TVarName::Flex(a)), Type::Var(crate::types::TVarName::Flex(b))) if a == b
