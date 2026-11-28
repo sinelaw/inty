@@ -2831,6 +2831,17 @@ pub(crate) fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
     result
 }
 
+/// Whether a loop's test is the literal `true`.
+fn is_true(test: &Expr) -> bool {
+    matches!(
+        test,
+        Expr::Lit {
+            value: Literal::Boolean(true),
+            ..
+        }
+    )
+}
+
 /// Conservative "does control definitely leave via `return`/`throw`
 /// rather than fall off the end" analysis, used to decide whether a
 /// function's inferred return type must also include `Undefined` (the
@@ -2869,15 +2880,14 @@ fn definitely_returns(
             }
             returns(block) && handler.as_ref().is_none_or(|h| returns(&h.body))
         }
-        // `while True:` never falls through, unless a `break` leaves it.
-        Stmt::While { test, body, .. } => {
-            matches!(
-                test,
-                Expr::Lit {
-                    value: Literal::Boolean(true),
-                    ..
-                }
-            ) && !super::control::breaks_out(body)
+        // A loop whose test is `true` (`while (true)`, `while True:`,
+        // `do … while (true)`) or missing (`for (;;)`) never falls
+        // through, unless a `break` leaves it.
+        Stmt::While { test, body, .. } | Stmt::DoWhile { test, body, .. } => {
+            is_true(test) && !super::control::breaks_out(body)
+        }
+        Stmt::For { test, body, .. } => {
+            test.as_ref().is_none_or(is_true) && !super::control::breaks_out(body)
         }
         // A switch that always takes some case, none of which breaks out
         // of it, runs on to its last case (falling through the others):

@@ -4955,6 +4955,32 @@ fn test_while_true_with_break_falls_through() {
 }
 
 #[test]
+fn an_endless_for_or_do_loop_does_not_fall_through() {
+    // `for (;;)`, `for (…; true; …)` and `do … while (true)` without a
+    // `break` leave only by `return` (or a throw): the function's end
+    // isn't reached, so its result isn't `undefined` too.
+    for loop_ in [
+        "for (;;) { if (i > 3) return i; i++; }",
+        "for (; true; i++) { if (i > 3) return i; }",
+        "do { if (i > 3) return i; i++; } while (true);",
+        "for (;;) { lbl: { if (i > 3) return i; } i++; }",
+    ] {
+        let src = format!("function f() {{ let i = 0; {loop_} }}\nconst r = f() - 1;\n");
+        assert!(infer_program_with_state(&src).is_ok(), "{src}");
+    }
+    // One a `break` leaves, or with a test that isn't `true`, falls through.
+    for loop_ in [
+        "for (;;) { if (i > 3) break; i++; }",
+        "for (;;) { lbl: { if (i > 3) break; } i++; }",
+        "for (; i < 9; i++) { if (i > 3) return i; }",
+        "do { if (i > 3) return i; i++; } while (i < 9);",
+    ] {
+        let src = format!("function f() {{ let i = 0; {loop_} }}\nconst r = f() - 1;\n");
+        assert!(infer_program_with_state(&src).is_err(), "{src}");
+    }
+}
+
+#[test]
 fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
     // A spread operand of unknown shape may hold any field written before
     // it, and then wins: the two must agree on its type. (Taking the
