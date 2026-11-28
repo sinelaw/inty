@@ -1,0 +1,866 @@
+$ inty examples/go-backend/tools/fastdiff.js
+exit: 0
+--- stdout
+/** type Diff = {op: Number, text: String} */
+import { readFileSync } from "node:fs";
+import process from "node:process";
+/** const DIFF_DELETE: Number */
+const DIFF_DELETE = -1;
+/** const DIFF_INSERT: Number */
+const DIFF_INSERT = 1;
+/** const DIFF_EQUAL: Number */
+const DIFF_EQUAL = 0;
+/** function mk<a, b>(a, b) => {op: a, text: b} */
+function mk(op, text) {
+  return {op: op, text: text};
+}
+/** function diff_main(String, String, Boolean, Boolean) => {op: Number, text: String}[] */
+function diff_main(text1, text2, cleanup, _fix_unicode) {
+  if (text1 === text2) {
+    if (text1) {
+      return [mk(DIFF_EQUAL, text1)];
+    }
+    return [];
+  }
+  /** let commonlength: Number */
+  let commonlength = diff_commonPrefix(text1, text2);
+  /** const commonprefix: String */
+  const commonprefix = text1.substring(0, commonlength);
+  text1 = text1.substring(commonlength);
+  text2 = text2.substring(commonlength);
+  commonlength = diff_commonSuffix(text1, text2);
+  /** const commonsuffix: String */
+  const commonsuffix = text1.substring(text1.length - commonlength);
+  text1 = text1.substring(0, text1.length - commonlength);
+  text2 = text2.substring(0, text2.length - commonlength);
+  /** const diffs: {op: Number, text: String}[] */
+  const diffs = diff_compute_(text1, text2);
+  if (commonprefix) {
+    diffs.unshift(mk(DIFF_EQUAL, commonprefix));
+  }
+  if (commonsuffix) {
+    diffs.push(mk(DIFF_EQUAL, commonsuffix));
+  }
+  diff_cleanupMerge(diffs, _fix_unicode);
+  if (cleanup) {
+    diff_cleanupSemantic(diffs);
+  }
+  return diffs;
+}
+/** function diff_compute_(String, String) => {op: Number, text: String}[] */
+function diff_compute_(text1, text2) {
+  if (!text1) {
+    return [mk(DIFF_INSERT, text2)];
+  }
+  if (!text2) {
+    return [mk(DIFF_DELETE, text1)];
+  }
+  /** const longtext: String */
+  const longtext = (text1.length > text2.length) ? text1 : text2;
+  /** const shorttext: String */
+  const shorttext = (text1.length > text2.length) ? text2 : text1;
+  /** const i: Number */
+  const i = longtext.indexOf(shorttext);
+  if (i !== (-1)) {
+    /** const diffs: {op: Number, text: String}[] */
+    const diffs = [mk(DIFF_INSERT, longtext.substring(0, i)), mk(DIFF_EQUAL, shorttext), mk(DIFF_INSERT, longtext.substring(i + shorttext.length))];
+    if (text1.length > text2.length) {
+      diffs[0].op = diffs[2].op = DIFF_DELETE;
+    }
+    return diffs;
+  }
+  if (shorttext.length === 1) {
+    return [mk(DIFF_DELETE, text1), mk(DIFF_INSERT, text2)];
+  }
+  /** const hm: String[] */
+  const hm = diff_halfMatch_(text1, text2);
+  if (hm.length > 0) {
+    /** const text1_a: String */
+    const text1_a = hm[0];
+    /** const text1_b: String */
+    const text1_b = hm[1];
+    /** const text2_a: String */
+    const text2_a = hm[2];
+    /** const text2_b: String */
+    const text2_b = hm[3];
+    /** const mid_common: String */
+    const mid_common = hm[4];
+    /** const diffs_a: {op: Number, text: String}[] */
+    const diffs_a = diff_main(text1_a, text2_a, false, false);
+    /** const diffs_b: {op: Number, text: String}[] */
+    const diffs_b = diff_main(text1_b, text2_b, false, false);
+    return diffs_a.concat([mk(DIFF_EQUAL, mid_common)]).concat(diffs_b);
+  }
+  return diff_bisect_(text1, text2);
+}
+/** function diff_bisect_(String, String) => {op: Number, text: String}[] */
+function diff_bisect_(text1, text2) {
+  /** const text1_length: Number */
+  const text1_length = text1.length;
+  /** const text2_length: Number */
+  const text2_length = text2.length;
+  /** const max_d: Number */
+  const max_d = Math.ceil((text1_length + text2_length) / 2);
+  /** const v_offset: Number */
+  const v_offset = max_d;
+  /** const v_length: Number */
+  const v_length = 2 * max_d;
+  /** const v1: Number[] */
+  const v1 = new Array(v_length).fill(-1);
+  /** const v2: Number[] */
+  const v2 = new Array(v_length).fill(-1);
+  v1[v_offset + 1] = 0;
+  v2[v_offset + 1] = 0;
+  /** const delta: Number */
+  const delta = text1_length - text2_length;
+  /** const front: Boolean */
+  const front = (delta % 2) !== 0;
+  /** let k1start: Number */
+  let k1start = 0;
+  /** let k1end: Number */
+  let k1end = 0;
+  /** let k2start: Number */
+  let k2start = 0;
+  /** let k2end: Number */
+  let k2end = 0;
+  /** var d: Number */
+  for (var d = 0; d < max_d; d++) {
+    /** var k1: Number */
+    for (var k1 = (-d) + k1start; k1 <= (d - k1end); k1 += 2) {
+      /** const k1_offset: Number */
+      const k1_offset = v_offset + k1;
+      /** let x1: Number */
+      let x1 = 0;
+      if ((k1 === (-d)) || ((k1 !== d) && (v1[k1_offset - 1] < v1[k1_offset + 1]))) {
+        x1 = v1[k1_offset + 1];
+      } else {
+        x1 = v1[k1_offset - 1] + 1;
+      }
+      /** let y1: Number */
+      let y1 = x1 - k1;
+      while (((x1 < text1_length) && (y1 < text2_length)) && (text1.charAt(x1) === text2.charAt(y1))) {
+        x1++;
+        y1++;
+      }
+      v1[k1_offset] = x1;
+      if (x1 > text1_length) {
+        k1end += 2;
+      } else if (y1 > text2_length) {
+        k1start += 2;
+      } else if (front) {
+        /** const k2_offset: Number */
+        const k2_offset = (v_offset + delta) - k1;
+        if (((k2_offset >= 0) && (k2_offset < v_length)) && (v2[k2_offset] !== (-1))) {
+          /** const x2: Number */
+          const x2 = text1_length - v2[k2_offset];
+          if (x1 >= x2) {
+            return diff_bisectSplit_(text1, text2, x1, y1);
+          }
+        }
+      }
+    }
+    /** var k2: Number */
+    for (var k2 = (-d) + k2start; k2 <= (d - k2end); k2 += 2) {
+      /** const k2_offset: Number */
+      const k2_offset = v_offset + k2;
+      /** let x2: Number */
+      let x2 = 0;
+      if ((k2 === (-d)) || ((k2 !== d) && (v2[k2_offset - 1] < v2[k2_offset + 1]))) {
+        x2 = v2[k2_offset + 1];
+      } else {
+        x2 = v2[k2_offset - 1] + 1;
+      }
+      /** let y2: Number */
+      let y2 = x2 - k2;
+      while (((x2 < text1_length) && (y2 < text2_length)) && (text1.charAt((text1_length - x2) - 1) === text2.charAt((text2_length - y2) - 1))) {
+        x2++;
+        y2++;
+      }
+      v2[k2_offset] = x2;
+      if (x2 > text1_length) {
+        k2end += 2;
+      } else if (y2 > text2_length) {
+        k2start += 2;
+      } else if (!front) {
+        /** const k1_offset: Number */
+        const k1_offset = (v_offset + delta) - k2;
+        if (((k1_offset >= 0) && (k1_offset < v_length)) && (v1[k1_offset] !== (-1))) {
+          /** const x1: Number */
+          const x1 = v1[k1_offset];
+          /** const y1: Number */
+          const y1 = (v_offset + x1) - k1_offset;
+          x2 = text1_length - x2;
+          if (x1 >= x2) {
+            return diff_bisectSplit_(text1, text2, x1, y1);
+          }
+        }
+      }
+    }
+  }
+  return [mk(DIFF_DELETE, text1), mk(DIFF_INSERT, text2)];
+}
+/** function diff_bisectSplit_(String, String, Number, Number) => {op: Number, text: String}[] */
+function diff_bisectSplit_(text1, text2, x, y) {
+  /** const text1a: String */
+  const text1a = text1.substring(0, x);
+  /** const text2a: String */
+  const text2a = text2.substring(0, y);
+  /** const text1b: String */
+  const text1b = text1.substring(x);
+  /** const text2b: String */
+  const text2b = text2.substring(y);
+  /** const diffs: {op: Number, text: String}[] */
+  const diffs = diff_main(text1a, text2a, false, false);
+  /** const diffsb: {op: Number, text: String}[] */
+  const diffsb = diff_main(text1b, text2b, false, false);
+  return diffs.concat(diffsb);
+}
+/** function diff_commonPrefix(String, String) => Number */
+function diff_commonPrefix(text1, text2) {
+  if (((!text1) || (!text2)) || (text1.charAt(0) !== text2.charAt(0))) {
+    return 0;
+  }
+  /** let pointermin: Number */
+  let pointermin = 0;
+  /** let pointermax: Number */
+  let pointermax = Math.min(text1.length, text2.length);
+  /** let pointermid: Number */
+  let pointermid = pointermax;
+  /** let pointerstart: Number */
+  let pointerstart = 0;
+  while (pointermin < pointermid) {
+    if (text1.substring(pointerstart, pointermid) === text2.substring(pointerstart, pointermid)) {
+      pointermin = pointermid;
+      pointerstart = pointermin;
+    } else {
+      pointermax = pointermid;
+    }
+    pointermid = Math.floor(((pointermax - pointermin) / 2) + pointermin);
+  }
+  if (is_surrogate_pair_start(charCodeOrNaN(text1, pointermid - 1))) {
+    pointermid--;
+  }
+  return pointermid;
+}
+/** function diff_commonOverlap_(String, String) => Number */
+function diff_commonOverlap_(text1, text2) {
+  /** const text1_length: Number */
+  const text1_length = text1.length;
+  /** const text2_length: Number */
+  const text2_length = text2.length;
+  if ((text1_length === 0) || (text2_length === 0)) {
+    return 0;
+  }
+  if (text1_length > text2_length) {
+    text1 = text1.substring(text1_length - text2_length);
+  } else if (text1_length < text2_length) {
+    text2 = text2.substring(0, text1_length);
+  }
+  /** const text_length: Number */
+  const text_length = Math.min(text1_length, text2_length);
+  if (text1 === text2) {
+    return text_length;
+  }
+  /** let best: Number */
+  let best = 0;
+  /** let length: Number */
+  let length = 1;
+  while (true) {
+    /** const pattern: String */
+    const pattern = text1.substring(text_length - length);
+    /** const found: Number */
+    const found = text2.indexOf(pattern);
+    if (found === (-1)) {
+      return best;
+    }
+    length += found;
+    if ((found === 0) || (text1.substring(text_length - length) === text2.substring(0, length))) {
+      best = length;
+      length++;
+    }
+  }
+}
+/** function diff_commonSuffix(String, String) => Number */
+function diff_commonSuffix(text1, text2) {
+  if (((!text1) || (!text2)) || (text1.slice(-1) !== text2.slice(-1))) {
+    return 0;
+  }
+  /** let pointermin: Number */
+  let pointermin = 0;
+  /** let pointermax: Number */
+  let pointermax = Math.min(text1.length, text2.length);
+  /** let pointermid: Number */
+  let pointermid = pointermax;
+  /** let pointerend: Number */
+  let pointerend = 0;
+  while (pointermin < pointermid) {
+    if (text1.substring(text1.length - pointermid, text1.length - pointerend) === text2.substring(text2.length - pointermid, text2.length - pointerend)) {
+      pointermin = pointermid;
+      pointerend = pointermin;
+    } else {
+      pointermax = pointermid;
+    }
+    pointermid = Math.floor(((pointermax - pointermin) / 2) + pointermin);
+  }
+  if (is_surrogate_pair_end(charCodeOrNaN(text1, text1.length - pointermid))) {
+    pointermid--;
+  }
+  return pointermid;
+}
+/** function diff_halfMatch_(String, String) => String[] */
+function diff_halfMatch_(text1, text2) {
+  /** const longtext: String */
+  const longtext = (text1.length > text2.length) ? text1 : text2;
+  /** const shorttext: String */
+  const shorttext = (text1.length > text2.length) ? text2 : text1;
+  if ((longtext.length < 4) || ((shorttext.length * 2) < longtext.length)) {
+    return [];
+  }
+  /** function diff_halfMatchI_(String, String, Number) => String[] */
+  function diff_halfMatchI_(longtext, shorttext, i) {
+    /** const seed: String */
+    const seed = longtext.substring(i, i + Math.floor(longtext.length / 4));
+    /** let j: Number */
+    let j = -1;
+    /** let best_common: String */
+    let best_common = "";
+    /** let best_longtext_a: String */
+    let best_longtext_a = "";
+    /** let best_longtext_b: String */
+    let best_longtext_b = "";
+    /** let best_shorttext_a: String */
+    let best_shorttext_a = "";
+    /** let best_shorttext_b: String */
+    let best_shorttext_b = "";
+    while ((j = shorttext.indexOf(seed, j + 1)) !== (-1)) {
+      /** const prefixLength: Number */
+      const prefixLength = diff_commonPrefix(longtext.substring(i), shorttext.substring(j));
+      /** const suffixLength: Number */
+      const suffixLength = diff_commonSuffix(longtext.substring(0, i), shorttext.substring(0, j));
+      if (best_common.length < (suffixLength + prefixLength)) {
+        best_common = shorttext.substring(j - suffixLength, j) + shorttext.substring(j, j + prefixLength);
+        best_longtext_a = longtext.substring(0, i - suffixLength);
+        best_longtext_b = longtext.substring(i + prefixLength);
+        best_shorttext_a = shorttext.substring(0, j - suffixLength);
+        best_shorttext_b = shorttext.substring(j + prefixLength);
+      }
+    }
+    if ((best_common.length * 2) >= longtext.length) {
+      return [best_longtext_a, best_longtext_b, best_shorttext_a, best_shorttext_b, best_common];
+    } else {
+      return [];
+    }
+  }
+  /** const hm1: String[] */
+  const hm1 = diff_halfMatchI_(longtext, shorttext, Math.ceil(longtext.length / 4));
+  /** const hm2: String[] */
+  const hm2 = diff_halfMatchI_(longtext, shorttext, Math.ceil(longtext.length / 2));
+  /** let hm: String[] */
+  let hm = hm1;
+  if ((hm1.length === 0) && (hm2.length === 0)) {
+    return [];
+  } else if (hm2.length === 0) {
+    hm = hm1;
+  } else if (hm1.length === 0) {
+    hm = hm2;
+  } else {
+    hm = (hm1[4].length > hm2[4].length) ? hm1 : hm2;
+  }
+  /** let text1_a: String */
+  let text1_a = "";
+  /** let text1_b: String */
+  let text1_b = "";
+  /** let text2_a: String */
+  let text2_a = "";
+  /** let text2_b: String */
+  let text2_b = "";
+  if (text1.length > text2.length) {
+    text1_a = hm[0];
+    text1_b = hm[1];
+    text2_a = hm[2];
+    text2_b = hm[3];
+  } else {
+    text2_a = hm[0];
+    text2_b = hm[1];
+    text1_a = hm[2];
+    text1_b = hm[3];
+  }
+  /** const mid_common: String */
+  const mid_common = hm[4];
+  return [text1_a, text1_b, text2_a, text2_b, mid_common];
+}
+/** function stackGet(Number[], Number[], Number) => Number */
+function stackGet(stack, neg, i) {
+  return (i >= 0) ? stack[i] : neg[(-i) - 1];
+}
+/** function stackSet(Number[], Number[], Number, Number) => Undefined */
+function stackSet(stack, neg, i, v) {
+  if (i >= 0) stack[i] = v; else neg[(-i) - 1] = v;
+}
+/** function diff_cleanupSemantic(Diff[]) => Undefined */
+function diff_cleanupSemantic(diffs) {
+  /** let changes: Boolean */
+  let changes = false;
+  /** const equalities: Number[] */
+  const equalities = [];
+  /** const equalitiesNeg: Number[] */
+  const equalitiesNeg = [];
+  /** let equalitiesLength: Number */
+  let equalitiesLength = 0;
+  /** let lastequality: String */
+  let lastequality = "";
+  /** let pointer: Number */
+  let pointer = 0;
+  /** let length_insertions1: Number */
+  let length_insertions1 = 0;
+  /** let length_deletions1: Number */
+  let length_deletions1 = 0;
+  /** let length_insertions2: Number */
+  let length_insertions2 = 0;
+  /** let length_deletions2: Number */
+  let length_deletions2 = 0;
+  while (pointer < diffs.length) {
+    if (diffs[pointer].op === DIFF_EQUAL) {
+      stackSet(equalities, equalitiesNeg, equalitiesLength++, pointer);
+      length_insertions1 = length_insertions2;
+      length_deletions1 = length_deletions2;
+      length_insertions2 = 0;
+      length_deletions2 = 0;
+      lastequality = diffs[pointer].text;
+    } else {
+      if (diffs[pointer].op === DIFF_INSERT) {
+        length_insertions2 += diffs[pointer].text.length;
+      } else {
+        length_deletions2 += diffs[pointer].text.length;
+      }
+      if (((lastequality !== "") && (lastequality.length <= Math.max(length_insertions1, length_deletions1))) && (lastequality.length <= Math.max(length_insertions2, length_deletions2))) {
+        diffs.splice(stackGet(equalities, equalitiesNeg, equalitiesLength - 1), 0, mk(DIFF_DELETE, lastequality));
+        diffs[stackGet(equalities, equalitiesNeg, equalitiesLength - 1) + 1].op = DIFF_INSERT;
+        equalitiesLength--;
+        equalitiesLength--;
+        pointer = (equalitiesLength > 0) ? equalities[equalitiesLength - 1] : -1;
+        length_insertions1 = 0;
+        length_deletions1 = 0;
+        length_insertions2 = 0;
+        length_deletions2 = 0;
+        lastequality = "";
+        changes = true;
+      }
+    }
+    pointer++;
+  }
+  if (changes) {
+    diff_cleanupMerge(diffs, false);
+  }
+  diff_cleanupSemanticLossless(diffs);
+  pointer = 1;
+  while (pointer < diffs.length) {
+    if ((diffs[pointer - 1].op === DIFF_DELETE) && (diffs[pointer].op === DIFF_INSERT)) {
+      /** const deletion: String */
+      const deletion = diffs[pointer - 1].text;
+      /** const insertion: String */
+      const insertion = diffs[pointer].text;
+      /** const overlap_length1: Number */
+      const overlap_length1 = diff_commonOverlap_(deletion, insertion);
+      /** const overlap_length2: Number */
+      const overlap_length2 = diff_commonOverlap_(insertion, deletion);
+      if (overlap_length1 >= overlap_length2) {
+        if ((overlap_length1 >= (deletion.length / 2)) || (overlap_length1 >= (insertion.length / 2))) {
+          diffs.splice(pointer, 0, mk(DIFF_EQUAL, insertion.substring(0, overlap_length1)));
+          diffs[pointer - 1].text = deletion.substring(0, deletion.length - overlap_length1);
+          diffs[pointer + 1].text = insertion.substring(overlap_length1);
+          pointer++;
+        }
+      } else {
+        if ((overlap_length2 >= (deletion.length / 2)) || (overlap_length2 >= (insertion.length / 2))) {
+          diffs.splice(pointer, 0, mk(DIFF_EQUAL, deletion.substring(0, overlap_length2)));
+          diffs[pointer - 1].op = DIFF_INSERT;
+          diffs[pointer - 1].text = insertion.substring(0, insertion.length - overlap_length2);
+          diffs[pointer + 1].op = DIFF_DELETE;
+          diffs[pointer + 1].text = deletion.substring(overlap_length2);
+          pointer++;
+        }
+      }
+      pointer++;
+    }
+    pointer++;
+  }
+}
+/** function isNonAlphaNumeric(String) => Boolean */
+function isNonAlphaNumeric(ch) {
+  /** const c: Number */
+  const c = ch.charCodeAt(0);
+  return !((((c >= 48) && (c <= 57)) || ((c >= 65) && (c <= 90))) || ((c >= 97) && (c <= 122)));
+}
+/** function isWhitespace(String) => Boolean */
+function isWhitespace(ch) {
+  /** const c: Number */
+  const c = ch.charCodeAt(0);
+  return (c === 32) || ((c >= 9) && (c <= 13));
+}
+/** function isLineBreak(String) => Boolean */
+function isLineBreak(ch) {
+  return (ch === "\r") || (ch === "\n");
+}
+/** function endsWithBlankLine(String) => Boolean */
+function endsWithBlankLine(s) {
+  return s.endsWith("\n\n") || s.endsWith("\n\r\n");
+}
+/** function startsWithBlankLine(String) => Boolean */
+function startsWithBlankLine(s) {
+  return ((s.startsWith("\n\n") || s.startsWith("\n\r\n")) || s.startsWith("\r\n\n")) || s.startsWith("\r\n\r\n");
+}
+/** function diff_cleanupSemanticLossless(Diff[]) => Undefined */
+function diff_cleanupSemanticLossless(diffs) {
+  /** function diff_cleanupSemanticScore_(String, String) => Number */
+  function diff_cleanupSemanticScore_(one, two) {
+    if ((!one) || (!two)) {
+      return 6;
+    }
+    /** const char1: String */
+    const char1 = one.charAt(one.length - 1);
+    /** const char2: String */
+    const char2 = two.charAt(0);
+    /** const nonAlphaNumeric1: Boolean */
+    const nonAlphaNumeric1 = isNonAlphaNumeric(char1);
+    /** const nonAlphaNumeric2: Boolean */
+    const nonAlphaNumeric2 = isNonAlphaNumeric(char2);
+    /** const whitespace1: Boolean */
+    const whitespace1 = nonAlphaNumeric1 && isWhitespace(char1);
+    /** const whitespace2: Boolean */
+    const whitespace2 = nonAlphaNumeric2 && isWhitespace(char2);
+    /** const lineBreak1: Boolean */
+    const lineBreak1 = whitespace1 && isLineBreak(char1);
+    /** const lineBreak2: Boolean */
+    const lineBreak2 = whitespace2 && isLineBreak(char2);
+    /** const blankLine1: Boolean */
+    const blankLine1 = lineBreak1 && endsWithBlankLine(one);
+    /** const blankLine2: Boolean */
+    const blankLine2 = lineBreak2 && startsWithBlankLine(two);
+    if (blankLine1 || blankLine2) {
+      return 5;
+    } else if (lineBreak1 || lineBreak2) {
+      return 4;
+    } else if ((nonAlphaNumeric1 && (!whitespace1)) && whitespace2) {
+      return 3;
+    } else if (whitespace1 || whitespace2) {
+      return 2;
+    } else if (nonAlphaNumeric1 || nonAlphaNumeric2) {
+      return 1;
+    }
+    return 0;
+  }
+  /** let pointer: Number */
+  let pointer = 1;
+  while (pointer < (diffs.length - 1)) {
+    if ((diffs[pointer - 1].op === DIFF_EQUAL) && (diffs[pointer + 1].op === DIFF_EQUAL)) {
+      /** let equality1: String */
+      let equality1 = diffs[pointer - 1].text;
+      /** let edit: String */
+      let edit = diffs[pointer].text;
+      /** let equality2: String */
+      let equality2 = diffs[pointer + 1].text;
+      /** const commonOffset: Number */
+      const commonOffset = diff_commonSuffix(equality1, edit);
+      if (commonOffset) {
+        /** const commonString: String */
+        const commonString = edit.substring(edit.length - commonOffset);
+        equality1 = equality1.substring(0, equality1.length - commonOffset);
+        edit = commonString + edit.substring(0, edit.length - commonOffset);
+        equality2 = commonString + equality2;
+      }
+      /** let bestEquality1: String */
+      let bestEquality1 = equality1;
+      /** let bestEdit: String */
+      let bestEdit = edit;
+      /** let bestEquality2: String */
+      let bestEquality2 = equality2;
+      /** let bestScore: Number */
+      let bestScore = diff_cleanupSemanticScore_(equality1, edit) + diff_cleanupSemanticScore_(edit, equality2);
+      while (edit.charAt(0) === equality2.charAt(0)) {
+        equality1 += edit.charAt(0);
+        edit = edit.substring(1) + equality2.charAt(0);
+        equality2 = equality2.substring(1);
+        /** const score: Number */
+        const score = diff_cleanupSemanticScore_(equality1, edit) + diff_cleanupSemanticScore_(edit, equality2);
+        if (score >= bestScore) {
+          bestScore = score;
+          bestEquality1 = equality1;
+          bestEdit = edit;
+          bestEquality2 = equality2;
+        }
+      }
+      if (diffs[pointer - 1].text !== bestEquality1) {
+        if (bestEquality1) {
+          diffs[pointer - 1].text = bestEquality1;
+        } else {
+          diffs.splice(pointer - 1, 1);
+          pointer--;
+        }
+        diffs[pointer].text = bestEdit;
+        if (bestEquality2) {
+          diffs[pointer + 1].text = bestEquality2;
+        } else {
+          diffs.splice(pointer + 1, 1);
+          pointer--;
+        }
+      }
+    }
+    pointer++;
+  }
+}
+/** function diff_cleanupMerge(Diff[], Boolean) => Undefined */
+function diff_cleanupMerge(diffs, fix_unicode) {
+  diffs.push(mk(DIFF_EQUAL, ""));
+  /** let pointer: Number */
+  let pointer = 0;
+  /** let count_delete: Number */
+  let count_delete = 0;
+  /** let count_insert: Number */
+  let count_insert = 0;
+  /** let text_delete: String */
+  let text_delete = "";
+  /** let text_insert: String */
+  let text_insert = "";
+  /** let commonlength: Number */
+  let commonlength = 0;
+  while (pointer < diffs.length) {
+    if ((pointer < (diffs.length - 1)) && (!diffs[pointer].text)) {
+      diffs.splice(pointer, 1);
+      continue;
+    }
+    switch (diffs[pointer].op) {
+      case DIFF_INSERT:
+        count_insert++;
+        text_insert += diffs[pointer].text;
+        pointer++;
+        break;
+      case DIFF_DELETE:
+        count_delete++;
+        text_delete += diffs[pointer].text;
+        pointer++;
+        break;
+      case DIFF_EQUAL:
+        {
+          /** let previous_equality: Number */
+          let previous_equality = ((pointer - count_insert) - count_delete) - 1;
+          if (fix_unicode) {
+            if ((previous_equality >= 0) && ends_with_pair_start(diffs[previous_equality].text)) {
+              /** const stray: String */
+              const stray = diffs[previous_equality].text.slice(-1);
+              diffs[previous_equality].text = diffs[previous_equality].text.slice(0, -1);
+              text_delete = stray + text_delete;
+              text_insert = stray + text_insert;
+              if (!diffs[previous_equality].text) {
+                diffs.splice(previous_equality, 1);
+                pointer--;
+                /** let k: Number */
+                let k = previous_equality - 1;
+                if ((k >= 0) && (diffs[k].op === DIFF_INSERT)) {
+                  count_insert++;
+                  text_insert = diffs[k].text + text_insert;
+                  k--;
+                }
+                if ((k >= 0) && (diffs[k].op === DIFF_DELETE)) {
+                  count_delete++;
+                  text_delete = diffs[k].text + text_delete;
+                  k--;
+                }
+                previous_equality = k;
+              }
+            }
+            if (starts_with_pair_end(diffs[pointer].text)) {
+              /** const stray: String */
+              const stray = diffs[pointer].text.charAt(0);
+              diffs[pointer].text = diffs[pointer].text.slice(1);
+              text_delete += stray;
+              text_insert += stray;
+            }
+          }
+          if ((pointer < (diffs.length - 1)) && (!diffs[pointer].text)) {
+            diffs.splice(pointer, 1);
+            break;
+          }
+          if ((text_delete.length > 0) || (text_insert.length > 0)) {
+            if ((text_delete.length > 0) && (text_insert.length > 0)) {
+              commonlength = diff_commonPrefix(text_insert, text_delete);
+              if (commonlength !== 0) {
+                if (previous_equality >= 0) {
+                  diffs[previous_equality].text += text_insert.substring(0, commonlength);
+                } else {
+                  diffs.splice(0, 0, mk(DIFF_EQUAL, text_insert.substring(0, commonlength)));
+                  pointer++;
+                }
+                text_insert = text_insert.substring(commonlength);
+                text_delete = text_delete.substring(commonlength);
+              }
+              commonlength = diff_commonSuffix(text_insert, text_delete);
+              if (commonlength !== 0) {
+                diffs[pointer].text = text_insert.substring(text_insert.length - commonlength) + diffs[pointer].text;
+                text_insert = text_insert.substring(0, text_insert.length - commonlength);
+                text_delete = text_delete.substring(0, text_delete.length - commonlength);
+              }
+            }
+            /** const n: Number */
+            const n = count_insert + count_delete;
+            if ((text_delete.length === 0) && (text_insert.length === 0)) {
+              diffs.splice(pointer - n, n);
+              pointer = pointer - n;
+            } else if (text_delete.length === 0) {
+              diffs.splice(pointer - n, n, mk(DIFF_INSERT, text_insert));
+              pointer = (pointer - n) + 1;
+            } else if (text_insert.length === 0) {
+              diffs.splice(pointer - n, n, mk(DIFF_DELETE, text_delete));
+              pointer = (pointer - n) + 1;
+            } else {
+              diffs.splice(pointer - n, n, mk(DIFF_DELETE, text_delete), mk(DIFF_INSERT, text_insert));
+              pointer = (pointer - n) + 2;
+            }
+          }
+          if ((pointer !== 0) && (diffs[pointer - 1].op === DIFF_EQUAL)) {
+            diffs[pointer - 1].text += diffs[pointer].text;
+            diffs.splice(pointer, 1);
+          } else {
+            pointer++;
+          }
+          count_insert = 0;
+          count_delete = 0;
+          text_delete = "";
+          text_insert = "";
+          break;
+        }
+    }
+  }
+  if (diffs[diffs.length - 1].text === "") {
+    diffs.pop();
+  }
+  /** let changes: Boolean */
+  let changes = false;
+  pointer = 1;
+  while (pointer < (diffs.length - 1)) {
+    if ((diffs[pointer - 1].op === DIFF_EQUAL) && (diffs[pointer + 1].op === DIFF_EQUAL)) {
+      if (diffs[pointer].text.substring(diffs[pointer].text.length - diffs[pointer - 1].text.length) === diffs[pointer - 1].text) {
+        diffs[pointer].text = diffs[pointer - 1].text + diffs[pointer].text.substring(0, diffs[pointer].text.length - diffs[pointer - 1].text.length);
+        diffs[pointer + 1].text = diffs[pointer - 1].text + diffs[pointer + 1].text;
+        diffs.splice(pointer - 1, 1);
+        changes = true;
+      } else if (diffs[pointer].text.substring(0, diffs[pointer + 1].text.length) === diffs[pointer + 1].text) {
+        diffs[pointer - 1].text += diffs[pointer + 1].text;
+        diffs[pointer].text = diffs[pointer].text.substring(diffs[pointer + 1].text.length) + diffs[pointer + 1].text;
+        diffs.splice(pointer + 1, 1);
+        changes = true;
+      }
+    }
+    pointer++;
+  }
+  if (changes) {
+    diff_cleanupMerge(diffs, fix_unicode);
+  }
+}
+/** function charCodeOrNaN(String, Number) => Number */
+function charCodeOrNaN(str, i) {
+  if ((i < 0) || (i >= str.length)) {
+    return NaN;
+  }
+  return str.charCodeAt(i);
+}
+/** function is_surrogate_pair_start(Number) => Boolean */
+function is_surrogate_pair_start(charCode) {
+  return (charCode >= 55296) && (charCode <= 56319);
+}
+/** function is_surrogate_pair_end(Number) => Boolean */
+function is_surrogate_pair_end(charCode) {
+  return (charCode >= 56320) && (charCode <= 57343);
+}
+/** function starts_with_pair_end(String) => Boolean */
+function starts_with_pair_end(str) {
+  return is_surrogate_pair_end(charCodeOrNaN(str, 0));
+}
+/** function ends_with_pair_start(String) => Boolean */
+function ends_with_pair_start(str) {
+  return is_surrogate_pair_start(charCodeOrNaN(str, str.length - 1));
+}
+/** function diff(String, String, Boolean) => {op: Number, text: String}[] */
+function diff(text1, text2, cleanup) {
+  return diff_main(text1, text2, cleanup, true);
+}
+/** const HEX: String */
+const HEX = "0123456789abcdef";
+/** function jsonString(String) => String */
+function jsonString(s) {
+  /** const out: String[] */
+  const out = ["\""];
+  /** let start: Number */
+  let start = 0;
+  /** var i: Number */
+  for (var i = 0; i < s.length; i++) {
+    /** const c: Number */
+    const c = s.charCodeAt(i);
+    if (((c >= 32) && (c !== 34)) && (c !== 92)) continue;
+    if (start < i) out.push(s.slice(start, i));
+    start = i + 1;
+    if (c === 34) out.push("\\\""); else if (c === 92) out.push("\\\\"); else if (c === 10) out.push("\\n"); else if (c === 13) out.push("\\r"); else if (c === 9) out.push("\\t"); else if (c === 8) out.push("\\b"); else if (c === 12) out.push("\\f"); else out.push(("\\u00" + HEX.charAt(c >> 4)) + HEX.charAt(c & 15));
+  }
+  if (start < s.length) out.push(s.slice(start));
+  out.push("\"");
+  return out.join("");
+}
+/** function usage(String) => Undefined */
+function usage(msg) {
+  if (msg) process.stderr.write(("fastdiff: " + msg) + "\n");
+  process.stderr.write("usage: fastdiff old.txt new.txt [--cleanup]\n");
+  process.exit(2);
+}
+/** function main() => Undefined */
+function main() {
+  /** const args: String[] */
+  const args = process.argv.slice(2);
+  /** const files: String[] */
+  const files = [];
+  /** let cleanup: Boolean */
+  let cleanup = false;
+  /** var i: Number */
+  for (var i = 0; i < args.length; i++) {
+    /** const a: String */
+    const a = args[i];
+    if (a === "--cleanup") cleanup = true; else if (a.startsWith("-") && (a !== "-")) usage("unknown option " + a); else files.push(a);
+  }
+  if (files.length !== 2) usage("");
+  /** const text1: String */
+  const text1 = readFileSync((files[0] === "-") ? "/dev/stdin" : files[0], "utf8");
+  /** const text2: String */
+  const text2 = readFileSync((files[1] === "-") ? "/dev/stdin" : files[1], "utf8");
+  /** const diffs: {op: Number, text: String}[] */
+  const diffs = diff(text1, text2, cleanup);
+  /** let equal: Number */
+  let equal = 0;
+  /** let deleted: Number */
+  let deleted = 0;
+  /** let inserted: Number */
+  let inserted = 0;
+  /** let edits: Number */
+  let edits = 0;
+  /** var i: Number */
+  for (var i = 0; i < diffs.length; i++) {
+    /** const d: {op: Number, text: String} */
+    const d = diffs[i];
+    if (d.op === DIFF_EQUAL) equal += d.text.length; else {
+      edits++;
+      if (d.op === DIFF_DELETE) deleted += d.text.length; else inserted += d.text.length;
+    }
+  }
+  /** const out: String[] */
+  const out = [((((((((("ops " + String(diffs.length)) + ", edits ") + String(edits)) + ", equal ") + String(equal)) + ", deleted ") + String(deleted)) + ", inserted ") + String(inserted)) + "\n"];
+  /** var i: Number */
+  for (var i = 0; i < diffs.length; i++) {
+    /** const d: {op: Number, text: String} */
+    const d = diffs[i];
+    /** const sign: String */
+    const sign = (d.op === DIFF_EQUAL) ? "=" : (d.op === DIFF_DELETE) ? "-" : "+";
+    out.push((sign + jsonString(d.text)) + "\n");
+  }
+  process.stdout.write(out.join(""));
+}
+main();
+All checks passed: examples/go-backend/tools/fastdiff.js (32 symbols) in <time>
+--- stderr

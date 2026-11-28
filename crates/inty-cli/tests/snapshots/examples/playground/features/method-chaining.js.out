@@ -1,0 +1,16 @@
+$ inty examples/playground/features/method-chaining.js
+exit: 0
+--- stdout
+var request = {url: "", method: "GET", setUrl: function(u) {
+  this.url = u;
+  return this;
+}, setMethod: function(m) {
+  this.method = m;
+  return this;
+}, send: function() {
+  return (this.method + " ") + this.url;
+}};
+/** var response: String */
+var response = request.setUrl("/api/users").setMethod("POST").send();
+All checks passed: examples/playground/features/method-chaining.js (2 symbols) in <time>
+--- stderr

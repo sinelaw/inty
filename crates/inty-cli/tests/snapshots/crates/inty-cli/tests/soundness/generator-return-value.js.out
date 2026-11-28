@@ -1,0 +1,14 @@
+$ inty crates/inty-cli/tests/soundness/generator-return-value.js
+exit: 0
+--- stdout
+/** function g() => {[Symbol.iterator]: Number, next: () => {done: Boolean, value: Number}} */
+function* g() {
+  yield 1;
+  return "s";
+}
+/** const it: {[Symbol.iterator]: Number, next: () => {done: Boolean, value: Number}} */
+const it = g();
+it.next();
+it.next().value.toFixed(1);
+All checks passed: crates/inty-cli/tests/soundness/generator-return-value.js (2 symbols) in <time>
+--- stderr

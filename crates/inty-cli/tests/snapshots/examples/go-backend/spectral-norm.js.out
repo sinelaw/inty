@@ -1,0 +1,92 @@
+$ inty examples/go-backend/spectral-norm.js
+exit: 0
+--- stdout
+/** function a(Number, Number) => Number */
+function a(i, j) {
+  return 1 / (((((i + j) * ((i + j) + 1)) / 2) + i) + 1);
+}
+/** function multiplyAv<a, b> where Indexable a Number Number, Indexable b Number Number, IndexWrite b => (Number, a, b) => Undefined */
+function multiplyAv(n, v, av) {
+  /** var i: Number */
+  for (var i = 0; i < n; i++) {
+    /** let sum: Number */
+    let sum = 0;
+    /** var j: Number */
+    for (var j = 0; j < n; j++) {
+      sum += a(i, j) * v[j];
+    }
+    av[i] = sum;
+  }
+}
+/** function multiplyAtv<a, b> where Indexable a Number Number, Indexable b Number Number, IndexWrite b => (Number, a, b) => Undefined */
+function multiplyAtv(n, v, atv) {
+  /** var i: Number */
+  for (var i = 0; i < n; i++) {
+    /** let sum: Number */
+    let sum = 0;
+    /** var j: Number */
+    for (var j = 0; j < n; j++) {
+      sum += a(j, i) * v[j];
+    }
+    atv[i] = sum;
+  }
+}
+/** function multiplyAtAv<a, b, c> where Indexable a Number Number, Indexable b Number Number, IndexWrite b, Indexable c Number Number, IndexWrite c => (Number, a, c, b) => Undefined */
+function multiplyAtAv(n, v, out, tmp) {
+  multiplyAv(n, v, tmp);
+  multiplyAtv(n, tmp, out);
+}
+/** function zeros(Number) => Number[] */
+function zeros(n) {
+  /** const xs: Number[] */
+  const xs = [];
+  /** var i: Number */
+  for (var i = 0; i < n; i++) {
+    xs.push(0);
+  }
+  return xs;
+}
+/** function spectralNorm(Number) => Number */
+function spectralNorm(n) {
+  /** const u: Number[] */
+  const u = zeros(n);
+  /** var i: Number */
+  for (var i = 0; i < n; i++) {
+    u[i] = 1;
+  }
+  /** const v: Number[] */
+  const v = zeros(n);
+  /** const tmp: Number[] */
+  const tmp = zeros(n);
+  /** var i: Number */
+  for (var i = 0; i < 10; i++) {
+    multiplyAtAv(n, u, v, tmp);
+    multiplyAtAv(n, v, u, tmp);
+  }
+  /** let vBv: Number */
+  let vBv = 0;
+  /** let vv: Number */
+  let vv = 0;
+  /** var i: Number */
+  for (var i = 0; i < n; i++) {
+    vBv += u[i] * v[i];
+    vv += v[i] * v[i];
+  }
+  return Math.sqrt(vBv / vv);
+}
+/** function main() => String */
+function main() {
+  return String(spectralNorm(3000));
+}
+/** let report: String */
+let report = "";
+/** var iteration: Number */
+for (var iteration = 0; iteration < 4; iteration++) {
+  /** const t0: Number */
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);
+All checks passed: examples/go-backend/spectral-norm.js (8 symbols) in <time>
+--- stderr

@@ -1,0 +1,30 @@
+$ inty examples/playground/features/higher-order.js
+exit: 0
+--- stdout
+function compose(f, g) {
+  return function(x) {
+  return f(g(x));
+};
+}
+/** function double(Number) => Number */
+function double(x) {
+  return x * 2;
+}
+/** function inc(Number) => Number */
+function inc(x) {
+  return x + 1;
+}
+/** var f: (Number) => Number */
+var f = compose(double, inc);
+/** var n: Number */
+var n = f(3);
+/** var g: (String) => String */
+var g = compose(function(s) {
+  return s + "!";
+}, function(s) {
+  return s + s;
+});
+/** var loud: String */
+var loud = g("yo");
+All checks passed: examples/playground/features/higher-order.js (7 symbols) in <time>
+--- stderr

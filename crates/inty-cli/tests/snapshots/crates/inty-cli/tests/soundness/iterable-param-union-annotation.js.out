@@ -1,0 +1,21 @@
+$ inty crates/inty-cli/tests/soundness/iterable-param-union-annotation.js
+exit: 1
+--- stdout
+--- stderr
+
+Error: Type mismatch: expected 'Number', found 'String'
+   ╭─[ crates/inty-cli/tests/soundness/iterable-param-union-annotation.js:7:11 ]
+   │
+ 7 │ const r = f([1]);
+   │           ┬  
+   │           ╰── Type mismatch: expected 'Number', found 'String'
+   │
+   ├─[ crates/inty-cli/tests/soundness/iterable-param-union-annotation.js:7:11 ]
+   │
+ 5 │ function f(xs) { for (const x of xs) x.toFixed(1); return xs; }
+   │                                  ─┬  
+   │                                   ╰── required here, in the body of the function this uses
+   │ 
+   │ Note: Cannot unify expected 'Number' with found 'String'
+───╯
+

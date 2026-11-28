@@ -1,0 +1,12 @@
+$ inty examples/playground/ts-misses/this-leak.js
+exit: 0
+--- stdout
+var counter = {n: 0, inc: function() {
+  this.n = this.n + 1;
+  return this.n;
+}};
+var inc = counter.inc;
+/** var ok: Number */
+var ok = counter.inc();
+All checks passed: examples/playground/ts-misses/this-leak.js (3 symbols) in <time>
+--- stderr

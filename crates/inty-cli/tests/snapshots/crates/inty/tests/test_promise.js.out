@@ -1,0 +1,55 @@
+$ inty crates/inty/tests/test_promise.js
+exit: 0
+--- stdout
+/** var pn: Promise<Number> */
+var pn = Promise.resolve(42);
+/** var ps: Promise<String> */
+var ps = Promise.resolve("ok");
+/** var pb: Promise<Boolean> */
+var pb = Promise.resolve(true);
+var bad = Promise.reject("boom");
+/** var doubled: Promise<Number> */
+var doubled = pn.then(function(n) {
+  return Promise.resolve(n * 2);
+});
+/** var chained: Promise<Number> */
+var chained = pn.then(function(n) {
+  return Promise.resolve(n + 1);
+}).then(function(n) {
+  return Promise.resolve(n * 10);
+});
+/** var recovered: Promise<Number> */
+var recovered = pn.catch(function(e) {
+  return Promise.resolve(0);
+});
+/** var done: Promise<Number> */
+var done = pn.finally(function() {
+  return undefined;
+});
+/** var all: Promise<Number[]> */
+var all = Promise.all([pn, Promise.resolve(7), Promise.resolve(9)]);
+/** function double<a>(a) => Promise<Number> */
+async function double(n) {
+  /** var v: Number */
+  var v = await pn;
+  return v * 2;
+}
+/** var d: Promise<Number> */
+var d = double(5);
+/** function sum() => Promise<Number> */
+async function sum() {
+  /** var xs: Number[] */
+  var xs = await all;
+  /** var head: Number */
+  var head = xs[0];
+  /** var next: Number */
+  var next = await double(head);
+  return head + next;
+}
+/** function fetchJson(String) => Promise<Number> */
+async function fetchJson(path) {
+  var res = await fetch(path);
+  return res.status;
+}
+All checks passed: crates/inty/tests/test_promise.js (13 symbols) in <time>
+--- stderr

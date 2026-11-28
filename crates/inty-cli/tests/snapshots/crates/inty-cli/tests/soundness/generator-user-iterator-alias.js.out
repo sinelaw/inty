@@ -1,0 +1,12 @@
+$ inty crates/inty-cli/tests/soundness/generator-user-iterator-alias.js
+exit: 0
+--- stdout
+/** type Iterator<T> = {current: T} */
+/** function g() => {current: Number} */
+function* g() {
+  yield 1;
+}
+/** const c: String */
+const c = g().current.toFixed(1);
+All checks passed: crates/inty-cli/tests/soundness/generator-user-iterator-alias.js (2 symbols) in <time>
+--- stderr

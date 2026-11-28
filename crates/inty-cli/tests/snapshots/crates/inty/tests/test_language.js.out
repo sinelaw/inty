@@ -1,0 +1,331 @@
+$ inty crates/inty/tests/test_language.js
+exit: 1
+--- stdout
+--- stderr
+
+Warning: this comparison is always true: the type of the operand cannot violate it
+    ╭─[ crates/inty/tests/test_language.js:25:13 ]
+    │
+ 25 │         if (typeof actual === 'number') {
+    │             ─────────────┬────────────  
+    │                          ╰────────────── this comparison is always true: the type of the operand cannot violate it
+────╯
+
+
+Warning: this comparison is always false: the type of the operand cannot satisfy it
+    ╭─[ crates/inty/tests/test_language.js:29:13 ]
+    │
+ 29 │         if (typeof actual === 'object') {
+    │             ─────────────┬────────────  
+    │                          ╰────────────── this comparison is always false: the type of the operand cannot satisfy it
+────╯
+
+Error: Undefined variable: 'arguments'
+    ╭─[ crates/inty/tests/test_language.js:17:9 ]
+    │
+ 17 │     if (arguments.length == 1)
+    │         ────┬────  
+    │             ╰────── Undefined variable: 'arguments'
+────╯
+Error: Property 'constructor' not found in type Number
+    ╭─[ crates/inty/tests/test_language.js:31:17 ]
+    │
+ 31 │             &&  actual.constructor === expected.constructor
+    │                 ─────────┬────────  
+    │                          ╰────────── Property 'constructor' not found in type Number
+────╯
+Error: Property 'constructor' not found in type Number
+    ╭─[ crates/inty/tests/test_language.js:39:17 ]
+    │
+ 39 │                 get_full_type(actual) + ":|" + actual + "|, expected " +
+    │                 ──────┬──────  
+    │                       ╰──────── Property 'constructor' not found in type Number
+    │
+    ├─[ crates/inty/tests/test_language.js:39:17 ]
+    │
+ 11 │             if (o.constructor && o.constructor.name)
+    │                 ──────┬──────  
+    │                       ╰──────── required here, in the body of the function this uses
+────╯
+Error: Branches have different types: 'Undefined' and 'Boolean'
+    ╭─[ crates/inty/tests/test_language.js:5:1 ]
+    │
+  5 │ ╭─▶ function assert(actual, expected, message) {
+    ┆ ┆   
+ 42 │ ├─▶ }
+    │ │       
+    │ ╰─────── Branches have different types: 'Undefined' and 'Boolean'
+    │     
+    │     Help: inty doesn't infer a union from branches; annotate the result (e.g. `/** const v: Undefined | Boolean */`) if one is meant
+────╯
+
+Error: Type mismatch: expected 'Number', found 'Boolean'
+     ╭─[ crates/inty/tests/test_language.js:107:5 ]
+     │
+ 107 │     r = (1 << 31) < 0;
+     │     ────────┬────────  
+     │             ╰────────── Type mismatch: expected 'Number', found 'Boolean'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'Boolean'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'Boolean'
+     ╭─[ crates/inty/tests/test_language.js:131:5 ]
+     │
+ 131 │     r = !1;
+     │     ───┬──  
+     │        ╰──── Type mismatch: expected 'Number', found 'Boolean'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'Boolean'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found '{x: Boolean}'
+     ╭─[ crates/inty/tests/test_language.js:207:5 ]
+     │
+ 207 │     a = {x:true};
+     │     ──────┬─────  
+     │           ╰─────── Type mismatch: expected 'Number', found '{x: Boolean}'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found '{x: Boolean}'
+─────╯
+
+Error: Property 'x' not found in type Number
+     ╭─[ crates/inty/tests/test_language.js:208:5 ]
+     │
+ 208 │     a.x++;
+     │     ─┬─  
+     │      ╰─── Property 'x' not found in type Number
+─────╯
+
+Error: Type mismatch: expected 'Number', found '{x: Boolean}'
+     ╭─[ crates/inty/tests/test_language.js:211:5 ]
+     │
+ 211 │     a = {x:true};
+     │     ──────┬─────  
+     │           ╰─────── Type mismatch: expected 'Number', found '{x: Boolean}'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found '{x: Boolean}'
+─────╯
+
+Error: Property 'x' not found in type Number
+     ╭─[ crates/inty/tests/test_language.js:212:5 ]
+     │
+ 212 │     a.x--;
+     │     ─┬─  
+     │      ╰─── Property 'x' not found in type Number
+─────╯
+
+Error: Type mismatch: expected 'Number', found 'Boolean[]'
+     ╭─[ crates/inty/tests/test_language.js:215:5 ]
+     │
+ 215 │     a = [true];
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'Boolean[]'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'Boolean[]'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found '{x: Boolean}'
+     ╭─[ crates/inty/tests/test_language.js:219:5 ]
+     │
+ 219 │     a = {x:true};
+     │     ──────┬─────  
+     │           ╰─────── Type mismatch: expected 'Number', found '{x: Boolean}'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found '{x: Boolean}'
+─────╯
+
+Error: Property 'x' not found in type Number
+     ╭─[ crates/inty/tests/test_language.js:220:9 ]
+     │
+ 220 │     r = a.x++;
+     │         ─┬─  
+     │          ╰─── Property 'x' not found in type Number
+─────╯
+
+Error: Type mismatch: expected 'Number', found '{x: Boolean}'
+     ╭─[ crates/inty/tests/test_language.js:223:5 ]
+     │
+ 223 │     a = {x:true};
+     │     ──────┬─────  
+     │           ╰─────── Type mismatch: expected 'Number', found '{x: Boolean}'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found '{x: Boolean}'
+─────╯
+
+Error: Property 'x' not found in type Number
+     ╭─[ crates/inty/tests/test_language.js:224:9 ]
+     │
+ 224 │     r = a.x--;
+     │         ─┬─  
+     │          ╰─── Property 'x' not found in type Number
+─────╯
+
+Error: Type mismatch: expected 'Number', found 'Boolean[]'
+     ╭─[ crates/inty/tests/test_language.js:227:5 ]
+     │
+ 227 │     a = [true];
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'Boolean[]'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'Boolean[]'
+─────╯
+
+
+Error: Type mismatch: expected 'Number', found 'Boolean[]'
+     ╭─[ crates/inty/tests/test_language.js:231:5 ]
+     │
+ 231 │     a = [true];
+     │     ─────┬────  
+     │          ╰────── Type mismatch: expected 'Number', found 'Boolean[]'
+     │ 
+     │ Note: Cannot unify expected 'Number' with found 'Boolean[]'
+─────╯
+
+Error: Type 'Number' is not an instance of Indexable
+     ╭─[ crates/inty/tests/test_language.js:216:5 ]
+     │
+ 216 │     a[0]++;
+     │     ──┬─  
+     │       ╰─── Type 'Number' is not an instance of Indexable
+─────╯
+Error: Property 'call' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+     ╭─[ crates/inty/tests/test_language.js:244:9 ]
+     │
+ 244 │     a = new Object;
+     │         ─────┬────  
+     │              ╰────── Property 'call' not found in type {assign: (a, b) => a, entries: (Dict<c>) => [String, c][], freeze: (a) => a, fromEntries: ([String, c][]) => Dict<c>, keys: (a) => String[], values: (Dict<c>) => c[]}
+─────╯
+Error: Type mismatch: expected 'a constructor returning an object (`new` gives back the object it made in place of a primitive result)', found 'a function returning `Undefined`'
+     ╭─[ crates/inty/tests/test_language.js:247:9 ]
+     │
+ 247 │     b = new F(2);
+     │         ────┬───  
+     │             ╰───── Type mismatch: expected 'a constructor returning an object (`new` gives back the object it made in place of a primitive result)', found 'a function returning `Undefined`'
+─────╯
+
+Error: Type mismatch: expected '{x: Number}', found '{}'
+     ╭─[ crates/inty/tests/test_language.js:255:5 ]
+     │
+ 255 │     a = {};
+     │     ───┬──  
+     │        ╰──── Type mismatch: expected '{x: Number}', found '{}'
+     │ 
+     │ Help: missing field 'x'
+     │ 
+     │ Note: Cannot unify expected '{x: Number}' with found '{}'
+─────╯
+
+
+Error: Type mismatch: expected '{x: Number}', found '{x: Number, y: Number}'
+     ╭─[ crates/inty/tests/test_language.js:264:5 ]
+     │
+ 264 │     a = {x: 1, y: 1};
+     │     ────────┬───────  
+     │             ╰───────── Type mismatch: expected '{x: Number}', found '{x: Number, y: Number}'
+     │ 
+     │ Help: unexpected field 'y' (the expected record type is closed)
+     │ 
+     │ Note: Cannot unify expected '{x: Number}' with found '{x: Number, y: Number}'
+─────╯
+
+Error: delete is not supported — construct a new object literal omitting the field instead, e.g. `const { a: _drop, ...rest } = o;`
+     ╭─[ crates/inty/tests/test_language.js:265:13 ]
+     │
+ 265 │     assert((delete a.x), true, "delete");
+     │             ─────┬────  
+     │                  ╰────── delete is not supported — construct a new object literal omitting the field instead, e.g. `const { a: _drop, ...rest } = o;`
+─────╯
+
+Error: Type mismatch: expected '{x: Number}', found '{if: Number, x: Number}'
+     ╭─[ crates/inty/tests/test_language.js:268:5 ]
+     │
+ 268 │     a = {x: 1, if: 2};
+     │     ────────┬────────  
+     │             ╰────────── Type mismatch: expected '{x: Number}', found '{if: Number, x: Number}'
+     │ 
+     │ Help: unexpected field 'if' (the expected record type is closed)
+     │ 
+     │ Note: Cannot unify expected '{x: Number}' with found '{if: Number, x: Number}'
+─────╯
+
+
+Error: Type mismatch: expected '{x: Number}', found '{__proto__: {z: Number}, x: Number, y: Number}'
+     ╭─[ crates/inty/tests/test_language.js:271:5 ]
+     │
+ 271 │     a = {x: 1, y: 2, __proto__: { z: 3 }};
+     │     ──────────────────┬──────────────────  
+     │                       ╰──────────────────── Type mismatch: expected '{x: Number}', found '{__proto__: {z: Number}, x: Number, y: Number}'
+     │ 
+     │ Help: unexpected fields '__proto__', 'y' (the expected record type is closed)
+     │ 
+     │ Note: Cannot unify expected '{x: Number}' with found '{__proto__: {z: Number}, x: Number, y: Number}'
+─────╯
+
+Error: a setter (`set x(…)`) is not supported: inty doesn't model accessors that run on a store
+     ╭─[ crates/inty/tests/test_language.js:278:33 ]
+     │
+ 278 │     a = {get x() { return b; }, set x(v) { b = v; }, f(v) { return v + 1 },
+     │                                 ─────────┬─────────  
+     │                                          ╰─────────── a setter (`set x(…)`) is not supported: inty doesn't model accessors that run on a store
+─────╯
+
+Error: Type mismatch: expected '{x: Number}', found '{get: () => Number, set: () => Number}'
+     ╭─[ crates/inty/tests/test_language.js:287:5 ]
+     │
+ 287 │     a = { set() { return 1; }, get() { return 2; }}
+     │     ───────────────────────┬───────────────────────  
+     │                            ╰───────────────────────── Type mismatch: expected '{x: Number}', found '{get: () => Number, set: () => Number}'
+     │ 
+     │ Help: missing field 'x'; unexpected fields 'get', 'set'
+     │ 
+     │ Note: Cannot unify expected '{x: Number}' with found '{get: () => Number, set: () => Number}'
+─────╯
+
+
+Error: Type mismatch: expected '{x: a | b}', found 'NewTarget'
+     ╭─[ crates/inty/tests/test_language.js:247:13 ]
+     │
+ 247 │     b = new F(2);
+     │             ┬  
+     │             ╰── Type mismatch: expected '{x: a | b}', found 'NewTarget'
+     │
+     ├─[ crates/inty/tests/test_language.js:247:13 ]
+     │
+ 238 │     this.x = x;
+     │     ───┬──  
+     │        ╰──── required here, in the body of the function this uses
+     │ 
+ 247 │     b = new F(2);
+     │             ┬  
+     │             ╰── Expected type: from property access '.x'
+     │ 
+     │ Note: Cannot unify expected '{x: a | b}' with found 'NewTarget'
+─────╯
+
+Error: Arity mismatch: the function takes 0 arguments, but 2 are passed
+     ╭─[ crates/inty/tests/test_language.js:305:5 ]
+     │
+ 305 │     f2(1, 3);
+     │     ────┬───  
+     │         ╰───── Arity mismatch: the function takes 0 arguments, but 2 are passed
+     │ 
+     │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+─────╯
+Error: Property 'toString' not found in type {x: String, y: Number}
+     ╭─[ crates/inty/tests/test_language.js:312:5 ]
+     │
+ 312 │     obj.toString = function () { return this.x; };
+     │     ──────┬─────  
+     │           ╰─────── Property 'toString' not found in type {x: String, y: Number}
+─────╯
+Error: Property 'valueOf' not found in type {x: String, y: Number}
+     ╭─[ crates/inty/tests/test_language.js:313:5 ]
+     │
+ 313 │     obj.valueOf = function () { return this.y; };
+     │     ─────┬─────  
+     │          ╰─────── Property 'valueOf' not found in type {x: String, y: Number}
+─────╯

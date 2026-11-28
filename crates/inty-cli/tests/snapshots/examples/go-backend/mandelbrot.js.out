@@ -1,0 +1,51 @@
+$ inty examples/go-backend/mandelbrot.js
+exit: 0
+--- stdout
+/** function mandelbrot(Number, Number) => Number */
+function mandelbrot(size, maxIter) {
+  /** let inside: Number */
+  let inside = 0;
+  /** var py: Number */
+  for (var py = 0; py < size; py++) {
+    /** const ci: Number */
+    const ci = ((2 * py) / size) - 1;
+    /** var px: Number */
+    for (var px = 0; px < size; px++) {
+      /** const cr: Number */
+      const cr = ((2 * px) / size) - 1.5;
+      /** let zr: Number */
+      let zr = 0;
+      /** let zi: Number */
+      let zi = 0;
+      /** let i: Number */
+      let i = 0;
+      while ((i < maxIter) && (((zr * zr) + (zi * zi)) <= 4)) {
+        /** const t: Number */
+        const t = ((zr * zr) - (zi * zi)) + cr;
+        zi = ((2 * zr) * zi) + ci;
+        zr = t;
+        i++;
+      }
+      if (i === maxIter) {
+        inside++;
+      }
+    }
+  }
+  return inside;
+}
+/** function main() => String */
+function main() {
+  return String(mandelbrot(2000, 200));
+}
+/** let report: String */
+let report = "";
+/** var iteration: Number */
+for (var iteration = 0; iteration < 4; iteration++) {
+  /** const t0: Number */
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);
+All checks passed: examples/go-backend/mandelbrot.js (3 symbols) in <time>
+--- stderr

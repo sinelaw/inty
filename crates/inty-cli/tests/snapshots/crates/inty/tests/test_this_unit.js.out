@@ -1,0 +1,81 @@
+$ inty crates/inty/tests/test_this_unit.js
+exit: 0
+--- stdout
+/** function assert<a> where Testable a => (a, String) => Undefined */
+function assert(condition, message) {
+  if (!condition) {
+    throw "Assertion failed: " + message;
+  }
+}
+var obj = {x: 10, getX: function() {
+  return this.x;
+}};
+/** var result: Number */
+var result = obj.getX();
+assert(result === 10, "getX should return 10");
+assert((typeof result) === "number", "getX should return number type");
+var point = {x: 10, y: 20, getX: function() {
+  return this.x;
+}, getY: function() {
+  return this.y;
+}};
+/** var x: Number */
+var x = point.getX();
+/** var y: Number */
+var y = point.getY();
+assert(x === 10, "getX should return 10");
+assert(y === 20, "getY should return 20");
+assert((x + y) === 30, "x + y should be 30");
+var rect = {width: 10, height: 20, area: function() {
+  return this.width * this.height;
+}};
+/** var area: Number */
+var area = rect.area();
+assert(area === 200, "area should be 200");
+var person = {name: "Alice", getName: function() {
+  return this.name;
+}};
+/** var name: String */
+var name = person.getName();
+assert(name === "Alice", "getName should return Alice");
+var calculator = {base: 10, add: function(x) {
+  return this.base + x;
+}};
+/** var sum: Number */
+var sum = calculator.add(5);
+assert(sum === 15, "add(5) should return 15");
+var counter = {value: 0, increment: function() {
+  this.value = this.value + 1;
+  return this;
+}, get: function() {
+  return this.value;
+}};
+/** var finalValue: Number */
+var finalValue = counter.increment().increment().get();
+assert(finalValue === 2, "after two increments, value should be 2");
+function makePoint(x, y) {
+  return {x: x, y: y, getX: function() {
+  return this.x;
+}, getY: function() {
+  return this.y;
+}, sum: function() {
+  return this.x + this.y;
+}};
+}
+var p = makePoint(3, 4);
+assert(p.getX() === 3, "getX should return 3");
+assert(p.getY() === 4, "getY should return 4");
+assert(p.sum() === 7, "sum should return 7");
+var mixed = {count: 42, label: "answer", getCount: function() {
+  return this.count;
+}, getLabel: function() {
+  return this.label;
+}};
+/** var num: Number */
+var num = mixed.getCount();
+/** var str: String */
+var str = mixed.getLabel();
+assert(num === 42, "getCount should return 42");
+assert(str === "answer", "getLabel should return 'answer'");
+All checks passed: crates/inty/tests/test_this_unit.js (19 symbols) in <time>
+--- stderr

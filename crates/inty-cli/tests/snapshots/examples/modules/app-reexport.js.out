@@ -1,0 +1,18 @@
+$ inty examples/modules/app-reexport.js
+exit: 0
+--- stdout
+import describe, { double, triplicate, internals } from "./lib.js";
+/** const a: Number */
+const a = double(21);
+/** const b: Number */
+const b = triplicate(7);
+/** const tag: String */
+const tag = internals.TAG;
+/** const summary: String */
+const summary = describe();
+console.log(a);
+console.log(b);
+console.log(tag);
+console.log(summary);
+All checks passed: examples/modules/app-reexport.js (4 symbols) in <time>
+--- stderr

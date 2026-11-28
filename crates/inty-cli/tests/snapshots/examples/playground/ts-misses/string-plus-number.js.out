@@ -1,0 +1,15 @@
+$ inty examples/playground/ts-misses/string-plus-number.js
+exit: 1
+--- stdout
+--- stderr
+
+Error: Type mismatch: expected 'String', found 'Number'
+   ╭─[ examples/playground/ts-misses/string-plus-number.js:8:13 ]
+   │
+ 8 │ var msg   = "Got " + count + " items";
+   │             ───────┬──────  
+   │                    ╰──────── Type mismatch: expected 'String', found 'Number'
+   │ 
+   │ Note: Cannot unify expected 'String' with found 'Number'
+───╯
+

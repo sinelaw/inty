@@ -1,0 +1,17 @@
+$ inty examples/playground/ts-misses/missing-prop.js
+exit: 1
+--- stdout
+--- stderr
+Error: Property 'firstName' not found in type {id: Number, name: String}
+    ╭─[ examples/playground/ts-misses/missing-prop.js:11:12 ]
+    │
+ 11 │ var name = fullName({ name: "Alice", id: 42 });
+    │            ────┬───  
+    │                ╰───── Property 'firstName' not found in type {id: Number, name: String}
+    │
+    ├─[ examples/playground/ts-misses/missing-prop.js:11:12 ]
+    │
+  8 │     return user.firstName + " " + user.lastName;
+    │            ───────┬──────  
+    │                   ╰──────── required here, in the body of the function this uses
+────╯

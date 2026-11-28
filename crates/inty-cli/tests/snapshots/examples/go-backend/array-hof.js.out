@@ -1,0 +1,50 @@
+$ inty examples/go-backend/array-hof.js
+exit: 0
+--- stdout
+/** function range(Number) => Number[] */
+function range(n) {
+  /** const xs: Number[] */
+  const xs = [];
+  /** var i: Number */
+  for (var i = 0; i < n; i++) {
+    xs.push(i);
+  }
+  return xs;
+}
+/** function main() => String */
+function main() {
+  /** const lines: Number[] */
+  const lines = [];
+  /** const xs: Number[] */
+  const xs = range(100000);
+  /** let total: Number */
+  let total = 0;
+  /** var round: Number */
+  for (var round = 0; round < 150; round++) {
+    /** const squares: Number[] */
+    const squares = xs.map((x) => {
+  return (x * x) + round;
+});
+    /** const odd: Number[] */
+    const odd = squares.filter((x) => {
+  return (x % 2) === 1;
+});
+    total += odd.reduce((acc, x) => {
+  return acc + (x / 1000);
+}, 0);
+  }
+  lines.push(total);
+  return lines.join("\n");
+}
+/** let report: String */
+let report = "";
+/** var iteration: Number */
+for (var iteration = 0; iteration < 4; iteration++) {
+  /** const t0: Number */
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);
+All checks passed: examples/go-backend/array-hof.js (3 symbols) in <time>
+--- stderr

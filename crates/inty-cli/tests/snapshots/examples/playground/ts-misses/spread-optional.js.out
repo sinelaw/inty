@@ -1,0 +1,13 @@
+$ inty examples/playground/ts-misses/spread-optional.js
+exit: 1
+--- stdout
+--- stderr
+Error: Property 'toFixed' not found in type Number | Undefined: the value may be undefined
+    ╭─[ examples/playground/ts-misses/spread-optional.js:15:13 ]
+    │
+ 15 │ console.log(cfg.retries.toFixed());
+    │             ─────────┬─────────  
+    │                      ╰─────────── Property 'toFixed' not found in type Number | Undefined: the value may be undefined
+    │ 
+    │ Help: test it first (`if (x !== undefined) x.toFixed`) or give a default (`(x ?? fallback).toFixed`); to test a property, copy it into a `const` and test that
+────╯

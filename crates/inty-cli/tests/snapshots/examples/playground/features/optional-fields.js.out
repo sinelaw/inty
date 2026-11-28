@@ -1,0 +1,15 @@
+$ inty examples/playground/features/optional-fields.js
+exit: 0
+--- stdout
+/** function request(opts: {url: String, method?: String, body?: String}) => String */
+function request(opts) {
+  return opts.url;
+}
+/** var a: String */
+var a = request({url: "/api"});
+/** var b: String */
+var b = request({url: "/api", method: "POST"});
+/** var c: String */
+var c = request({url: "/api", method: "POST", body: "hello"});
+All checks passed: examples/playground/features/optional-fields.js (4 symbols) in <time>
+--- stderr

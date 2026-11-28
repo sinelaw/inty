@@ -1,0 +1,12 @@
+# Directives for the corpus programs of tests/soundness.rs that aren't
+# probes (the probes, in this directory, carry theirs as `// inty: ...`
+# lines). One per line: `PATH DIRECTIVE`, PATH relative to the workspace
+# root; see tests/soundness.rs for the directives.
+
+# Programs that need what Node doesn't give a script.
+examples/spa/app.js no-run: a browser page; reads `document` and the DOM
+examples/go-backend/tools/fastdiff.js no-run: a command-line tool; needs two file arguments (exits 2 without them)
+crates/inty-go/tests/io/io.js no-run: a command-line tool; needs an input file and an output directory (see crates/inty-go/tests/go_backend.rs)
+
+# Programs that end in an error of their own on purpose.
+crates/inty/tests/test_promise.js throws: `Promise.reject("boom")` with no handler is an unhandled rejection

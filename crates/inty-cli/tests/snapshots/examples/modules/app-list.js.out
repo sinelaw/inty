@@ -1,0 +1,12 @@
+$ inty examples/modules/app-list.js
+exit: 0
+--- stdout
+import { square, pow3 } from "./math.js";
+/** const a: Number */
+const a = square(4);
+/** const b: Number */
+const b = pow3(3);
+console.log(a);
+console.log(b);
+All checks passed: examples/modules/app-list.js (2 symbols) in <time>
+--- stderr

@@ -1,0 +1,17 @@
+$ inty examples/playground/ts-misses/uncalled-function.js
+exit: 1
+--- stdout
+--- stderr
+Error: Type '() => Boolean' is not an instance of Testable (a function is always truthy, so this test always comes out the same: call it)
+    ╭─[ examples/playground/ts-misses/uncalled-function.js:16:13 ]
+    │
+ 16 │ console.log(label(isLocked));
+    │             ──┬──  
+    │               ╰──── Type '() => Boolean' is not an instance of Testable (a function is always truthy, so this test always comes out the same: call it)
+    │
+    ├─[ examples/playground/ts-misses/uncalled-function.js:16:13 ]
+    │
+ 14 │ function label(flag) { return flag ? "locked" : "open"; }
+    │                               ──┬─  
+    │                                 ╰─── required here, in the body of the function this uses
+────╯

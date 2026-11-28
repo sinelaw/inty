@@ -1,0 +1,8 @@
+$ inty crates/inty-cli/tests/soundness/generator-static-method-on-instance.js
+exit: 0
+--- stdout
+class C { static /** function g() => {[Symbol.iterator]: Number, next: () => {done: Boolean, value: Number}} */ *g() { yield 1; } }
+/** const xs: Number[] */
+const xs = [...new C().g()];
+All checks passed: crates/inty-cli/tests/soundness/generator-static-method-on-instance.js (2 symbols) in <time>
+--- stderr

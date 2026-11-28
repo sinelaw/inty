@@ -1,0 +1,11 @@
+$ inty examples/playground/ts-misses/method-bivariance.js
+exit: 1
+--- stdout
+--- stderr
+Error: Property 'toFixed' not found in type String
+    ╭─[ examples/playground/ts-misses/method-bivariance.js:12:38 ]
+    │
+ 12 │ const handler = { handle(v) { return v.toFixed(2); } };
+    │                                      ────┬────  
+    │                                          ╰────── Property 'toFixed' not found in type String
+────╯

@@ -1,0 +1,20 @@
+$ inty crates/inty-cli/tests/soundness/generator-default-param-function.js
+exit: 1
+--- stdout
+--- stderr
+Error: Undefined variable: 'yield'
+   ╭─[ crates/inty-cli/tests/soundness/generator-default-param-function.js:4:47 ]
+   │
+ 4 │ function* g(cb = function () { return 1; }) { yield cb(); }
+   │                                               ──┬──  
+   │                                                 ╰──── Undefined variable: 'yield'
+───╯
+Error: Arity mismatch: the function takes 1 argument, but 0 are passed
+   ╭─[ crates/inty-cli/tests/soundness/generator-default-param-function.js:5:17 ]
+   │
+ 5 │ for (const x of g()) x.toFixed(1);
+   │                 ─┬─  
+   │                  ╰─── Arity mismatch: the function takes 1 argument, but 0 are passed
+   │ 
+   │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+───╯

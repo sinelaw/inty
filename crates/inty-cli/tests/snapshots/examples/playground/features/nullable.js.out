@@ -1,0 +1,15 @@
+$ inty examples/playground/features/nullable.js
+exit: 0
+--- stdout
+/** var arr: Number[] */
+var arr = [1, 2, 3];
+/** var v: Number | Undefined */
+var v = arr.find(function(n) {
+  return n > 0;
+});
+/** var pick: Number */
+var pick = v ?? 0;
+/** var safe: Number */
+var safe = ((typeof v) === "undefined") ? 0 : v;
+All checks passed: examples/playground/features/nullable.js (4 symbols) in <time>
+--- stderr

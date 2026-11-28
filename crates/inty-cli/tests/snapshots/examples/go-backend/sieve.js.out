@@ -1,0 +1,50 @@
+$ inty examples/go-backend/sieve.js
+exit: 0
+--- stdout
+/** function sieve(Number) => Number */
+function sieve(n) {
+  /** const composite: Boolean[] */
+  const composite = [];
+  /** var i: Number */
+  for (var i = 0; i <= n; i++) {
+    composite.push(false);
+  }
+  /** let count: Number */
+  let count = 0;
+  /** var i: Number */
+  for (var i = 2; i <= n; i++) {
+    if (!composite[i]) {
+      count++;
+      /** var j: Number */
+      for (var j = i * i; j <= n; j += i) {
+        composite[j] = true;
+      }
+    }
+  }
+  return count;
+}
+/** function main() => String */
+function main() {
+  /** const lines: Number[] */
+  const lines = [];
+  /** let total: Number */
+  let total = 0;
+  /** var round: Number */
+  for (var round = 0; round < 10; round++) {
+    total += sieve(2000000);
+  }
+  lines.push(total);
+  return lines.join("\n");
+}
+/** let report: String */
+let report = "";
+/** var iteration: Number */
+for (var iteration = 0; iteration < 4; iteration++) {
+  /** const t0: Number */
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);
+All checks passed: examples/go-backend/sieve.js (3 symbols) in <time>
+--- stderr
