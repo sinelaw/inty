@@ -1,6 +1,8 @@
-class Counter {
-  constructor(start) { this.count = start; }
-  next() { return this.count + 1; }
+// A class whose field is set from an unannotated constructor parameter
+// is generic in that field's type: naming it without an argument says
+// which field, and that `Box<Number>` names it.
+class Box {
+  constructor(value) { this.value = value; }
 }
-/** function current(c: Counter) => Number */
-function current(c) { return c.count; }
+/** function current(b: Box) => Number */
+function current(b) { return b.value; }
