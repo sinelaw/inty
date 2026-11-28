@@ -6978,3 +6978,29 @@ fn a_deferred_method_call_checks_the_methods_this() {
         Ok(vec!["Number".into(), "Number".into()])
     );
 }
+
+/// A call of a function that gives back its argument (`Object.freeze`,
+/// `structuredClone`, an identity of the program's) where a type is
+/// expected checks the argument against it, as the argument written
+/// there would be: an object literal's `null` fits a `String | Null`
+/// field.
+#[test]
+fn an_identity_call_checks_its_argument_against_what_is_expected() {
+    let src = "/** type D = {fg: String | Null, wavy: String | Null} */\n\
+               /** function d(fg: String | Null) => D */\n\
+               function d(fg) { return Object.freeze({ fg, wavy: null }); }\n\
+               /** const c: D */\n\
+               const c = structuredClone({ fg: null, wavy: \"x\" });\n\
+               function id(x) { return x; }\n\
+               /** const k: D */\n\
+               const k = id({ fg: \"a\", wavy: null });\n\
+               const n = Object.freeze([1, 2]).length;";
+    check_with_stdlib(src, &[]).unwrap();
+    // The argument must still fit.
+    for bad in [
+        "/** type D = {fg: String | Null} */ /** const e: D */ const e = Object.freeze({ fg: 1 });",
+        "/** type D = {fg: String | Null} */ /** const e: D */ const e = Object.freeze({ fg: null, x: 1 });",
+    ] {
+        assert!(check_with_stdlib(bad, &[]).is_err(), "{}", bad);
+    }
+}

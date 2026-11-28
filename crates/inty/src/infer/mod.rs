@@ -1523,6 +1523,9 @@ impl InferState {
         expr: &Expr,
         expected: &Type,
     ) -> InferResult<Type> {
+        if let Some(ty) = self.check_identity_call(env, expr, expected)? {
+            return Ok(ty);
+        }
         // Only these push what is expected into them; anything else is
         // synthesised and subsumed, which resolves `expected` as far as
         // it goes (not whole, up front).
@@ -1730,6 +1733,70 @@ impl InferState {
     }
 
     /// `check_expr`'s default: synthesise, then subsume into expected.
+    /// A call of a function that gives back its argument, `<a>(a) => a`
+    /// (`Object.freeze(x)`, `structuredClone(x)`, a program's own
+    /// identity), where a type is expected: the argument is checked
+    /// against it, as it would be written there without the call, so an
+    /// object literal's `null` fits a `String | Null` field. `None` for
+    /// any other expression or callee (the callee is read once more by
+    /// the synthesis then, so only a name or a member of one is tried),
+    /// or when nothing is known of what is expected.
+    fn check_identity_call(
+        &mut self,
+        env: &TypeEnv,
+        expr: &Expr,
+        expected: &Type,
+    ) -> InferResult<Option<Type>> {
+        let Expr::Call {
+            callee,
+            arguments,
+            keywords,
+            span,
+        } = expr
+        else {
+            return Ok(None);
+        };
+        let [arg] = arguments.as_slice() else {
+            return Ok(None);
+        };
+        let plain_callee = match callee.as_ref() {
+            Expr::Ident { .. } => true,
+            Expr::Member { object, .. } => matches!(object.as_ref(), Expr::Ident { .. }),
+            _ => false,
+        };
+        if !plain_callee || !keywords.is_empty() || matches!(arg, Expr::Spread { .. }) {
+            return Ok(None);
+        }
+        let expected = self.zonk_head(expected);
+        if matches!(expected, Type::Var(crate::types::TVarName::Flex(_))) {
+            return Ok(None);
+        }
+        let callee_ty = self.infer_expr(env, callee)?;
+        let callee_ty = self.zonk_head(&callee_ty);
+        let Some((this, params, ret)) = features::functions::extract_callable(&callee_ty) else {
+            return Ok(None);
+        };
+        let [param] = params.as_slice() else {
+            return Ok(None);
+        };
+        let uses_no_this = match this.map(|t| self.zonk_head(&t)) {
+            None | Some(Type::ArrowThis) => true,
+            Some(Type::Var(crate::types::TVarName::Flex(_))) => true,
+            _ => false,
+        };
+        let identity = matches!(
+            (self.zonk_head(&param.ty), self.zonk_head(&ret)),
+            (Type::Var(crate::types::TVarName::Flex(a)), Type::Var(crate::types::TVarName::Flex(b))) if a == b
+        );
+        if !uses_no_this || !identity || param.presence != crate::types::Presence::Pre {
+            return Ok(None);
+        }
+        self.check_expr(env, arg, &expected)
+            .map_err(|e| self.locate_in_value(arg, e))?;
+        self.unify(*span, &ret, &expected)?;
+        Ok(Some(self.zonk_head(&expected)))
+    }
+
     fn check_by_synthesis(
         &mut self,
         env: &TypeEnv,

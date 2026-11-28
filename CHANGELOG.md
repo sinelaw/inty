@@ -243,6 +243,12 @@ unterminated-comment error.
 
 ### Fixes
 
+- `Object.freeze({fg, wavy: null})` returned where a `{fg: String | Null,
+  wavy: String | Null}` is expected was rejected (`wavy`'s `Null` isn't
+  `String | Null`), though the literal itself was accepted there: a call
+  of a function giving back its argument, `<a>(a) => a` (`Object.freeze`,
+  `structuredClone`, a program's own identity), where a type is expected
+  now checks its argument against that type.
 - A class whose method reads `this` (`get(i) { return this.n + i; }`)
   took a type parameter (`class 'A' takes 1 type argument (a type in
   method 'get')`), so `/** function f(a: A) */` was rejected: the
