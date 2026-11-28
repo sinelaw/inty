@@ -260,6 +260,9 @@ unterminated-comment error.
   parameter for it. It now types the field: the value set there is
   checked against `T`, and so is the constructor parameter that flows
   into it. One anywhere else is an error rather than ignored.
+- A class field's annotation that doesn't parse (`/** this.w: Wasm */`
+  with `Wasm` generic) stopped the whole class from being checked: it is
+  reported, the field's type is unknown, and the class is checked.
 - `Object.freeze({fg, wavy: null})` returned where a `{fg: String | Null,
   wavy: String | Null}` is expected was rejected (`wavy`'s `Null` isn't
   `String | Null`), though the literal itself was accepted there: a call

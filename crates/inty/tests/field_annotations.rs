@@ -102,3 +102,28 @@ fn a_doc_comment_starting_with_this_is_prose() {
     );
     assert!(r.is_ok(), "{:?}", r);
 }
+
+/// A field annotation that doesn't parse is reported once; the class is
+/// still checked, and the field's type is unknown rather than a type
+/// parameter of the class.
+#[test]
+fn a_field_annotation_that_does_not_parse_is_reported_once() {
+    let src = "class W {\n  constructor(x) { this.x = x; }\n}\n\
+               class H {\n  constructor(w) {\n    /** this.w: W */\n    this.w = w;\n    \
+               this.g = [1];\n  }\n  n() { return this.g.length; }\n}\n\
+               /** function f(h: H) => Number */ function f(h) { return h.n(); }\n";
+    let program = parse(src).unwrap();
+    let (env, mut state) = initial_env_with_stdlib().unwrap();
+    let _ = state.infer_program_with_env(&env, &program);
+    let _ = state.resolve_constraints();
+    let errs: Vec<String> = state
+        .take_errors()
+        .iter()
+        .map(|e| format!("{:?}", e))
+        .collect();
+    assert_eq!(errs.len(), 1, "{errs:#?}");
+    assert!(
+        errs[0].contains("class 'W' takes 1 type argument"),
+        "{errs:#?}"
+    );
+}

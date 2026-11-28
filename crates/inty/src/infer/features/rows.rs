@@ -271,7 +271,16 @@ impl InferState {
                                 props.insert(prop_name, FieldEntry::pre(inferred));
                                 continue;
                             }
-                            Err(e) => return Err(e.into()),
+                            // An annotation that doesn't parse is reported,
+                            // and the field's type is unknown (`Error`): the
+                            // rest of the object (a class's instance) is
+                            // still checked, and what reads the field isn't
+                            // reported again.
+                            Err(e) => {
+                                self.push_error(e.into());
+                                props.insert(prop_name, FieldEntry::pre(Type::Error));
+                                continue;
+                            }
                         };
                         self.bump_pvar_id_to(next_pvar);
                         if let Some(&max) = var_map.values().max() {
@@ -1012,7 +1021,13 @@ impl InferState {
                                 props.insert(prop_name, value_type);
                                 continue;
                             }
-                            Err(e) => return Err(e.into()),
+                            // (Reported, the field unknown, as in synthesis.)
+                            Err(e) => {
+                                self.push_error(e.into());
+                                self.check_expr(env, value, &expected_prop_ty)?;
+                                props.insert(prop_name, Type::Error);
+                                continue;
+                            }
                         };
                         self.bump_pvar_id_to(next_pvar);
                         if let Some(&max) = var_map.values().max() {
