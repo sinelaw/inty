@@ -125,6 +125,13 @@
   `MessageChannel<M>`; a worker's own scope, `self` (a
   `WorkerScope<I, O>`) and `postMessage`, with `--lib builtin:worker`.
 
+### Weak references
+
+- `FinalizationRegistry<T>` (`new FinalizationRegistry(cleanup)`,
+  `register(target, held: T, token?)` with a target of any type,
+  `unregister(token)`) and `WeakRef<T>` (`deref()` gives `T` or
+  `undefined`).
+
 ### Generators
 
 - `function*` declarations, expressions and `export`s, and `*m() { … }`
@@ -254,6 +261,17 @@ unterminated-comment error.
 
 ### Fixes
 
+- A type alias's optional parameters (`b?: T`) shared presence variables
+  with other aliases' and with ones inference made, so deciding one
+  decided another: after a `Worker`'s `postMessage(msg)`, a
+  `WorkerScope`'s `postMessage(msg, [buf])` was refused ("the function
+  takes 2 arguments, but 2 are passed").
+- `for (;;)`, `for (…; true; …)` and `do … while (true)` with no `break`
+  don't fall through: a function ending in one doesn't also return
+  `undefined`.
+- A program's own `Iterator`, `ArrayBuffer` or `WebAssemblyModule` alias
+  no longer stands in for the library's in a generator's type, a typed
+  array's `buffer` or `WebAssembly.instantiate`.
 - `/** this.x: T */` above a constructor's `this.x = …` line was ignored
   (read as a prose doc comment), so a field set from an unannotated
   constructor parameter stayed generic and the class took a type
