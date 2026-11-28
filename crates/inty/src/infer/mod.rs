@@ -163,6 +163,7 @@ impl InferState {
         let errors_at_entry = self.errors.len();
         self.env_after_errors = None;
         let result = self.infer_program_unrendered(env, program);
+        self.settle_unbranded_classes(program);
         let first_collected = |state: &Self| state.errors.get(errors_at_entry).cloned();
         match result {
             Ok(done) if self.errors.len() == errors_at_entry => Ok(done),
@@ -682,6 +683,32 @@ impl InferState {
                         named.body = Type::Error;
                     }
                 }
+            }
+        }
+    }
+
+    /// A class whose name was reserved (see [`Self::reserve_class_names`])
+    /// but which was never branded failed to check (an error in its
+    /// constructor or a method was reported). Its name is then `Error` in
+    /// what refers to it (an annotation of another module, read after
+    /// this one): an unknown type, which absorbs what is asked of it,
+    /// rather than a type with no definition, which fits nothing and made
+    /// every use of it an error of its own. (Only this program's classes:
+    /// an importer's are reserved while the modules it imports are
+    /// checked.)
+    fn settle_unbranded_classes(&mut self, program: &Program) {
+        let unbranded: Vec<crate::types::TypeId> = program
+            .class_brands
+            .iter()
+            .filter_map(|name| self.reserved_class_ids.remove(name))
+            .collect();
+        for id in unbranded {
+            if !self.named_types.contains_key(&id) {
+                self.register_named_type(crate::types::TypeDef::recursive(
+                    id,
+                    Vec::new(),
+                    Type::Error,
+                ));
             }
         }
     }

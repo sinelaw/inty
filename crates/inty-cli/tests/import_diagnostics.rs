@@ -185,3 +185,30 @@ fn a_relative_entry_path_finds_the_project_config_above_it() {
         assert!(out.status.success(), "inty {args:?}:\n{text}");
     }
 }
+
+/// A class that fails to check (an error in a method) is unknown to the
+/// modules checked after it, not a type that fits nothing: an annotation
+/// naming it there gives no error of its own.
+#[test]
+fn a_class_that_failed_to_check_is_unknown_elsewhere() {
+    let dir = tmp_dir();
+    write(
+        &dir,
+        "h.js",
+        "/** type M = {kind: \"a\"} | {kind: \"b\"} */\n\
+         /** function send(m: M) => Undefined */\nfunction send(m) {}\n\
+         export class H {\n  constructor() { this.g = [1]; }\n  \
+         bad() { send({ kind: \"c\" }); return this.g.length; }\n}\n",
+    );
+    write(
+        &dir,
+        "g.js",
+        "export class G {\n  constructor(h) {\n    /** this.h: Promise<H> */\n    this.h = h;\n  }\n  \
+         go() { return this.h.then((x) => x.g.length + x.bad()); }\n}\n",
+    );
+    let (ok, stdout, stderr) = run_inty_args(&dir, &["h.js", "g.js"]);
+    assert!(!ok, "{stdout}{stderr}");
+    let all = format!("{stdout}{stderr}");
+    assert!(all.contains("h.js:6:"), "{all}");
+    assert!(!all.contains("g.js:"), "no error in g.js:\n{all}");
+}

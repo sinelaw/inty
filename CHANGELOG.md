@@ -263,6 +263,10 @@ unterminated-comment error.
 - A class field's annotation that doesn't parse (`/** this.w: Wasm */`
   with `Wasm` generic) stopped the whole class from being checked: it is
   reported, the field's type is unknown, and the class is checked.
+- A class that failed to check left its name pointing at a type with no
+  definition: in modules checked after it, every use of an annotation
+  naming it was an error (`expected '{grammars: …}', found 'μ134'`). It
+  is now unknown there instead.
 - `Object.freeze({fg, wavy: null})` returned where a `{fg: String | Null,
   wavy: String | Null}` is expected was rejected (`wavy`'s `Null` isn't
   `String | Null`), though the literal itself was accepted there: a call
