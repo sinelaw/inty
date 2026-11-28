@@ -418,15 +418,18 @@ pub fn typed_array_member_type(
                 Type::Undefined,
             )
         }
-        // The stdlib's `ArrayBuffer`.
-        "buffer" => {
-            let def = state.type_aliases.get("ArrayBuffer")?;
-            match def.rec_id {
-                Some(id) => Type::Named(id, Vec::new()),
-                None => def.body.clone(),
-            }
-        }
+        "BYTES_PER_ELEMENT" => Type::Number,
+        "buffer" => array_buffer_type(state)?,
         _ => return None,
+    })
+}
+
+/// The stdlib's `ArrayBuffer` type (`None` without the stdlib).
+pub fn array_buffer_type(state: &InferState) -> Option<Type> {
+    let def = state.type_aliases.get("ArrayBuffer")?;
+    Some(match def.rec_id {
+        Some(id) => Type::Named(id, Vec::new()),
+        None => def.body.clone(),
     })
 }
 

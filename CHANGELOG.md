@@ -99,6 +99,32 @@
   makes a recursive type: the type remembers the calls, so they are
   found after the class is generalised and used from another module.
 
+### Browser APIs
+
+- Typed arrays: `Int8Array`, `Uint8ClampedArray`, `Int16Array`,
+  `Uint16Array` and `Uint32Array` join `Int32Array`, `Uint8Array`,
+  `Float32Array` and `Float64Array` (each with `BYTES_PER_ELEMENT`; the Go
+  backend stores into them as JavaScript does, a `Uint8ClampedArray`
+  clamping). `new T(…)` is typed by its first argument's type: a length
+  (or nothing), a view of an `ArrayBuffer`, `new Uint32Array(buffer,
+  byteOffset?, length?)`, or a copy of a `Number[]` or another typed
+  array. A buffer view no longer needs a declaration of its own.
+- `TextEncoder.encode` gives a `Uint8Array`, and `encodeInto(string,
+  bytes)` gives `{read, written}`; `TextDecoder(label?, options?)`'s
+  `decode` takes a `Uint8Array` and `{stream}`.
+- WebAssembly: a compiled module is its own type, `WebAssemblyModule`,
+  and an instance `WebAssemblyInstance<E>` (`{exports: E}`).
+  `WebAssembly.instantiate(bytes, imports?)` resolves to `{instance,
+  module}`, `instantiate(module, imports?)` to the instance; `compile`,
+  `new WebAssembly.Module(bytes)` and `new WebAssembly.Instance(module,
+  imports?)`. What reads bytes takes a `BufferSource` (an `ArrayBuffer`
+  or any typed array).
+- `Error` is a type name (`(Error) => Undefined`); the error
+  constructors take an optional message.
+- `Worker<I, O>` (`new Worker(url, {type: "module"})`) and
+  `MessageChannel<M>`; a worker's own scope, `self` (a
+  `WorkerScope<I, O>`) and `postMessage`, with `--lib builtin:worker`.
+
 ### DOM declarations
 
 - `el.focus({preventScroll, focusVisible})`; an event's `detail` (a

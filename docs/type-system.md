@@ -658,11 +658,12 @@ A **tuple** `[A, B]` is a fixed-length array whose elements have their own types
 
 A **`Dict<V>`** is a plain object used as a string-keyed map (`{ [String]: V }` is the same type). An object literal where one is expected is one (each value must fit `V`); reading a key, `d.k` or `d[k]`, gives `V | Undefined`, since the key may be missing (`d.k ?? 0`); storing one, `d.k = v` or `d[k] = v`, takes a `V` (not `undefined`, which `Object.values` would then return; an update such as `d.k += 1` reads the entry first, so it needs it narrowed); `Object.keys`, `Object.values(d)` (`V[]`), `Object.entries(d)` (`[String, V][]`) and `Object.fromEntries` work on it.
 
-Typed arrays are `Int32Array`, `Uint8Array`, `Float32Array` and `Float64Array`. Each is its own type, not an ordinary array:
+Typed arrays are `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array` and `Float64Array`. Each is its own type, not an ordinary array:
 - It has a fixed length: `.length`, `.fill(v)`, `.subarray(start?, end?)`, `.slice(start?, end?)`, `.set(other, offset?)`, `.buffer` and `.byteLength`, but no `push`.
 - Indexing `a[i]` takes a number index, and reads a `Number`.
-- A store into an integer array takes any number and wraps it to 32 or 8 bits, as JavaScript's `ToInt32` / `ToUint8` do (`a[0] = 1.5` stores 1).
-- They are made with `new Int32Array(n)` or `Int32Array.from(xs)`.
+- A store into an integer array takes any number and wraps it to the element's bits, as JavaScript's `ToInt32` / `ToUint8` / … do (`a[0] = 1.5` stores 1); a `Uint8ClampedArray` clamps it to 0..255 instead.
+- They are made with `new Int32Array(n)` (or `new Int32Array()`, empty), as a view of an `ArrayBuffer`, `new Int32Array(buffer, byteOffset?, length?)`, as a copy, `new Int32Array(xs)` of a `Number[]` or of another typed array, or with `Int32Array.from(xs)`. What `new` takes is decided by its first argument's type (and any call with more than one argument is a view); an argument whose type isn't known yet is taken to be a length.
+- `T.BYTES_PER_ELEMENT` and `a.BYTES_PER_ELEMENT` are its element's size.
 
 ### Iteration
 

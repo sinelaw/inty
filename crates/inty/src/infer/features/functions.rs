@@ -775,6 +775,9 @@ impl InferState {
         if let Some(result) = self.infer_array_from(env, callee, arguments, keywords) {
             return result;
         }
+        if let Some(result) = self.infer_wasm_instantiate(env, callee, arguments, keywords, span) {
+            return result;
+        }
         if let (Expr::Ident { name, .. }, [value]) = (callee, arguments) {
             if name == crate::types::ASYNC_RETURN {
                 let ty = self.infer_expr(env, value)?;
@@ -1164,6 +1167,183 @@ impl InferState {
             );
             self.check_expr(env, map_fn, &callback)?;
             Ok(Type::array(self.zonk_head(&result)))
+        })())
+    }
+
+    /// A call of `callee`, a function type chosen by the type of the
+    /// call's first argument (`first`, already synthesised as
+    /// `first_ty`): the first argument is subsumed to its parameter, the
+    /// others (`rest`) checked against theirs, as an ordinary call's are.
+    /// The rules that pick a signature by an argument's type (a typed
+    /// array's constructor, `WebAssembly.instantiate`) synthesise it
+    /// once, here, rather than again in the ordinary call.
+    fn apply_with_first_typed(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Type,
+        first: &Expr,
+        first_ty: &Type,
+        rest: &[Expr],
+        span: Span,
+    ) -> InferResult<Type> {
+        let params: Vec<Type> = (0..=rest.len()).map(|_| self.fresh_type_var()).collect();
+        let ret = self.fresh_type_var();
+        let this = self.fresh_type_var();
+        let expected = self.callable_row_open(Some(this), params.clone(), ret.clone());
+        let callee = self.fill_optional_params(callee, params.len(), span);
+        self.unify(span, &callee, &expected)?;
+        let want = self.zonk_head(&params[0]);
+        self.subsume(first.span(), first_ty, &want)
+            .map_err(|e| self.locate_in_value(first, e))?;
+        for (arg, param) in rest.iter().zip(&params[1..]) {
+            self.check_expr(env, arg, param)
+                .map_err(|e| self.locate_in_value(arg, e))?;
+        }
+        self.simplify_has_props()?;
+        Ok(self.zonk_head_into(ret))
+    }
+
+    /// A call of the standard library's `WebAssembly.instantiate`, whose
+    /// result depends on what it is given, which no one function type
+    /// says:
+    ///
+    /// - `instantiate(bytes, imports?)` compiles `bytes` (its declared
+    ///   type) and resolves to `{instance, module}`;
+    /// - `instantiate(module, imports?)`, a compiled
+    ///   `WebAssemblyModule`, resolves to the instance alone: what
+    ///   `new WebAssembly.Instance(module, imports)` makes.
+    ///
+    /// `None` for any other call (or a `WebAssembly` the program binds
+    /// itself).
+    fn infer_wasm_instantiate(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Expr,
+        arguments: &[Expr],
+        keywords: &[(String, Expr)],
+        span: Span,
+    ) -> Option<InferResult<Type>> {
+        let Expr::Member {
+            object,
+            property,
+            span: member_span,
+        } = callee
+        else {
+            return None;
+        };
+        let Expr::Ident {
+            name,
+            span: name_span,
+        } = object.as_ref()
+        else {
+            return None;
+        };
+        if name != "WebAssembly"
+            || property != "instantiate"
+            || !keywords.is_empty()
+            || !(1..=2).contains(&arguments.len())
+            || arguments.iter().any(|a| matches!(a, Expr::Spread { .. }))
+            || !self.ambient.contains(&self.key_of(*name_span, name))
+        {
+            return None;
+        }
+        let module = self.type_aliases.get("WebAssemblyModule")?.nominal_id?;
+        let member_span = *member_span;
+        Some((|| {
+            let wasm = self.infer_expr(env, object)?;
+            let wasm = self.zonk_head(&wasm);
+            let source = self.infer_expr(env, &arguments[0])?;
+            let by_module = matches!(self.zonk_head(&source), Type::Named(id, _) if id == module);
+            let member = if by_module { "Instance" } else { "instantiate" };
+            let f = self.infer_member_on_type(&wasm, member, member_span)?;
+            let made = self.apply_with_first_typed(
+                env,
+                &f,
+                &arguments[0],
+                &source,
+                &arguments[1..],
+                span,
+            )?;
+            Ok(if by_module { Type::promise(made) } else { made })
+        })())
+    }
+
+    /// `new T(…)` of a standard-library typed array (`Uint8Array`, …),
+    /// whose parameters depend on what its first argument is, which no
+    /// one function type says:
+    ///
+    /// - `new T()` / `new T(length)`: a zeroed array (an argument of a
+    ///   type not known yet is taken to be the length);
+    /// - `new T(buffer, byteOffset?, length?)`: a view of an
+    ///   `ArrayBuffer` (any call with more than one argument is one);
+    /// - `new T(array)` / `new T(typedArray)`: a copy of a `Number[]` or
+    ///   of another typed array (of any kind).
+    ///
+    /// `None` for any other `new` (or a typed array the program binds
+    /// itself, or a call with a spread or more than three arguments,
+    /// which the declared constructor rejects).
+    fn infer_typed_array_new(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Expr,
+        arguments: &[Expr],
+        span: Span,
+    ) -> Option<InferResult<Type>> {
+        use crate::types::FuncParam;
+        let Expr::Ident {
+            name,
+            span: name_span,
+        } = callee
+        else {
+            return None;
+        };
+        let kind = crate::types::TypedArrayKind::from_name(name)?;
+        if arguments.len() > 3
+            || arguments.iter().any(|a| matches!(a, Expr::Spread { .. }))
+            || !self.ambient.contains(&self.key_of(*name_span, name))
+        {
+            return None;
+        }
+        let buffer = crate::builtins::array_buffer_type(self)?;
+        Some((|| {
+            // The constructor, recorded as the ordinary `new` would.
+            self.infer_expr(env, callee)?;
+            let made = Type::TypedArray(kind);
+            let Some((first, rest)) = arguments.split_first() else {
+                return Ok(made);
+            };
+            let source = self.infer_expr(env, first)?;
+            let head = self.zonk_head(&source);
+            let is_buffer = !rest.is_empty()
+                || match (&head, &buffer) {
+                    (Type::Named(id, _), Type::Named(b, _)) => id == b,
+                    // A record of an `ArrayBuffer`'s shape (not an
+                    // array-like one).
+                    (Type::Row(_), _) => {
+                        self.row_field_entry(&head, "byteLength").is_some()
+                            && self.row_field_entry(&head, "length").is_none()
+                    }
+                    _ => false,
+                };
+            let ctor = if is_buffer {
+                let (p1, p2) = (self.fresh_pvar(), self.fresh_pvar());
+                Type::simple_func_with_params(
+                    vec![
+                        FuncParam::required(buffer.clone()),
+                        FuncParam::optional(p1, Type::Number),
+                        FuncParam::optional(p2, Type::Number),
+                    ],
+                    made,
+                )
+            } else {
+                let from = match head {
+                    Type::TypedArray(k) => Type::TypedArray(k),
+                    Type::Array(_) | Type::Tuple(_) => Type::array(Type::Number),
+                    _ => Type::Number,
+                };
+                Type::simple_func(vec![from], made)
+            };
+            self.apply_with_first_typed(env, &ctor, first, &source, rest, span)
         })())
     }
 
@@ -1585,6 +1765,9 @@ impl InferState {
         arguments: &[Expr],
         span: Span,
     ) -> InferResult<Type> {
+        if let Some(result) = self.infer_typed_array_new(env, callee, arguments, span) {
+            return result;
+        }
         let callee_type = self.infer_expr(env, callee)?;
 
         // `new F(…)` calls `F` with a fresh object as `this` and gives
