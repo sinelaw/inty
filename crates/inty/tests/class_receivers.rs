@@ -140,3 +140,32 @@ fn detached_callback_uses_no_this() {
         "a method that reads `this` can't be called detached"
     );
 }
+
+/// A method that reads `this` gives the class no type parameter: its
+/// `this` is the instance (a cycle the class's row is written out
+/// through), not a type the class leaves open. `A` is then named without
+/// arguments, whether or not the method throws.
+#[test]
+fn a_method_reading_this_leaves_the_class_without_parameters() {
+    for body in [
+        "if (i < 0) throw new Error(\"negative\");\n    return this.n + i;",
+        "return this.n + i;",
+        "if (i < 0) { return 0; }\n    return this.n;",
+    ] {
+        let src = format!(
+            "class A {{\n  constructor(n) {{\n    this.n = n + 0;\n  }}\n  \
+             /** method get(i: Number) => Number */\n  get(i) {{\n    {body}\n  }}\n}}\n\
+             /** function f(a: A) => Number */\n\
+             function f(a) {{ return a.get(1); }}\n\
+             const x = f(new A(2));\n"
+        );
+        let r = check(&src);
+        assert!(r.is_ok(), "{:?}\n{}", r, src);
+    }
+    // A class whose method does leave a type open still takes it.
+    let r = check(
+        "class B { constructor() { this.n = 0; }\n  pick(x) { return x; } }\n\
+         /** function g(b: B) => Number */ function g(b) { return b.n; }",
+    );
+    assert!(r.is_err(), "B's `pick` is generic");
+}

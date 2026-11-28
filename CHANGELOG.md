@@ -243,6 +243,12 @@ unterminated-comment error.
 
 ### Fixes
 
+- A class whose method reads `this` (`get(i) { return this.n + i; }`)
+  took a type parameter (`class 'A' takes 1 type argument (a type in
+  method 'get')`), so `/** function f(a: A) */` was rejected: the
+  method's `this` is the instance, a cycle the class's type is written
+  out through, and the variable where that cut it was taken for one the
+  class leaves open.
 - A module's reads of a field of a value an importing module gives
   (`y.k` in a method an importer calls) wait for the importer's value,
   each resolved against its type. The first read of each name became the
