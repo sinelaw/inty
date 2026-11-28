@@ -17,9 +17,9 @@ All checks passed: examples/modules/lib-internal.js (5 symbols) in <time>
 $ inty declarations examples/modules/lib-internal.js
 exit: 0
 --- stdout
-/** const double: <g12> where Plus g12 => (g12) => g12 */
+/** const double: <s12> where Plus s12 => (s12) => s12 */
 const double;
-/** const triple: <k12> where Plus k12 => (k12) => k12 */
+/** const triple: <w12> where Plus w12 => (w12) => w12 */
 const triple;
 /** const TAG: String */
 const TAG;

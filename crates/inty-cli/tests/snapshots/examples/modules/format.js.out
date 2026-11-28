@@ -16,12 +16,12 @@ All checks passed: examples/modules/format.js (2 symbols) in <time>
 $ inty declarations examples/modules/format.js
 exit: 0
 --- stdout
-/** const formatCount: <f12>(f12) => String */
+/** const formatCount: <r12>(r12) => String */
 const formatCount;
-/** const formatHistory: <j12, l12, q12, s12>
+/** const formatHistory: <v12, x12, c13, e13>
  * where
- *   j12 has {length: l12, map: ((s12) => String) => q12},
- *   q12 has {join: (String) => String}
- * => (j12) => String */
+ *   v12 has {length: x12, map: ((e13) => String) => c13},
+ *   c13 has {join: (String) => String}
+ * => (v12) => String */
 const formatHistory;
 --- stderr

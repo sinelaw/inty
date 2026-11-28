@@ -10,6 +10,6 @@ All checks passed: examples/modules/greet.js (2 symbols) in <time>
 $ inty declarations examples/modules/greet.js
 exit: 0
 --- stdout
-/** const default: <f12>(f12) => String */
+/** const default: <r12>(r12) => String */
 const default;
 --- stderr
