@@ -1,0 +1,99 @@
+$ inty crates/inty-go/tests/programs/pipelines.js
+exit: 0
+--- stdout
+/** const xs: Number[] */
+const xs = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3];
+/** function square(Number) => Number */
+function square(x) {
+  return x * x;
+}
+console.log(xs.map((x) => {
+  return x * 2;
+}).reduce((a, b) => {
+  return a + b;
+}, 0));
+console.log(xs.filter((x) => {
+  return (x % 2) === 1;
+}).map((x) => {
+  return x + 1;
+}).join(","));
+console.log(xs.map(square).filter((x) => {
+  return x > 10;
+}).join(","));
+console.log(xs.map((x) => {
+  return x - 5;
+}).some((x) => {
+  return x > 3;
+}));
+console.log(xs.map((x) => {
+  return x - 5;
+}).every((x) => {
+  return x > (-5);
+}));
+console.log(xs.filter((x) => {
+  return x > 3;
+}).findIndex((x) => {
+  return x === 5;
+}));
+console.log(xs.filter((x) => {
+  return x > 100;
+}).findIndex((x) => {
+  return x === 5;
+}));
+console.log(xs.map((x) => {
+  return x / 2;
+}).map((x) => {
+  return x * 3;
+}).join(","));
+console.log([].map((x) => {
+  return x + 1;
+}).reduce((a, b) => {
+  return a + b;
+}, 7));
+/** let sum: Number */
+let sum = 0;
+xs.filter((x) => {
+  return x > 2;
+}).forEach((x) => {
+  sum += x;
+});
+console.log(sum);
+/** function stats(Number) => Number */
+function stats(round) {
+  /** const shifted: Number[] */
+  const shifted = xs.map((x) => {
+  return x + round;
+});
+  /** const big: Number[] */
+  const big = shifted.filter((x) => {
+  return x > 5;
+});
+  return big.reduce((acc, x) => {
+  return acc + (x / 10);
+}, 0);
+}
+console.log(stats(1));
+console.log(stats(3));
+/** const doubled: Number[] */
+const doubled = xs.map((x) => {
+  return x * 2;
+});
+/** const firstBig: Number */
+const firstBig = doubled.findIndex((x) => {
+  return x > 10;
+});
+console.log(firstBig + doubled.length);
+/** let trace: String */
+let trace = "";
+/** const kept: Number[] */
+const kept = xs.map((x) => {
+  trace += "m" + String(x);
+  return x;
+}).filter((x) => {
+  trace += "f" + String(x);
+  return x > 4;
+});
+console.log(kept.join(","));
+console.log(trace);
+All checks passed: crates/inty-go/tests/programs/pipelines.js (8 symbols) in <time>
+--- stderr

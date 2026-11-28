@@ -1,0 +1,11 @@
+$ inty examples/playground/ts-misses/or-fallback.js
+exit: 0
+--- stdout
+/** function label(String) => String */
+function label(n) {
+  /** var name: String */
+  var name = n || "Guest";
+  return name;
+}
+All checks passed: examples/playground/ts-misses/or-fallback.js (1 symbol) in <time>
+--- stderr

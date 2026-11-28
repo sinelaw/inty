@@ -1,0 +1,29 @@
+$ inty crates/inty/tests/test_field_annotations.js
+exit: 0
+--- stdout
+/** let state: {filter: String, nextId: Number, todos: {done: Boolean, id: Number, text: String}[]} */
+let state = {todos: [], nextId: 1, filter: "all"};
+state.todos.push({id: 1, text: "hello", done: false});
+/** let first: {done: Boolean, id: Number, text: String} */
+let first = state.todos[0];
+/** let greeting: String */
+let greeting = first.text + "!";
+/** let n: Number */
+let n = state.nextId + 1;
+/** let f: String */
+let f = state.filter;
+/** function tryIt() => Number */
+function tryIt() {
+  return 0;
+}
+/** let config: {buckets: Number[], enabled: Boolean, name: String, retries: Number, tags: String[]} */
+let config = {name: "demo", retries: 3, enabled: true, tags: [], buckets: []};
+config.tags.push("alpha");
+config.tags.push("beta");
+config.buckets.push(10);
+/** let tagCount: Number */
+let tagCount = config.tags.length;
+/** let label: String */
+let label = `${config.name} x${config.buckets.length}`;
+All checks passed: crates/inty/tests/test_field_annotations.js (9 symbols) in <time>
+--- stderr

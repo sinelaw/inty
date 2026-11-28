@@ -516,7 +516,7 @@ pub enum TypeError {
     #[error("Undefined variable '{name}'")]
     UndefinedVariable { name: String, span: Span },
 
-    #[error("Property '{prop}' not found on type {obj_type}")]
+    #[error("Property '{}' not found on type {obj_type}", shown_prop(prop))]
     PropertyNotFound {
         prop: String,
         obj_type: String,
@@ -715,5 +715,15 @@ impl TypeError {
             TypeError::RequiredBy { inner, .. } => inner.span(),
             TypeError::FieldPresenceMismatch { span, .. } => *span,
         }
+    }
+}
+
+/// A property's key as a message names it: the key iteration reads
+/// (`crate::types::ITER_KEY`) as a type shows it, `[Symbol.iterator]`.
+pub(crate) fn shown_prop(prop: &str) -> &str {
+    if prop == crate::types::ITER_KEY {
+        "[Symbol.iterator]"
+    } else {
+        prop
     }
 }

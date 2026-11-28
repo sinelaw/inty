@@ -1,0 +1,13 @@
+$ inty examples/modules/version.js
+exit: 0
+--- stdout
+export default "1.0.0";
+All checks passed: examples/modules/version.js (1 symbol) in <time>
+--- stderr
+
+$ inty declarations examples/modules/version.js
+exit: 0
+--- stdout
+/** const default: String */
+const default;
+--- stderr

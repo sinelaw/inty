@@ -1,0 +1,18 @@
+$ inty examples/modules/identity.js
+exit: 0
+--- stdout
+export function id(x) {
+  return x;
+}
+export const PI = 3.14159;
+All checks passed: examples/modules/identity.js (2 symbols) in <time>
+--- stderr
+
+$ inty declarations examples/modules/identity.js
+exit: 0
+--- stdout
+/** const id: <s12>(s12) => s12 */
+const id;
+/** const PI: Number */
+const PI;
+--- stderr

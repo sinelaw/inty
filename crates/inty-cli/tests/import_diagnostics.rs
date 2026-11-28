@@ -185,3 +185,99 @@ fn a_relative_entry_path_finds_the_project_config_above_it() {
         assert!(out.status.success(), "inty {args:?}:\n{text}");
     }
 }
+
+/// A class that fails to check (an error in a method) is unknown to the
+/// modules checked after it, not a type that fits nothing: an annotation
+/// naming it there gives no error of its own.
+#[test]
+fn a_class_that_failed_to_check_is_unknown_elsewhere() {
+    let dir = tmp_dir();
+    write(
+        &dir,
+        "h.js",
+        "/** type M = {kind: \"a\"} | {kind: \"b\"} */\n\
+         /** function send(m: M) => Undefined */\nfunction send(m) {}\n\
+         export class H {\n  constructor() { this.g = [1]; }\n  \
+         bad() { send({ kind: \"c\" }); return this.g.length; }\n}\n",
+    );
+    write(
+        &dir,
+        "g.js",
+        "export class G {\n  constructor(h) {\n    /** this.h: Promise<H> */\n    this.h = h;\n  }\n  \
+         go() { return this.h.then((x) => x.g.length + x.bad()); }\n}\n",
+    );
+    let (ok, stdout, stderr) = run_inty_args(&dir, &["h.js", "g.js"]);
+    assert!(!ok, "{stdout}{stderr}");
+    let all = format!("{stdout}{stderr}");
+    assert!(all.contains("h.js:6:"), "{all}");
+    assert!(!all.contains("g.js:"), "no error in g.js:\n{all}");
+}
+
+/// A worker's `scope.postMessage(msg, [])` was refused ("the function
+/// takes 2 arguments, but 2 are passed") after another module called a
+/// `Worker`'s `postMessage(msg)`: the type aliases' optional parameters
+/// shared presence variables, so deciding one decided the other. (Cut
+/// down from Fresh's grammars.js and grammar-worker.js; their other
+/// errors are beside the point.)
+#[test]
+fn an_optional_parameter_of_one_alias_is_not_decided_by_another() {
+    let dir = tmp_dir();
+    write(
+        &dir,
+        "grammars.js",
+        r#"export class Grammars {
+  constructor(highlighting) {
+    this.turn = Promise.resolve(undefined);
+  }
+  register(language, source, extensions) {
+    const run = this.turn.then(async () => {
+    });
+  }
+  build(hl, set) {
+    const worker = this.workerFor(hl);
+    return new Promise((resolve, reject) => {
+      worker.postMessage(buildMsg(id, set.map((g) => ({ name: g.language, source: g.source }))));
+    });
+  }
+  workerFor(hl) {
+    const w = new Worker("/js/grammar-worker.js", { type: "module" });
+    w.onmessage = (e) => {
+      for (const b of found(this.builds.get(m.id))) {
+      }
+    };
+    w.onerror = (e) => {
+    };
+    return w;
+  }
+}
+"#,
+    );
+    write(
+        &dir,
+        "grammar-worker.js",
+        r#"function build(wasm, packdump, grammars) {
+}
+const scope = self;
+scope.onmessage = (e) => {
+  if (m.kind === "start") {
+  }
+  for (const s of started) {
+    s.then((w) => {
+    }).catch((err) => { scope.postMessage(failedMsg(id, err instanceof Error ? err.message : String(err)), []); });
+  }
+  scope.postMessage(failedMsg(id, "the grammar worker was not started"), []);
+};
+"#,
+    );
+    let (_, stdout, stderr) = run_inty_args(
+        &dir,
+        &[
+            "--lib",
+            "builtin:worker",
+            "grammars.js",
+            "grammar-worker.js",
+        ],
+    );
+    let all = format!("{stdout}{stderr}");
+    assert!(!all.contains("Arity mismatch"), "{all}");
+}

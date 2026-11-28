@@ -1,0 +1,17 @@
+$ inty examples/playground/ts-misses/array-covariance.js
+exit: 1
+--- stdout
+--- stderr
+
+Error: Type mismatch: expected '(Number | String)[]', found 'Number[]'
+    ╭─[ examples/playground/ts-misses/array-covariance.js:14:10 ]
+    │
+ 14 │ addLabel(scores);
+    │          ───┬──  
+    │             ╰──── Type mismatch: expected '(Number | String)[]', found 'Number[]'
+    │ 
+    │ Help: an array can be written to, so its element type must match exactly (a push through the expected type could add an element this array doesn't allow). If it's a function parameter that's only read, make it generic: `function f<a>(xs: a[]) => …`. Otherwise pass a copy, `[...xs]`, or declare the array with the wider type
+    │ 
+    │ Note: Cannot unify expected '(Number | String)[]' with found 'Number[]'
+────╯
+

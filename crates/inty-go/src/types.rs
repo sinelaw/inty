@@ -43,7 +43,7 @@ pub enum GoType {
     Unit,
     /// `*[]T`.
     Array(Box<GoType>),
-    /// A typed array: `*[]int32`, `*[]uint8` or `*[]float64`. Its
+    /// A typed array: `*[]int32`, `*[]uint8`, `*[]float64`, …. Its
     /// elements are read as integers from the integer kinds and as floats
     /// from the float kinds.
     Typed(TypedArrayKind),
@@ -752,8 +752,12 @@ fn pretty(ty: &Type) -> String {
 /// The Go element type of a typed array.
 pub fn typed_elem(k: TypedArrayKind) -> &'static str {
     match k {
+        TypedArrayKind::Int8 => "int8",
+        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => "uint8",
+        TypedArrayKind::Int16 => "int16",
+        TypedArrayKind::Uint16 => "uint16",
         TypedArrayKind::Int32 => "int32",
-        TypedArrayKind::Uint8 => "uint8",
+        TypedArrayKind::Uint32 => "uint32",
         TypedArrayKind::Float32 => "float32",
         TypedArrayKind::Float64 => "float64",
     }

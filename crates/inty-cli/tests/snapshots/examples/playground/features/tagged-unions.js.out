@@ -1,0 +1,18 @@
+$ inty examples/playground/features/tagged-unions.js
+exit: 0
+--- stdout
+/** function area(s: {kind: "circle", r: Number}
+                 | {kind: "square", s: Number}) => Number */
+function area(shape) {
+  if (shape.kind === "circle") {
+    return shape.r;
+  } else {
+    return shape.s;
+  }
+}
+/** var a: Number */
+var a = area({kind: "circle", r: 10});
+/** var b: Number */
+var b = area({kind: "square", s: 5});
+All checks passed: examples/playground/features/tagged-unions.js (3 symbols) in <time>
+--- stderr

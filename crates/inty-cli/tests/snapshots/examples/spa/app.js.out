@@ -1,0 +1,191 @@
+$ inty examples/spa/app.js
+exit: 0
+--- stdout
+/** let state: {filter: String, nextId: Number, todos: {done: Boolean, id: Number, text: String}[]} */
+let state = {todos: [], nextId: 1, filter: "all"};
+state.todos.push({id: 1, text: "Try editing this todo list", done: false});
+state.todos.push({id: 2, text: "Read examples/spa/app.js", done: true});
+state.nextId = 3;
+/** let saveCounter: Number */
+let saveCounter = 0;
+/** function escapeHtml<a, b, d, e, g, h, j, k, m, n, p> where a has {replaceAll: {(String, String) => b | d}}, b has {replaceAll: {(String, String) => e | g}}, e has {replaceAll: {(String, String) => h | j}}, h has {replaceAll: {(String, String) => k | m}}, k has {replaceAll: {(String, String) => n | p}} => (a) => n */
+function escapeHtml(s) {
+  return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\"", "&quot;").replaceAll("'", "&#39;");
+}
+/** function countRemaining() => Number */
+function countRemaining() {
+  return state.todos.filter((t) => {
+  return !t.done;
+}).length;
+}
+/** function hasAnyDone() => Boolean */
+function hasAnyDone() {
+  return state.todos.some((t) => {
+  return t.done;
+});
+}
+/** function shouldShow<a, b> where Testable b, a has {done: b, done: Boolean} => (a) => Boolean */
+function shouldShow(todo) {
+  if (state.filter === "active") return !todo.done;
+  if (state.filter === "done") return todo.done;
+  return true;
+}
+/** function addTodo(String) => Undefined */
+function addTodo(text) {
+  if (text === "") return;
+  state.todos.push({id: state.nextId, text: text, done: false});
+  state.nextId = state.nextId + 1;
+}
+/** function toggleTodo<a>(a) => Undefined */
+function toggleTodo(id) {
+  state.todos.forEach((t) => {
+  if (t.id === id) t.done = !t.done;
+  return undefined;
+});
+}
+/** function deleteTodo<a>(a) => Undefined */
+function deleteTodo(id) {
+  state.todos = state.todos.filter((t) => {
+  return t.id !== id;
+});
+}
+/** function clearDone() => Undefined */
+function clearDone() {
+  state.todos = state.todos.filter((t) => {
+  return !t.done;
+});
+}
+/** function setFilter(String) => Undefined */
+function setFilter(f) {
+  state.filter = f;
+}
+function byId(id) {
+  const el = document.getElementById(id);
+  if (el === null) throw new Error(`no element with id "${id}"`);
+  return el;
+}
+/** function renderTodoItem<a, b, c, d, e, g, h, j, k, m, n, p, q, s> where Testable d, a has {id: b, text: c, done: d}, c has {replaceAll: {(String, String) => e | g}}, e has {replaceAll: {(String, String) => h | j}}, h has {replaceAll: {(String, String) => k | m}}, k has {replaceAll: {(String, String) => n | p}}, n has {replaceAll: {(String, String) => q | s}} => (a) => String */
+function renderTodoItem(todo) {
+  const $destr$0 = todo, id = $destr$0.id, text = $destr$0.text, done = $destr$0.done;
+  /** const liClass: String */
+  const liClass = done ? "done" : "";
+  /** const toggleClass: String */
+  const toggleClass = done ? "toggle on" : "toggle";
+  /** const toggleMark: String */
+  const toggleMark = done ? "✓" : "";
+  return (((`<li class="${liClass}">` + `<button id="toggle-${id}" class="${toggleClass}">${toggleMark}</button>`) + `<span class="text">${escapeHtml(text)}</span>`) + `<button id="delete-${id}" class="delete" title="Delete">×</button>`) + `</li>`;
+}
+/** function renderList() => Undefined */
+function renderList() {
+  const listEl = byId("todo-list");
+  /** const visible: {done: Boolean, id: Number, text: String}[] */
+  const visible = state.todos.filter(shouldShow);
+  /** let html: String */
+  let html = "";
+  if (visible.length === 0) {
+    html = (state.todos.length === 0) ? `<li class="empty">No todos yet. Add one above.</li>` : `<li class="empty">Nothing matches the current filter.</li>`;
+  } else {
+    html = visible.map(renderTodoItem).join("");
+  }
+  listEl.innerHTML = html;
+}
+/** function renderFooter() => Undefined */
+function renderFooter() {
+  const footer = byId("footer");
+  /** const remaining: Number */
+  const remaining = countRemaining();
+  /** const word: String */
+  const word = (remaining === 1) ? "item" : "items";
+  /** const clearMarkup: String */
+  const clearMarkup = hasAnyDone() ? `<button id="clear-done">Clear completed</button>` : `<span></span>`;
+  footer.innerHTML = `<span>${remaining} ${word} left</span>` + clearMarkup;
+}
+/** function renderFilters() => Undefined */
+function renderFilters() {
+  ["all", "active", "done"].forEach((name) => {
+  byId(`filter-${name}`).className = (state.filter === name) ? "active" : "";
+  return undefined;
+});
+}
+/** function attachListHandlers() => Undefined */
+function attachListHandlers() {
+  state.todos.forEach((todo) => {
+  if (shouldShow(todo)) {
+    /** const $destr$1: {done: Boolean, id: Number, text: String} */
+    /** const id: Number */
+    const $destr$1 = todo, id = $destr$1.id;
+    byId(`toggle-${id}`).onclick = () => {
+  toggleTodo(id);
+  render();
+  return undefined;
+};
+    byId(`delete-${id}`).onclick = () => {
+  deleteTodo(id);
+  render();
+  return undefined;
+};
+  }
+  return undefined;
+});
+  if (hasAnyDone()) {
+    byId("clear-done").onclick = () => {
+  clearDone();
+  render();
+  return undefined;
+};
+  }
+}
+/** function render() => Undefined */
+function render() {
+  renderList();
+  renderFooter();
+  renderFilters();
+  attachListHandlers();
+}
+/** function persistTodos() => Promise<Number> */
+async function persistTodos() {
+  /** const payload: String */
+  const payload = JSON.stringify(state.todos);
+  await Promise.resolve(0);
+  return payload.length;
+}
+/** function save() => Promise<Undefined> */
+async function save() {
+  const statusEl = byId("save-status");
+  statusEl.textContent = "Saving…";
+  /** const bytes: Number */
+  const bytes = await persistTodos();
+  saveCounter = saveCounter + 1;
+  statusEl.textContent = `Saved ${bytes} bytes (${saveCounter})`;
+  return undefined;
+}
+/** function submitDraft() => Undefined */
+function submitDraft() {
+  const input = byId("new-input");
+  addTodo(input.value);
+  input.value = "";
+  render();
+}
+byId("add-btn").onclick = () => {
+  submitDraft();
+  return undefined;
+};
+byId("new-input").onkeydown = (e) => {
+  if (e.key === "Enter") submitDraft();
+  return undefined;
+};
+["all", "active", "done"].forEach((name) => {
+  byId(`filter-${name}`).onclick = () => {
+  setFilter(name);
+  render();
+  return undefined;
+};
+  return undefined;
+});
+byId("save-btn").onclick = () => {
+  save();
+  return undefined;
+};
+render();
+All checks passed: examples/spa/app.js (21 symbols) in <time>
+--- stderr

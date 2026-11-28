@@ -157,6 +157,7 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             if is_async {
                 write!(w, "async ")?;
             }
+            let (is_generator, body) = generator_body(body);
             // An arrow, as written: it has no `this` of its own.
             if *arrow {
                 write!(w, "(")?;
@@ -173,7 +174,7 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
                 }
                 return Ok(());
             }
-            write!(w, "function")?;
+            write!(w, "function{}", if is_generator { "*" } else { "" })?;
             if let Some(n) = name {
                 write!(w, " {}", n)?;
             }
@@ -237,6 +238,28 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             write!(w, "[")?;
             write_expr(w, property, false)?;
             write!(w, "]")
+        }
+
+        // `yield e`, `yield* e` and `yield`, as the parser lowers them
+        // (see `crate::types::YIELD`).
+        Expr::Call {
+            callee, arguments, ..
+        } if matches!(callee.as_ref(), Expr::Ident { name, .. }
+            if name == crate::types::YIELD || name == crate::types::YIELD_STAR) =>
+        {
+            let star = matches!(callee.as_ref(), Expr::Ident { name, .. } if name == crate::types::YIELD_STAR);
+            if needs_parens {
+                write!(w, "(")?;
+            }
+            write!(w, "yield{}", if star { "*" } else { "" })?;
+            for a in arguments {
+                write!(w, " ")?;
+                write_expr(w, a, false)?;
+            }
+            if needs_parens {
+                write!(w, ")")?;
+            }
+            Ok(())
         }
 
         // An `async` body's `return e`, marked (see
@@ -612,6 +635,10 @@ fn write_prop_def(w: &mut impl Write, prop: &PropDef) -> fmt::Result {
             if is_async {
                 write!(w, "async ")?;
             }
+            let (is_generator, body) = generator_body(body);
+            if is_generator {
+                write!(w, "*")?;
+            }
             write_prop_key(w, key)?;
             write!(w, "(")?;
             for (i, p) in params.iter().enumerate() {
@@ -805,7 +832,9 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                     }
                     let (is_async, body) = async_body(body);
                     let prefix = if is_async { "async " } else { "" };
-                    write!(w, "export {}function {}(", prefix, name)?;
+                    let (is_generator, body) = generator_body(body);
+                    let star = if is_generator { "*" } else { "" };
+                    write!(w, "export {}function{} {}(", prefix, star, name)?;
                     for (i, p) in params.iter().enumerate() {
                         if i > 0 {
                             write!(w, ", ")?;
@@ -1095,7 +1124,9 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             }
             let (is_async, body) = async_body(body);
             let prefix = if is_async { "async " } else { "" };
-            write!(w, "{}function {}(", prefix, name)?;
+            let (is_generator, body) = generator_body(body);
+            let star = if is_generator { "*" } else { "" };
+            write!(w, "{}function{} {}(", prefix, star, name)?;
             for (i, p) in params.iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
@@ -1172,6 +1203,37 @@ fn async_body(body: &Stmt) -> (bool, &Stmt) {
                     {
                         return (true, inner);
                     }
+                }
+            }
+        }
+    }
+    (false, body)
+}
+
+/// A generator's body, as written, when `body` is the one the parser
+/// lowers it to (`{ return GENERATOR(() => { … }); }`, see
+/// `crate::types::GENERATOR`), with `true`; else `body`, with `false`.
+fn generator_body(body: &Stmt) -> (bool, &Stmt) {
+    if let Stmt::Block { body: stmts, .. } = body {
+        if let [Stmt::Return {
+            argument: Some(Expr::Call {
+                callee, arguments, ..
+            }),
+            ..
+        }] = stmts.as_slice()
+        {
+            if let (
+                Expr::Ident { name, .. },
+                [Expr::Function {
+                    params,
+                    body: inner,
+                    arrow: true,
+                    ..
+                }],
+            ) = (&**callee, arguments.as_slice())
+            {
+                if name == crate::types::GENERATOR && params.is_empty() {
+                    return (true, inner);
                 }
             }
         }

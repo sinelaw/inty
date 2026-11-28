@@ -1,0 +1,66 @@
+$ inty crates/inty/tests/test_polymorphism.js
+exit: 0
+--- stdout
+/** function identity<a>(a) => a */
+function identity(x) {
+  return x;
+}
+/** var num: Number */
+var num = identity(42);
+/** var str: String */
+var str = identity("hello");
+/** var obj: {bar: Number, foo: Number} */
+var obj = identity({foo: 1, bar: 2});
+/** var arr: Number[] */
+var arr = identity([1, 2, 3]);
+/** function outer<a> where Plus a => (a) => (a) => a */
+function outer(x) {
+  function inner(y) {
+    return x + y;
+  }
+  return inner;
+}
+/** var addThree: (Number) => Number */
+var addThree = outer(3);
+/** var result3: Number */
+var result3 = addThree(7);
+/** function makePair<a, b>(a, b) => {first: a, second: b} */
+function makePair(first, second) {
+  return {first: first, second: second};
+}
+/** var numPair: {first: Number, second: Number} */
+var numPair = makePair(1, 2);
+/** var strPair: {first: String, second: String} */
+var strPair = makePair("hello", "world");
+/** var mixedPair: {first: Number, second: String} */
+var mixedPair = makePair(42, "answer");
+/** var firstNum: Number */
+var firstNum = numPair.first;
+/** var secondStr: String */
+var secondStr = strPair.second;
+/** function makeArray<a>(a, a, a) => a[] */
+function makeArray(a, b, c) {
+  return [a, b, c];
+}
+/** var numbers: Number[] */
+var numbers = makeArray(1, 2, 3);
+/** var strings: String[] */
+var strings = makeArray("a", "b", "c");
+/** function getFirst<a, b> where a has {first: b} => (a) => b */
+function getFirst(obj) {
+  return obj.first;
+}
+/** var pair1First: Number */
+var pair1First = getFirst(numPair);
+/** var pair2First: String */
+var pair2First = getFirst(strPair);
+/** function makeTriple<a, b, c>(a, b, c) => {x: a, y: b, z: c} */
+function makeTriple(x, y, z) {
+  return {x: x, y: y, z: z};
+}
+/** var point3d: {x: Number, y: Number, z: Number} */
+var point3d = makeTriple(1, 2, 3);
+/** var names: {x: String, y: String, z: String} */
+var names = makeTriple("Alice", "Bob", "Charlie");
+All checks passed: crates/inty/tests/test_polymorphism.js (23 symbols) in <time>
+--- stderr

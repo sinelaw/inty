@@ -1,0 +1,15 @@
+$ inty examples/playground/features/generics.js
+exit: 0
+--- stdout
+/** function id<a>(a) => a */
+function id(x) {
+  return x;
+}
+/** var n: Number */
+var n = id(42);
+/** var s: String */
+var s = id("hello");
+/** var arr: Number[] */
+var arr = id([1, 2, 3]);
+All checks passed: examples/playground/features/generics.js (4 symbols) in <time>
+--- stderr

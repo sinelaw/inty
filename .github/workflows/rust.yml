@@ -16,8 +16,26 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    # Node runs the programs inty accepts in the soundness check
+    # (crates/inty-cli/tests/soundness.rs), which fails on CI without it.
+    # 22 or later: it runs a `.js` file with `import` as a module.
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
     - name: Build
       run: cargo build --verbose
+    # Among the tests, two regression checks over every example and test
+    # program (docs/regression-checks.md):
+    # - crates/inty-cli/tests/soundness.rs: each program inty accepts runs
+    #   under Node without a TypeError or ReferenceError, and the probes in
+    #   crates/inty-cli/tests/soundness/ are accepted or rejected as they say;
+    # - crates/inty-cli/tests/output_snapshots.rs: what inty prints for each
+    #   program (diagnostics, inferred types, declarations) matches its
+    #   committed snapshot. This is the before/after comparison of a pull
+    #   request: the snapshots on its base are the old binary's output, so
+    #   any change in output fails here unless the pull request updates the
+    #   snapshots (`INTY_BLESS=1 cargo test -p inty-cli --test
+    #   output_snapshots`), which shows the change as a diff in review.
     - name: Run tests
       run: cargo test --verbose
     # Builds every crate from its would-be crates.io tarball, so a

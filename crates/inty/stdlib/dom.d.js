@@ -612,14 +612,44 @@ const FormData;
     } */
 const URLSearchParams;
 
-// Text encoding/decoding. `encode`/`decode` cover the vast majority of
-// real-world uses; the streaming variants (`encodeInto`, `decode` with
-// options) are out of scope for this stdlib.
-/** const TextDecoder: <T>() => {decode: (T) => String} */
+// Text encoding/decoding (UTF-8). `encodeInto` writes into a caller's
+// buffer (a WebAssembly module's memory, say) and says how much of the
+// string it read and how many bytes it wrote. `decode` takes bytes, a
+// `Uint8Array` (`{stream: true}` keeps a partial character for the next
+// call); decode an `ArrayBuffer` through a view of it,
+// `decode(new Uint8Array(buffer))`. (Its parameter isn't the union of
+// every typed array and `ArrayBuffer`: an argument whose type isn't known
+// yet, a method's result, say, would then be taken to be that union.)
+/** type TextEncoderEncodeIntoResult = {read: Number, written: Number} */
+/** const TextEncoder: () => {
+        encoding: String,
+        encode: (input?: String) => Uint8Array,
+        encodeInto: (source: String, destination: Uint8Array) => TextEncoderEncodeIntoResult
+    } */
+const TextEncoder;
+
+/** const TextDecoder: (label?: String, options?: {fatal?: Boolean, ignoreBOM?: Boolean}) => {
+        encoding: String, fatal: Boolean, ignoreBOM: Boolean,
+        decode: (input?: Uint8Array, options?: {stream?: Boolean}) => String
+    } */
 const TextDecoder;
 
-/** const TextEncoder: <T>() => {encode: (String) => T} */
-const TextEncoder;
+// Workers. A `Worker<I, O>` takes messages `I` and answers `O`; the
+// script it runs is checked with `--lib builtin:worker` (its `self`). A
+// `MessageChannel<M>` is two linked ports, each carrying `M`s.
+/** type Worker<I, O> = {
+    postMessage: (message: I, transfer?: ArrayBuffer[]) => Undefined,
+    onmessage: ({data: O}) => Undefined,
+    onmessageerror: ({data: O}) => Undefined,
+    onerror: ({message: String, filename: String, lineno: Number, colno: Number}) => Undefined,
+    terminate: () => Undefined
+} */
+/** const Worker: <I, O>(url: String, options?: {type?: String, name?: String, credentials?: String}) => Worker<I, O> */
+const Worker;
+
+/** type MessageChannel<M> = {port1: MessagePort<M>, port2: MessagePort<M>} */
+/** const MessageChannel: <M>() => MessageChannel<M> */
+const MessageChannel;
 
 // CustomEvent / Event. Constructors take an `init` row (`detail`,
 // `bubbles`, …); the resulting object exposes the read-only fields

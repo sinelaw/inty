@@ -46,15 +46,10 @@ WebSocket, `ResizeObserver`, Web Audio, `fetch`, media devices, see the
 the way to type anything the stdlib doesn't, and to keep the checked code
 testable without a browser.
 
-**Buffer views** are one such API: `new Float32Array(memory.buffer, ptr,
-len)` would make the constructor's first parameter `Number | ArrayBuffer`,
-which an unannotated argument can't choose between, so the stdlib declares
-only `new Float32Array(n)`. Declare the view in the FFI module:
-
-```javascript
-/** const f32view: (buffer: ArrayBuffer, byteOffset: Number, length: Number) => Float32Array */
-export const f32view;
-```
+**Buffer views** no longer need it: `new Float32Array(memory.buffer, ptr,
+len)` and `new Uint8Array(buffer)` check (a typed array's `new` is typed by
+the type of its first argument; one whose type isn't known yet is taken to
+be a length, so annotate a parameter that holds an `ArrayBuffer`).
 
 ## Global alias lib
 

@@ -163,6 +163,7 @@ impl InferState {
         let errors_at_entry = self.errors.len();
         self.env_after_errors = None;
         let result = self.infer_program_unrendered(env, program);
+        self.settle_unbranded_classes(program);
         let first_collected = |state: &Self| state.errors.get(errors_at_entry).cloned();
         match result {
             Ok(done) if self.errors.len() == errors_at_entry => Ok(done),
@@ -536,12 +537,22 @@ impl InferState {
                     &self.type_aliases,
                 )
                 .at_source_offset(alias.content_start);
+                // Its presence variables (`b?: T`) are numbered from the
+                // state's, as an annotation's are: numbered from zero,
+                // each alias's optional parameters were the same
+                // variables as other aliases' and as those inference
+                // makes, so one decided elsewhere (a `Worker`'s
+                // `postMessage(x)` with no transfer list) decided another
+                // (a `WorkerScope`'s, which then took no transfer list).
+                parser.seed_pvar_id(self.next_pvar_id());
                 for (name, id) in alias.params.iter().zip(ids.iter()) {
                     parser.preset_var(name.clone(), *id);
                 }
                 let parsed = parser.parse();
                 let next = parser.next_var_id();
+                let next_pvar = parser.next_pvar_id_value();
                 self.bump_var_id_to(next);
+                self.bump_pvar_id_to(next_pvar);
                 match parsed {
                     Ok(ty) => ty,
                     // As a statement that fails binds its names to
@@ -682,6 +693,32 @@ impl InferState {
                         named.body = Type::Error;
                     }
                 }
+            }
+        }
+    }
+
+    /// A class whose name was reserved (see [`Self::reserve_class_names`])
+    /// but which was never branded failed to check (an error in its
+    /// constructor or a method was reported). Its name is then `Error` in
+    /// what refers to it (an annotation of another module, read after
+    /// this one): an unknown type, which absorbs what is asked of it,
+    /// rather than a type with no definition, which fits nothing and made
+    /// every use of it an error of its own. (Only this program's classes:
+    /// an importer's are reserved while the modules it imports are
+    /// checked.)
+    fn settle_unbranded_classes(&mut self, program: &Program) {
+        let unbranded: Vec<crate::types::TypeId> = program
+            .class_brands
+            .iter()
+            .filter_map(|name| self.reserved_class_ids.remove(name))
+            .collect();
+        for id in unbranded {
+            if !self.named_types.contains_key(&id) {
+                self.register_named_type(crate::types::TypeDef::recursive(
+                    id,
+                    Vec::new(),
+                    Type::Error,
+                ));
             }
         }
     }
@@ -1523,6 +1560,39 @@ impl InferState {
         expr: &Expr,
         expected: &Type,
     ) -> InferResult<Type> {
+        if let Some(ty) = self.check_identity_call(env, expr, expected)? {
+            return Ok(ty);
+        }
+        // A generator's body, where its iterator's type is expected (an
+        // annotated generator's `=> Iterator<T>`): its `yield`s are
+        // checked against `T`.
+        if let Expr::Call {
+            callee,
+            arguments,
+            keywords,
+            span,
+        } = expr
+        {
+            let known = !matches!(
+                self.zonk_head(expected),
+                Type::Var(crate::types::TVarName::Flex(_))
+            );
+            if known && keywords.is_empty() {
+                if let Expr::Ident { name, .. } = callee.as_ref() {
+                    if name == crate::types::GENERATOR {
+                        if let Some(r) = self.infer_generator_marker(
+                            env,
+                            callee,
+                            arguments,
+                            Some(expected),
+                            *span,
+                        ) {
+                            return r;
+                        }
+                    }
+                }
+            }
+        }
         // Only these push what is expected into them; anything else is
         // synthesised and subsumed, which resolves `expected` as far as
         // it goes (not whole, up front).
@@ -1730,6 +1800,70 @@ impl InferState {
     }
 
     /// `check_expr`'s default: synthesise, then subsume into expected.
+    /// A call of a function that gives back its argument, `<a>(a) => a`
+    /// (`Object.freeze(x)`, `structuredClone(x)`, a program's own
+    /// identity), where a type is expected: the argument is checked
+    /// against it, as it would be written there without the call, so an
+    /// object literal's `null` fits a `String | Null` field. `None` for
+    /// any other expression or callee (the callee is read once more by
+    /// the synthesis then, so only a name or a member of one is tried),
+    /// or when nothing is known of what is expected.
+    fn check_identity_call(
+        &mut self,
+        env: &TypeEnv,
+        expr: &Expr,
+        expected: &Type,
+    ) -> InferResult<Option<Type>> {
+        let Expr::Call {
+            callee,
+            arguments,
+            keywords,
+            span,
+        } = expr
+        else {
+            return Ok(None);
+        };
+        let [arg] = arguments.as_slice() else {
+            return Ok(None);
+        };
+        let plain_callee = match callee.as_ref() {
+            // (Not a marker the parser lowers a construct to.)
+            Expr::Ident { name, .. } => !name.starts_with('\x04'),
+            Expr::Member { object, .. } => matches!(object.as_ref(), Expr::Ident { .. }),
+            _ => false,
+        };
+        if !plain_callee || !keywords.is_empty() || matches!(arg, Expr::Spread { .. }) {
+            return Ok(None);
+        }
+        let expected = self.zonk_head(expected);
+        if matches!(expected, Type::Var(crate::types::TVarName::Flex(_))) {
+            return Ok(None);
+        }
+        let callee_ty = self.infer_expr(env, callee)?;
+        let callee_ty = self.zonk_head(&callee_ty);
+        let Some((this, params, ret)) = features::functions::extract_callable(&callee_ty) else {
+            return Ok(None);
+        };
+        let [param] = params.as_slice() else {
+            return Ok(None);
+        };
+        let uses_no_this = matches!(
+            this.map(|t| self.zonk_head(&t)),
+            None | Some(Type::ArrowThis) | Some(Type::Var(crate::types::TVarName::Flex(_)))
+        );
+        let identity = matches!(
+            (self.zonk_head(&param.ty), self.zonk_head(&ret)),
+            (Type::Var(crate::types::TVarName::Flex(a)), Type::Var(crate::types::TVarName::Flex(b))) if a == b
+        );
+        if !uses_no_this || !identity || param.presence != crate::types::Presence::Pre {
+            return Ok(None);
+        }
+        self.check_expr(env, arg, &expected)
+            .map_err(|e| self.locate_in_value(arg, e))?;
+        self.unify(*span, &ret, &expected)?;
+        Ok(Some(self.zonk_head(&expected)))
+    }
+
     fn check_by_synthesis(
         &mut self,
         env: &TypeEnv,

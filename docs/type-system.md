@@ -567,6 +567,7 @@ Type annotations are optional — every type is inferred — but can be written 
 Two forms of type annotations:
 
 - **Doc-comment statement** preceding a declaration: `/** var x: T */`, `/** function f(...) => T */`, `/** const c: T */`, `/** type Name = ... */`. A class's or object literal's method takes the `function` form, named for it (`/** function open(x: String) => Number */` above `open(x) { … }`): its body is checked against it and callers see its type. Its `this` is the object it is on, so the annotation doesn't say `this:`; and a method's type is the same at every call (it is a member of its instance), so the annotation has no type parameters (`<a>`), which on a function mean "for every type".
+- **A class's field**: `/** this.x: T */` directly above a constructor's `this.x = …` line (the TypeScript-style `x: T;` in the class body says the same). The field's type is `T`: the value set there is checked against it, as a `const`'s is (and so a constructor parameter set into the field is a `T`), and the class names `T` rather than leaving a type parameter for the field. A field is annotated once; such an annotation anywhere else (a method's line, a line after another statement) is an error, since it would type nothing. One that doesn't parse is reported, and the field's type is then unknown, so the rest of the class is still checked.
 - **Inline trailing comment** on a binder or parameter: `var x /*: T */ = 1`, `function f(x /*: Number */) { ... }`.
 
 JSDoc `/** @type {T} */` is also accepted, attached to the next object-literal field. The field is declared at `T`, and its initialiser is checked against `T` as a `const`'s is, `null` and `undefined` included: a field that starts as `null` and is filled in later is declared `T | Null`. `typeof Helper` inside `T` resolves to the value type of a binding in scope:
@@ -658,11 +659,12 @@ A **tuple** `[A, B]` is a fixed-length array whose elements have their own types
 
 A **`Dict<V>`** is a plain object used as a string-keyed map (`{ [String]: V }` is the same type). An object literal where one is expected is one (each value must fit `V`); reading a key, `d.k` or `d[k]`, gives `V | Undefined`, since the key may be missing (`d.k ?? 0`); storing one, `d.k = v` or `d[k] = v`, takes a `V` (not `undefined`, which `Object.values` would then return; an update such as `d.k += 1` reads the entry first, so it needs it narrowed); `Object.keys`, `Object.values(d)` (`V[]`), `Object.entries(d)` (`[String, V][]`) and `Object.fromEntries` work on it.
 
-Typed arrays are `Int32Array`, `Uint8Array`, `Float32Array` and `Float64Array`. Each is its own type, not an ordinary array:
+Typed arrays are `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array` and `Float64Array`. Each is its own type, not an ordinary array:
 - It has a fixed length: `.length`, `.fill(v)`, `.subarray(start?, end?)`, `.slice(start?, end?)`, `.set(other, offset?)`, `.buffer` and `.byteLength`, but no `push`.
 - Indexing `a[i]` takes a number index, and reads a `Number`.
-- A store into an integer array takes any number and wraps it to 32 or 8 bits, as JavaScript's `ToInt32` / `ToUint8` do (`a[0] = 1.5` stores 1).
-- They are made with `new Int32Array(n)` or `Int32Array.from(xs)`.
+- A store into an integer array takes any number and wraps it to the element's bits, as JavaScript's `ToInt32` / `ToUint8` / … do (`a[0] = 1.5` stores 1); a `Uint8ClampedArray` clamps it to 0..255 instead.
+- They are made with `new Int32Array(n)` (or `new Int32Array()`, empty), as a view of an `ArrayBuffer`, `new Int32Array(buffer, byteOffset?, length?)`, as a copy, `new Int32Array(xs)` of a `Number[]` or of another typed array, or with `Int32Array.from(xs)`. What `new` takes is decided by its first argument's type (and any call with more than one argument is a view); an argument whose type isn't known yet is taken to be a length.
+- `T.BYTES_PER_ELEMENT` and `a.BYTES_PER_ELEMENT` are its element's size.
 
 ### Iteration
 
@@ -671,11 +673,16 @@ Typed arrays are `Int32Array`, `Uint8Array`, `Float32Array` and `Float64Array`. 
 - an array (its elements), a typed array (numbers), a tuple (its components, all of one type);
 - a string (its characters, as strings: code points);
 - a `Set<T>` (`T`s), a `Map<K, V>` (`[K, V]` pairs), and what their `keys()`, `values()` and `entries()` give;
+- an `Iterator<T>`, what a generator gives (below);
 - any record whose type says what iterating it gives with a `[Symbol.iterator]: T` field. A declaration says a host collection is iterable this way without claiming it is an array: `/** type NodeList = {length: Number, item: (Number) => Element | Null, [Symbol.iterator]: Element} */`.
 
 Not a `Dict<V>` or another plain object (`for … of` throws on one): iterate `Object.keys(o)`, `Object.values(o)` or `Object.entries(o)`. A function that iterates its parameter takes any iterable: its scheme says `where Iterable a b` (a `where` clause in an annotation may say it too).
 
 `new Set(items?)` and `new Map(entries?)` take any iterable of items or of `[K, V]` pairs (an array literal of pairs is checked as one). `Array.from(it)` gives an array of `it`'s elements; `Array.from(it, (x, i) => …)` an array of the map function's results, and also takes an array-like object, `Array.from({length: n}, (_, i) => i)` (whose elements are `undefined`).
+
+### Generators
+
+A generator, `function* g(…) { … }` (a declaration, an expression, an `export`, or a `*m() { … }` method of a class or an object literal), gives an `Iterator<T>`: `{next: () => {done: Boolean, value: T}, [Symbol.iterator]: T}`, where `T` is what it yields. Each `yield e` gives a `T` (one generator yields one type, or the union its annotation says), `yield* it` gives each element of the iterable `it`, a bare `yield` gives `undefined`, and `return` ends it. A `yield` expression's own value is `undefined` (`next()` takes no argument). An annotation names the result: `/** function rows(n: Number) => Iterator<Row> */`; each `yield` is then checked against `Row`, as a `return` is against a declared result. `async function*` isn't taken.
 
 ### Function types
 

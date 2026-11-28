@@ -1,0 +1,27 @@
+$ inty examples/modules/format.js
+exit: 0
+--- stdout
+export function formatCount(n) {
+  return (n === 1) ? "1 increment" : `${n} increments`;
+}
+export function formatHistory(history) {
+  if (history.length === 0) return "no history";
+  return history.map((n) => {
+  return `#${n}`;
+}).join(", ");
+}
+All checks passed: examples/modules/format.js (2 symbols) in <time>
+--- stderr
+
+$ inty declarations examples/modules/format.js
+exit: 0
+--- stdout
+/** const formatCount: <r12>(r12) => String */
+const formatCount;
+/** const formatHistory: <v12, x12, c13, e13>
+ * where
+ *   v12 has {length: x12, map: ((e13) => String) => c13},
+ *   c13 has {join: (String) => String}
+ * => (v12) => String */
+const formatHistory;
+--- stderr

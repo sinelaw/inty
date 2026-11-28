@@ -1,0 +1,745 @@
+$ inty examples/go-backend/tools/md2html.js
+exit: 0
+--- stdout
+import { readFileSync, writeFileSync } from "node:fs";
+import process from "node:process";
+/** function isBlankChar<a>(a) => Boolean */
+function isBlankChar(c) {
+  return (c === 32) || (c === 9);
+}
+/** function isDigit(Number) => Boolean */
+function isDigit(c) {
+  return (c >= 48) && (c <= 57);
+}
+/** function isAlnum(Number) => Boolean */
+function isAlnum(c) {
+  return (isDigit(c) || ((c >= 65) && (c <= 90))) || ((c >= 97) && (c <= 122));
+}
+/** function isPunct(Number) => Boolean */
+function isPunct(c) {
+  return ((((c >= 33) && (c <= 47)) || ((c >= 58) && (c <= 64))) || ((c >= 91) && (c <= 96))) || ((c >= 123) && (c <= 126));
+}
+/** function isBlank<a, b, d> where a has {length: Number, charCodeAt: {(Number) => b | d}} => (a) => Boolean */
+function isBlank(line) {
+  /** var i: Number */
+  for (var i = 0; i < line.length; i++) {
+    if (!isBlankChar(line.charCodeAt(i))) return false;
+  }
+  return true;
+}
+/** function indentOf<a, b, d> where a has {length: Number, charCodeAt: {(Number) => b | d}} => (a) => Number */
+function indentOf(line) {
+  /** let n: Number */
+  let n = 0;
+  /** var i: Number */
+  for (var i = 0; i < line.length; i++) {
+    const c = line.charCodeAt(i);
+    if (c === 32) n += 1; else if (c === 9) n += 4; else return n;
+  }
+  return n;
+}
+/** function dedent<a, b, d, e, g> where a has {length: Number, charCodeAt: {(Number) => b | d}, slice: {(Number) => e | g}} => (a, Number) => e */
+function dedent(line, cols) {
+  /** let i: Number */
+  let i = 0;
+  /** let n: Number */
+  let n = 0;
+  while ((i < line.length) && (n < cols)) {
+    const c = line.charCodeAt(i);
+    if (c === 32) n += 1; else if (c === 9) n += 4; else break;
+    i++;
+  }
+  return line.slice(i);
+}
+/** function escapeHtml(String) => String */
+function escapeHtml(s) {
+  /** let start: Number */
+  let start = 0;
+  /** let out: String */
+  let out = "";
+  /** var i: Number */
+  for (var i = 0; i < s.length; i++) {
+    /** const c: Number */
+    const c = s.charCodeAt(i);
+    /** let rep: String */
+    let rep = "";
+    if (c === 38) rep = "&amp;"; else if (c === 60) rep = "&lt;"; else if (c === 62) rep = "&gt;"; else if (c === 34) rep = "&quot;";
+    if (rep !== "") {
+      out = (out + s.slice(start, i)) + rep;
+      start = i + 1;
+    }
+  }
+  if (start === 0) return s;
+  return out + s.slice(start);
+}
+/** function backtickRun<a, b, d> where a has {length: Number, charCodeAt: {(Number) => b | d}} => (a, Number) => Number */
+function backtickRun(s, i) {
+  /** let run: Number */
+  let run = 0;
+  while (((i + run) < s.length) && (s.charCodeAt(i + run) === 96)) run++;
+  return run;
+}
+/** function codeSpanClose<a, b, c, e, g, h, j, l, m, o> where Plus b, a has {slice: {(b, b) => c | e}, indexOf: {(c, b) => Number | g}, length: Number, charCodeAt: {(Number) => h | j}, indexOf: {(c, Number) => Number | l}, charCodeAt: {(Number) => m | o}} => (a, b, b) => Number */
+function codeSpanClose(s, i, run) {
+  const fence = s.slice(i, i + run);
+  /** let close: Number */
+  let close = s.indexOf(fence, i + run);
+  while ((close >= 0) && (backtickRun(s, close) !== run)) {
+    close = s.indexOf(fence, close + backtickRun(s, close));
+  }
+  return close;
+}
+/** function closingDelim<a, b, d, e, g, h, j, l, m, o, q, r, t, u, v, x, y, a1, b1, d1, e1, g1, h1, i1, k1, l1, n1> where Testable v, a has {length: Number, charCodeAt: {(Number) => b | d}, charCodeAt: {(Number) => e | g}, slice: {(Number, Number) => h | j}, indexOf: {(h, Number) => Number | l}, charCodeAt: {(Number) => m | o}, indexOf: {(h, Number) => Number | q}, charCodeAt: {(Number) => r | t}, startsWith: {(u, Number) => v | x}, charCodeAt: {(Number) => y | a1}, charCodeAt: e1, charCodeAt: {(Number) => Number | g1}, charCodeAt: {(Number) => i1 | k1}}, u has {length: Number, charCodeAt: {(Number) => b1 | d1}, length: h1, charCodeAt: {(Number) => l1 | n1}} => (a, u, Number) => Number */
+function closingDelim(s, d, start) {
+  /** let j: Number */
+  let j = start;
+  while (j < s.length) {
+    const c = s.charCodeAt(j);
+    if (c === 92) {
+      j += 2;
+    } else if (c === 96) {
+      /** const run: Number */
+      const run = backtickRun(s, j);
+      /** const close: Number */
+      const close = codeSpanClose(s, j, run);
+      j = (close >= 0) ? close + run : j + run;
+    } else if (s.startsWith(d, j)) {
+      const before = s.charCodeAt(j - 1);
+      /** const end: Number */
+      const end = j + d.length;
+      /** const afterOk: Boolean */
+      const afterOk = ((end >= s.length) || (d.charCodeAt(0) !== 95)) || (!isAlnum(s.charCodeAt(end)));
+      /** const single: Boolean */
+      const single = ((d.length === 1) && (end < s.length)) && (s.charCodeAt(end) === d.charCodeAt(0));
+      if (((((j > start) && (!isBlankChar(before))) && (before !== 10)) && afterOk) && (!single)) return j;
+      j += single ? 2 : 1;
+    } else {
+      j++;
+    }
+  }
+  return -1;
+}
+/** function closingBracket<a, b, d> where a has {length: Number, charCodeAt: {(Number) => b | d}} => (a, Number) => Number */
+function closingBracket(s, open) {
+  /** let depth: Number */
+  let depth = 0;
+  /** var i: Number */
+  for (var i = open; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 92) i++; else if (c === 91) depth++; else if (c === 93) {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+/** function inline(String) => String */
+function inline(s) {
+  /** const out: String[] */
+  const out = [];
+  /** const n: Number */
+  const n = s.length;
+  /** let text: Number */
+  let text = 0;
+  /** let i: Number */
+  let i = 0;
+  while (i < n) {
+    /** const c: Number */
+    const c = s.charCodeAt(i);
+    if (((c === 92) && ((i + 1) < n)) && isPunct(s.charCodeAt(i + 1))) {
+      out.push(escapeHtml(s.slice(text, i)));
+      out.push(escapeHtml(s.slice(i + 1, i + 2)));
+      i += 2;
+      text = i;
+    } else if (((c === 92) && ((i + 1) < n)) && (s.charCodeAt(i + 1) === 10)) {
+      out.push(escapeHtml(s.slice(text, i)));
+      out.push("<br />\n");
+      i += 2;
+      text = i;
+    } else if (c === 10) {
+      /** let k: Number */
+      let k = i;
+      while ((k > text) && (s.charCodeAt(k - 1) === 32)) k--;
+      if ((i - k) >= 2) {
+        out.push(escapeHtml(s.slice(text, k)));
+        out.push("<br />\n");
+        text = i + 1;
+      }
+      i++;
+    } else if (c === 96) {
+      /** const run: Number */
+      const run = backtickRun(s, i);
+      /** const close: Number */
+      const close = codeSpanClose(s, i, run);
+      if (close >= 0) {
+        out.push(escapeHtml(s.slice(text, i)));
+        /** let code: String */
+        let code = s.slice(i + run, close).replaceAll("\n", " ");
+        if ((((code.length >= 2) && code.startsWith(" ")) && code.endsWith(" ")) && (!isBlank(code))) {
+          code = code.slice(1, code.length - 1);
+        }
+        out.push(("<code>" + escapeHtml(code)) + "</code>");
+        i = close + run;
+        text = i;
+      } else {
+        i += run;
+      }
+    } else if ((c === 42) || (c === 95)) {
+      /** let run: Number */
+      let run = 1;
+      while (((i + run) < n) && (s.charCodeAt(i + run) === c)) run++;
+      /** const strong: Boolean */
+      const strong = run >= 2;
+      /** const d: String */
+      const d = strong ? s.slice(i, i + 2) : s.slice(i, i + 1);
+      /** const after: Number */
+      const after = i + d.length;
+      /** const opens: Boolean */
+      const opens = (((after < n) && (!isBlankChar(s.charCodeAt(after)))) && (s.charCodeAt(after) !== 10)) && (((c === 42) || (i === 0)) || (!isAlnum(s.charCodeAt(i - 1))));
+      /** const close: Number */
+      const close = opens ? closingDelim(s, d, after) : -1;
+      if (close >= 0) {
+        out.push(escapeHtml(s.slice(text, i)));
+        /** const tag: String */
+        const tag = strong ? "strong" : "em";
+        out.push(((((("<" + tag) + ">") + inline(s.slice(after, close))) + "</") + tag) + ">");
+        i = close + d.length;
+        text = i;
+      } else {
+        i += run;
+      }
+    } else if (((c === 126) && ((i + 1) < n)) && (s.charCodeAt(i + 1) === 126)) {
+      /** const opens: Boolean */
+      const opens = ((i + 2) < n) && (!isBlankChar(s.charCodeAt(i + 2)));
+      /** const close: Number */
+      const close = opens ? closingDelim(s, "~~", i + 2) : -1;
+      if (close >= 0) {
+        out.push(escapeHtml(s.slice(text, i)));
+        out.push(("<s>" + inline(s.slice(i + 2, close))) + "</s>");
+        i = close + 2;
+        text = i;
+      } else {
+        i += 2;
+      }
+    } else if ((c === 91) || (((c === 33) && ((i + 1) < n)) && (s.charCodeAt(i + 1) === 91))) {
+      /** const image: Boolean */
+      const image = c === 33;
+      /** const open: Number */
+      const open = image ? i + 1 : i;
+      /** const close: Number */
+      const close = closingBracket(s, open);
+      /** const paren: Boolean */
+      const paren = ((close >= 0) && ((close + 1) < n)) && (s.charCodeAt(close + 1) === 40);
+      /** const end: Number */
+      const end = paren ? s.indexOf(")", close + 2) : -1;
+      if (end >= 0) {
+        out.push(escapeHtml(s.slice(text, i)));
+        /** const label: String */
+        const label = s.slice(open + 1, close);
+        /** let dest: String */
+        let dest = s.slice(close + 2, end).trim();
+        /** let title: String */
+        let title = "";
+        /** const sp: Number */
+        const sp = dest.indexOf(" \"");
+        if ((sp >= 0) && dest.endsWith("\"")) {
+          title = dest.slice(sp + 2, dest.length - 1);
+          dest = dest.slice(0, sp).trim();
+        }
+        if (dest.startsWith("<") && dest.endsWith(">")) dest = dest.slice(1, dest.length - 1);
+        /** const titleAttr: String */
+        const titleAttr = (title === "") ? "" : (" title=\"" + escapeHtml(title)) + "\"";
+        if (image) {
+          out.push(((((("<img src=\"" + escapeHtml(dest)) + "\" alt=\"") + escapeHtml(label)) + "\"") + titleAttr) + " />");
+        } else {
+          out.push(((((("<a href=\"" + escapeHtml(dest)) + "\"") + titleAttr) + ">") + inline(label)) + "</a>");
+        }
+        i = end + 1;
+        text = i;
+      } else {
+        i += image ? 2 : 1;
+      }
+    } else if ((c === 60) && (s.startsWith("http://", i + 1) || s.startsWith("https://", i + 1))) {
+      /** const end: Number */
+      const end = s.indexOf(">", i);
+      /** const space: Number */
+      const space = s.indexOf(" ", i);
+      if ((space < 0) || (space > end)) {
+        /** const url: String */
+        const url = escapeHtml(s.slice(i + 1, end));
+        out.push(escapeHtml(s.slice(text, i)));
+        out.push(((("<a href=\"" + url) + "\">") + url) + "</a>");
+        i = end + 1;
+        text = i;
+      } else {
+        i++;
+      }
+    } else {
+      i++;
+    }
+  }
+  out.push(escapeHtml(s.slice(text, n)));
+  return out.join("");
+}
+/** function headingLevel<a, b, d, e, g> where a has {length: Number, charCodeAt: {(Number) => b | d}, charCodeAt: {(Number) => e | g}} => (a) => Number */
+function headingLevel(t) {
+  /** let n: Number */
+  let n = 0;
+  while ((n < t.length) && (t.charCodeAt(n) === 35)) n++;
+  if ((n === 0) || (n > 6)) return 0;
+  if ((n < t.length) && (!isBlankChar(t.charCodeAt(n)))) return 0;
+  return n;
+}
+/** function headingText<a, b, c, e, g> where a has {slice: {(b) => c | e}}, c has {trim: {() => String | g}} => (a, b) => String */
+function headingText(t, level) {
+  /** let s: String */
+  let s = t.slice(level).trim();
+  /** let k: Number */
+  let k = s.length;
+  while ((k > 0) && (s.charCodeAt(k - 1) === 35)) k--;
+  if (k === 0) return "";
+  if ((k < s.length) && isBlankChar(s.charCodeAt(k - 1))) s = s.slice(0, k).trim();
+  return s;
+}
+/** function isRule<a, c> where a has {length: Number, charCodeAt: {(Number) => Number | c}} => (a) => Boolean */
+function isRule(t) {
+  /** let mark: Number */
+  let mark = 0;
+  /** let count: Number */
+  let count = 0;
+  /** var i: Number */
+  for (var i = 0; i < t.length; i++) {
+    /** const c: Number */
+    const c = t.charCodeAt(i);
+    if (isBlankChar(c)) continue;
+    if (((c !== 45) && (c !== 42)) && (c !== 95)) return false;
+    if ((mark !== 0) && (c !== mark)) return false;
+    mark = c;
+    count++;
+  }
+  return count >= 3;
+}
+/** function fenceLength<a, b, d, e, g, i> where a has {charCodeAt: {(Number) => b | d}, length: Number, charCodeAt: {(Number) => e | g}, indexOf: {(String, Number) => Number | i}} => (a) => Number */
+function fenceLength(t) {
+  const c = t.charCodeAt(0);
+  if ((c !== 96) && (c !== 126)) return 0;
+  /** let n: Number */
+  let n = 0;
+  while ((n < t.length) && (t.charCodeAt(n) === c)) n++;
+  if (n < 3) return 0;
+  if ((c === 96) && (t.indexOf("`", n) >= 0)) return 0;
+  return n;
+}
+/** function listMarker<a, c, d, e, g, h, j, l, n, o, q> where a has {charCodeAt: {(Number) => Number | c}, length: d, charCodeAt: {(Number) => e | g}, length: Number, charCodeAt: h, charCodeAt: {(Number) => Number | j}, charCodeAt: {(Number) => Number | l}, charCodeAt: {(Number) => Number | n}, charCodeAt: {(Number) => o | q}} => (a) => {delim: Number, ok: Boolean, ordered: Boolean, start: Number, width: Number} */
+function listMarker(t) {
+  /** const none: {delim: Number, ok: Boolean, ordered: Boolean, start: Number, width: Number} */
+  const none = {ok: false, ordered: false, start: 0, width: 0, delim: 0};
+  /** const c: Number */
+  const c = t.charCodeAt(0);
+  if (((c === 45) || (c === 42)) || (c === 43)) {
+    if (t.length === 1) return {ok: true, ordered: false, start: 0, width: 2, delim: c};
+    if (!isBlankChar(t.charCodeAt(1))) return none;
+    return {ok: true, ordered: false, start: 0, width: 2, delim: c};
+  }
+  /** let n: Number */
+  let n = 0;
+  /** let value: Number */
+  let value = 0;
+  while (((n < t.length) && (n < 9)) && isDigit(t.charCodeAt(n))) {
+    value = (value * 10) + (t.charCodeAt(n) - 48);
+    n++;
+  }
+  if ((n === 0) || (n >= t.length)) return none;
+  /** const d: Number */
+  const d = t.charCodeAt(n);
+  if ((d !== 46) && (d !== 41)) return none;
+  if (((n + 1) < t.length) && (!isBlankChar(t.charCodeAt(n + 1)))) return none;
+  return {ok: true, ordered: true, start: value, width: n + 2, delim: d};
+}
+/** function tableCells<a, b, d, e, g, i, k, l, n, p, q, s, t, v, w, y, z, b1, c1, e1, f1, h1, j1> where Testable e, Testable l, a has {trim: {() => b | d}}, b has {startsWith: {(String) => e | g}, slice: {(Number) => b | i}, endsWith: {(String) => Boolean | k}, endsWith: {(String) => l | n}, slice: {(Number, Number) => b | p}, length: Number, charCodeAt: {(Number) => q | s}, slice: {(Number, Number) => t | v}, slice: {(Number) => c1 | e1}}, t has {trim: {() => w | y}}, w has {replaceAll: {(String, String) => z | b1}}, c1 has {trim: {() => f1 | h1}}, f1 has {replaceAll: {(String, String) => z | j1}} => (a) => z[] */
+function tableCells(t) {
+  let s = t.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|") && (!s.endsWith("\\|"))) s = s.slice(0, s.length - 1);
+  const cells = [];
+  /** let start: Number */
+  let start = 0;
+  /** var i: Number */
+  for (var i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 92) i++; else if (c === 124) {
+      cells.push(s.slice(start, i).trim().replaceAll("\\|", "|"));
+      start = i + 1;
+    }
+  }
+  cells.push(s.slice(start).trim().replaceAll("\\|", "|"));
+  return cells;
+}
+/** function tableAligns<a, c, d, f, g, i, k, m, n, p, r, s, u, v, x, y, a1, b1, d1, e1, g1, h1, j1, l1, m1, o1, p1, r1, t1> where Testable g, Testable n, Testable p1, a has {indexOf: {(String) => Number | c}, trim: {() => d | f}}, d has {startsWith: {(String) => g | i}, slice: {(Number) => d | k}, endsWith: {(String) => Boolean | m}, endsWith: {(String) => n | p}, slice: {(Number, Number) => d | r}, length: Number, charCodeAt: {(Number) => s | u}, slice: {(Number, Number) => v | x}, slice: {(Number) => e1 | g1}}, v has {trim: {() => y | a1}}, y has {replaceAll: {(String, String) => b1 | d1}}, e1 has {trim: {() => h1 | j1}}, h1 has {replaceAll: {(String, String) => b1 | l1}}, b1 has {length: Number, charCodeAt: {(Number) => m1 | o1}, startsWith: {(String) => p1 | r1}, endsWith: {(String) => p1 | t1}} => (a) => String[] */
+function tableAligns(t) {
+  if (t.indexOf("-") < 0) return [];
+  const cells = tableCells(t);
+  /** const aligns: String[] */
+  const aligns = [];
+  for (var cell of cells) {
+    /** let dashes: Number */
+    let dashes = 0;
+    /** var i: Number */
+    for (var i = 0; i < cell.length; i++) {
+      const c = cell.charCodeAt(i);
+      if (c === 45) dashes++; else if (c !== 58) return [];
+    }
+    if (dashes === 0) return [];
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
+    if (left && right) aligns.push("center"); else if (right) aligns.push("right"); else if (left) aligns.push("left"); else aligns.push("");
+  }
+  return aligns;
+}
+/** function tableRow<a, b, d, e, f, g, h, j, k, m> where Indexable f Number String, Indexable e Number g, Indexable e Number String, a has {push: {(String) => b | d}, push: {(String) => h | j}, push: {(String) => k | m}}, e has {length: Number}, f has {length: Number} => (f, e, String, a) => Undefined */
+function tableRow(cells, aligns, tag, out) {
+  out.push("<tr>\n");
+  /** var i: Number */
+  for (var i = 0; i < aligns.length; i++) {
+    /** const text: String */
+    const text = (i < cells.length) ? inline(cells[i]) : "";
+    /** const style: String */
+    const style = (aligns[i] === "") ? "" : (" style=\"text-align:" + aligns[i]) + "\"";
+    out.push((((((("<" + tag) + style) + ">") + text) + "</") + tag) + ">\n");
+  }
+  out.push("</tr>\n");
+}
+/** function interrupts<a, b, d, e, g, i, j, l, m, o, q, s, u, v, w, y, z, b1, d1, f1, g1, i1> where a has {length: Number, charCodeAt: {(Number) => b | d}, charCodeAt: {(Number) => e | g}, charCodeAt: {(Number) => Number | i}, charCodeAt: {(Number) => j | l}, charCodeAt: {(Number) => m | o}, indexOf: {(String, Number) => Number | q}, startsWith: {(String) => Boolean | s}, charCodeAt: {(Number) => Number | u}, length: v, charCodeAt: {(Number) => w | y}, charCodeAt: z, charCodeAt: {(Number) => Number | b1}, charCodeAt: {(Number) => Number | d1}, charCodeAt: {(Number) => Number | f1}, charCodeAt: {(Number) => g1 | i1}} => (a) => Boolean */
+function interrupts(t) {
+  if ((((headingLevel(t) > 0) || isRule(t)) || (fenceLength(t) > 0)) || t.startsWith(">")) return true;
+  /** const m: {delim: Number, ok: Boolean, ordered: Boolean, start: Number, width: Number} */
+  const m = listMarker(t);
+  return (m.ok && (t.length > (m.width - 1))) && ((!m.ordered) || (m.start === 1));
+}
+/** const TIGHT: String */
+const TIGHT = "\u0001";
+/** function renderBlocks(String[], Boolean, String[]) => Undefined */
+function renderBlocks(lines, tight, out) {
+  /** const n: Number */
+  const n = lines.length;
+  /** let i: Number */
+  let i = 0;
+  while (i < n) {
+    /** const line: String */
+    const line = lines[i];
+    if (isBlank(line)) {
+      i++;
+      continue;
+    }
+    /** const ind: Number */
+    const ind = indentOf(line);
+    /** const t: String */
+    const t = dedent(line, ind);
+    if (ind >= 4) {
+      /** const code: String[] */
+      const code = [];
+      while ((i < n) && ((indentOf(lines[i]) >= 4) || isBlank(lines[i]))) {
+        code.push(dedent(lines[i], 4));
+        i++;
+      }
+      while ((code.length > 0) && isBlank(code[code.length - 1])) code.pop();
+      out.push(("<pre><code>" + escapeHtml(code.join("\n"))) + "\n</code></pre>\n");
+      continue;
+    }
+    /** const fence: Number */
+    const fence = fenceLength(t);
+    if (fence > 0) {
+      /** const mark: String */
+      const mark = t.slice(0, fence);
+      /** const lang: String */
+      const lang = t.slice(fence).trim();
+      /** const code: String[] */
+      const code = [];
+      i++;
+      while (i < n) {
+        /** const u: String */
+        const u = dedent(lines[i], ind);
+        /** const v: String */
+        const v = u.trim();
+        if ((v.startsWith(mark) && (fenceLength(v) >= fence)) && (v.slice(fenceLength(v)).trim() === "")) {
+          i++;
+          break;
+        }
+        code.push(u);
+        i++;
+      }
+      /** const cls: String */
+      const cls = (lang === "") ? "" : (" class=\"language-" + escapeHtml(lang.split(" ")[0])) + "\"";
+      /** const body: String */
+      const body = (code.length === 0) ? "" : escapeHtml(code.join("\n")) + "\n";
+      out.push(((("<pre><code" + cls) + ">") + body) + "</code></pre>\n");
+      continue;
+    }
+    /** const level: Number */
+    const level = headingLevel(t);
+    if (level > 0) {
+      /** const h: String */
+      const h = "h" + String(level);
+      out.push(((((("<" + h) + ">") + inline(headingText(t, level))) + "</") + h) + ">\n");
+      i++;
+      continue;
+    }
+    if (isRule(t)) {
+      out.push("<hr />\n");
+      i++;
+      continue;
+    }
+    if (t.startsWith(">")) {
+      /** const inner: String[] */
+      const inner = [];
+      while ((i < n) && (!isBlank(lines[i]))) {
+        /** const u: String */
+        const u = dedent(lines[i], indentOf(lines[i]));
+        if (u.startsWith(">")) {
+          inner.push(u.startsWith("> ") ? u.slice(2) : u.slice(1));
+        } else if ((inner.length > 0) && (!interrupts(u))) {
+          inner.push(u);
+        } else {
+          break;
+        }
+        i++;
+      }
+      out.push("<blockquote>\n");
+      renderBlocks(inner, false, out);
+      out.push("</blockquote>\n");
+      continue;
+    }
+    /** const m: {delim: Number, ok: Boolean, ordered: Boolean, start: Number, width: Number} */
+    const m = listMarker(t);
+    if (m.ok) {
+      /** const tag: String */
+      const tag = m.ordered ? "ol" : "ul";
+      /** const items: String[][] */
+      const items = [];
+      /** let loose: Boolean */
+      let loose = false;
+      while (i < n) {
+        /** const first: String */
+        const first = lines[i];
+        /** const fi: Number */
+        const fi = indentOf(first);
+        /** const ft: String */
+        const ft = dedent(first, fi);
+        /** const fm: {delim: Number, ok: Boolean, ordered: Boolean, start: Number, width: Number} */
+        const fm = listMarker(ft);
+        if (((((fi !== ind) || (!fm.ok)) || (fm.ordered !== m.ordered)) || (fm.delim !== m.delim)) || isRule(ft)) break;
+        /** const contentCol: Number */
+        const contentCol = fi + fm.width;
+        /** const item: String[] */
+        const item = [ft.slice(fm.width)];
+        i++;
+        /** let sawBlank: Boolean */
+        let sawBlank = false;
+        while (i < n) {
+          /** const u: String */
+          const u = lines[i];
+          if (isBlank(u)) {
+            sawBlank = true;
+            item.push("");
+            i++;
+            continue;
+          }
+          /** const ui: Number */
+          const ui = indentOf(u);
+          if (ui >= contentCol) {
+            if (sawBlank) loose = true;
+            item.push(dedent(u, contentCol));
+            sawBlank = false;
+            i++;
+            continue;
+          }
+          /** const ut: String */
+          const ut = dedent(u, ui);
+          if (listMarker(ut).ok) break;
+          if (((!sawBlank) && (!interrupts(ut))) && (!isBlank(item[item.length - 1]))) {
+            item.push(ut);
+            i++;
+            continue;
+          }
+          break;
+        }
+        while ((item.length > 1) && isBlank(item[item.length - 1])) item.pop();
+        if (sawBlank && (i < n)) {
+          /** const next: String */
+          const next = lines[i];
+          /** const nm: {delim: Number, ok: Boolean, ordered: Boolean, start: Number, width: Number} */
+          const nm = listMarker(dedent(next, indentOf(next)));
+          if ((((indentOf(next) === ind) && nm.ok) && (nm.ordered === m.ordered)) && (nm.delim === m.delim)) loose = true;
+        }
+        items.push(item);
+      }
+      /** const startAttr: String */
+      const startAttr = (m.ordered && (m.start !== 1)) ? (" start=\"" + String(m.start)) + "\"" : "";
+      out.push((("<" + tag) + startAttr) + ">\n");
+      /** var item: String[] */
+      for (var item of items) {
+        /** const inner: String[] */
+        const inner = [];
+        renderBlocks(item, !loose, inner);
+        if (inner.length === 0) {
+          out.push("<li></li>\n");
+          continue;
+        }
+        /** const firstText: Boolean */
+        const firstText = inner[0].startsWith(TIGHT);
+        /** const lastText: Boolean */
+        const lastText = inner[inner.length - 1].startsWith(TIGHT);
+        /** let body: String */
+        let body = inner.map((c) => {
+  return c.startsWith(TIGHT) ? c.slice(1) : c;
+}).join("");
+        if (lastText) body = body.slice(0, body.length - 1);
+        out.push((("<li>" + (firstText ? "" : "\n")) + body) + "</li>\n");
+      }
+      out.push(("</" + tag) + ">\n");
+      continue;
+    }
+    if ((t.indexOf("|") >= 0) && ((i + 1) < n)) {
+      /** const aligns: String[] */
+      const aligns = tableAligns(lines[i + 1]);
+      /** const header: String[] */
+      const header = tableCells(t);
+      if ((aligns.length > 0) && (aligns.length === header.length)) {
+        out.push("<table>\n<thead>\n");
+        tableRow(header, aligns, "th", out);
+        out.push("</thead>\n");
+        i += 2;
+        if ((i < n) && (!isBlank(lines[i]))) {
+          out.push("<tbody>\n");
+          while (((i < n) && (!isBlank(lines[i]))) && (!interrupts(dedent(lines[i], indentOf(lines[i]))))) {
+            tableRow(tableCells(lines[i]), aligns, "td", out);
+            i++;
+          }
+          out.push("</tbody>\n");
+        }
+        out.push("</table>\n");
+        continue;
+      }
+    }
+    /** const para: String[] */
+    const para = [t];
+    i++;
+    /** let setext: Number */
+    let setext = 0;
+    while ((i < n) && (!isBlank(lines[i]))) {
+      /** const u: String */
+      const u = dedent(lines[i], indentOf(lines[i]));
+      /** const v: String */
+      const v = u.trim();
+      if ((v.length > 0) && ((v.charCodeAt(0) === 61) || (v.charCodeAt(0) === 45))) {
+        /** let k: Number */
+        let k = 0;
+        while ((k < v.length) && (v.charCodeAt(k) === v.charCodeAt(0))) k++;
+        if (k === v.length) {
+          setext = (v.charCodeAt(0) === 61) ? 1 : 2;
+          i++;
+          break;
+        }
+      }
+      if (interrupts(u)) break;
+      para.push(u);
+      i++;
+    }
+    /** const text: String */
+    const text = inline(para.join("\n").trimEnd());
+    if (setext > 0) {
+      /** const h: String */
+      const h = "h" + String(setext);
+      out.push(((((("<" + h) + ">") + text) + "</") + h) + ">\n");
+    } else if (tight) {
+      out.push((TIGHT + text) + "\n");
+    } else {
+      out.push(("<p>" + text) + "</p>\n");
+    }
+  }
+}
+/** function titleOf<a, c, e, f, h, i, j, l, n, o, q, r, t, v> where a has {indexOf: {(String) => Number | c}, length: Number, charCodeAt: {(Number) => Number | e}, charCodeAt: {(Number) => f | h}, slice: {(Number, i) => j | l}, indexOf: {(String, Number) => i | n}, indexOf: {(String, Number) => Number | v}}, j has {length: Number, charCodeAt: {(Number) => o | q}, slice: {(Number, Number) => r | t}} => (a) => String */
+function titleOf(html) {
+  /** let open: Number */
+  let open = html.indexOf("<h");
+  while ((open >= 0) && ((open + 3) < html.length)) {
+    /** const level: Number */
+    const level = html.charCodeAt(open + 2);
+    if (((level >= 49) && (level <= 54)) && (html.charCodeAt(open + 3) === 62)) {
+      const inner = html.slice(open + 4, html.indexOf("</h", open));
+      const text = [];
+      /** let inTag: Boolean */
+      let inTag = false;
+      /** var i: Number */
+      for (var i = 0; i < inner.length; i++) {
+        const c = inner.charCodeAt(i);
+        if (c === 60) inTag = true; else if (c === 62) inTag = false; else if (!inTag) text.push(inner.slice(i, i + 1));
+      }
+      return text.join("");
+    }
+    open = html.indexOf("<h", open + 2);
+  }
+  return "Document";
+}
+/** function markdownToHtml<a, c> where a has {split: {(String) => String[] | c}} => (a) => String */
+function markdownToHtml(src) {
+  /** const lines: String[] */
+  const lines = src.split("\n");
+  /** var i: Number */
+  for (var i = 0; i < lines.length; i++) {
+    /** const l: String */
+    const l = lines[i];
+    if (l.endsWith("\r")) lines[i] = l.slice(0, l.length - 1);
+  }
+  /** const out: String[] */
+  const out = [];
+  renderBlocks(lines, false, out);
+  return out.join("");
+}
+/** function usage() => Undefined */
+function usage() {
+  process.stderr.write("usage: md2html [input.md | -] [-o output.html] [-s | --standalone]\n");
+}
+/** const args: String[] */
+const args = process.argv.slice(2);
+/** let input: String */
+let input = "-";
+/** let output: String */
+let output = "";
+/** let standalone: Boolean */
+let standalone = false;
+/** let a: Number */
+let a = 0;
+while (a < args.length) {
+  /** const arg: String */
+  const arg = args[a];
+  if ((arg === "-o") && ((a + 1) < args.length)) {
+    output = args[a + 1];
+    a += 2;
+  } else if ((arg === "-s") || (arg === "--standalone")) {
+    standalone = true;
+    a++;
+  } else if ((arg === "-h") || (arg === "--help")) {
+    usage();
+    process.exit(0);
+  } else if (arg.startsWith("-") && (arg !== "-")) {
+    process.stderr.write(("md2html: unknown option " + arg) + "\n");
+    usage();
+    process.exit(2);
+  } else {
+    input = arg;
+    a++;
+  }
+}
+/** const src: String */
+const src = readFileSync((input === "-") ? "/dev/stdin" : input, "utf8");
+/** let html: String */
+let html = markdownToHtml(src);
+if (standalone) {
+  /** const title: String */
+  const title = titleOf(html);
+  html = ((("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>" + title) + "</title>\n</head>\n<body>\n") + html) + "</body>\n</html>\n";
+}
+if (output === "") process.stdout.write(html); else writeFileSync(output, html);
+All checks passed: examples/go-backend/tools/md2html.js (34 symbols) in <time>
+--- stderr

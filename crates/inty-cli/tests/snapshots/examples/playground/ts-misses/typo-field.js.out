@@ -1,0 +1,17 @@
+$ inty examples/playground/ts-misses/typo-field.js
+exit: 1
+--- stdout
+--- stderr
+
+Error: Type mismatch: expected '{age: Number | Undefined, name: String}', found '{agee: Number, name: String}'
+    ╭─[ examples/playground/ts-misses/typo-field.js:12:18 ]
+    │
+ 12 │ console.log(show(input));
+    │                  ──┬──  
+    │                    ╰──── Type mismatch: expected '{age: Number | Undefined, name: String}', found '{agee: Number, name: String}'
+    │ 
+    │ Help: missing field 'age'; unexpected field 'agee'
+    │ 
+    │ Note: Cannot unify expected '{age: Number | Undefined, name: String}' with found '{agee: Number, name: String}'
+────╯
+

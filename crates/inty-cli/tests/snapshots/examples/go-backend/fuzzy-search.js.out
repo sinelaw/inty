@@ -1,0 +1,128 @@
+$ inty examples/go-backend/fuzzy-search.js
+exit: 0
+--- stdout
+/** let seed: Number */
+let seed = 99;
+/** function rand() => Number */
+function rand() {
+  seed = (seed * 16807) % 2147483647;
+  return seed / 2147483647;
+}
+/** function randomWord() => String */
+function randomWord() {
+  /** const LETTERS: String */
+  const LETTERS = "etaoinshrdlcumwfgypbvkjxqz";
+  /** const len: Number */
+  const len = 4 + Math.floor(rand() * 8);
+  /** let w: String */
+  let w = "";
+  /** var i: Number */
+  for (var i = 0; i < len; i++) {
+    /** const r: Number */
+    const r = rand();
+    w += LETTERS[Math.floor((r * r) * LETTERS.length)];
+  }
+  return w;
+}
+/** function levenshtein(String, String, Number[], Number[]) => Number */
+function levenshtein(a, b, prev, cur) {
+  /** const n: Number */
+  const n = a.length;
+  /** const m: Number */
+  const m = b.length;
+  /** var j: Number */
+  for (var j = 0; j <= m; j++) {
+    prev[j] = j;
+  }
+  /** var i: Number */
+  for (var i = 1; i <= n; i++) {
+    cur[0] = i;
+    /** const ca: Number */
+    const ca = a.charCodeAt(i - 1);
+    /** var j: Number */
+    for (var j = 1; j <= m; j++) {
+      /** const cost: Number */
+      const cost = (ca === b.charCodeAt(j - 1)) ? 0 : 1;
+      /** const del: Number */
+      const del = prev[j] + 1;
+      /** const ins: Number */
+      const ins = cur[j - 1] + 1;
+      /** const sub: Number */
+      const sub = prev[j - 1] + cost;
+      cur[j] = Math.min(Math.min(del, ins), sub);
+    }
+    /** var j: Number */
+    for (var j = 0; j <= m; j++) {
+      prev[j] = cur[j];
+    }
+  }
+  return prev[m];
+}
+/** function main() => String */
+function main() {
+  seed = 99;
+  /** const lines: String[] */
+  const lines = [];
+  /** const dictionary: String[] */
+  const dictionary = [];
+  /** var i: Number */
+  for (var i = 0; i < 20000; i++) {
+    dictionary.push(randomWord());
+  }
+  /** const queries: String[] */
+  const queries = [];
+  /** var i: Number */
+  for (var i = 0; i < 60; i++) {
+    queries.push(randomWord());
+  }
+  /** const prev: Number[] */
+  const prev = [];
+  /** const cur: Number[] */
+  const cur = [];
+  /** var i: Number */
+  for (var i = 0; i < 64; i++) {
+    prev.push(0);
+    cur.push(0);
+  }
+  /** let checksum: Number */
+  let checksum = 0;
+  /** var q: String */
+  for (var q of queries) {
+    /** let best: Number */
+    let best = 1000;
+    /** let bestWord: String */
+    let bestWord = "";
+    /** let within2: Number */
+    let within2 = 0;
+    /** var w: String */
+    for (var w of dictionary) {
+      /** const d: Number */
+      const d = levenshtein(q, w, prev, cur);
+      if (d < best) {
+        best = d;
+        bestWord = w;
+      }
+      if (d <= 2) {
+        within2++;
+      }
+    }
+    checksum += (best * 1000) + within2;
+    if (queries.indexOf(q) < 5) {
+      lines.push(`${q}: best "${bestWord}" (distance ${best}), ${within2} within 2`);
+    }
+  }
+  lines.push(`checksum ${checksum}`);
+  return lines.join("\n");
+}
+/** let report: String */
+let report = "";
+/** var iteration: Number */
+for (var iteration = 0; iteration < 4; iteration++) {
+  /** const t0: Number */
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);
+All checks passed: examples/go-backend/fuzzy-search.js (6 symbols) in <time>
+--- stderr

@@ -1,0 +1,82 @@
+$ inty crates/inty/tests/test_this_methods.js
+exit: 0
+--- stdout
+var obj1 = {x: 10, getX: function() {
+  return this.x;
+}};
+/** var val1: Number */
+var val1 = obj1.getX();
+/** var val2: Number */
+var val2 = val1 + 5;
+var obj2 = {x: 10, y: 20, getX: function() {
+  return this.x;
+}, getY: function() {
+  return this.y;
+}};
+/** var x: Number */
+var x = obj2.getX();
+/** var y: Number */
+var y = obj2.getY();
+/** var sum: Number */
+var sum = x + y;
+var rect = {width: 10, height: 20, getArea: function() {
+  return this.width * this.height;
+}};
+/** var area: Number */
+var area = rect.getArea();
+/** var doubled: Number */
+var doubled = area * 2;
+var counter = {value: 0, increment: function() {
+  this.value = this.value + 1;
+  return this;
+}, get: function() {
+  return this.value;
+}};
+var c = counter.increment().increment();
+/** var finalValue: Number */
+var finalValue = c.get();
+/** var result: Number */
+var result = finalValue + 10;
+var calculator = {base: 10, add: function(x) {
+  return this.base + x;
+}};
+/** var res1: Number */
+var res1 = calculator.add(5);
+/** var res2: Number */
+var res2 = res1 * 2;
+var person = {name: "Alice", getName: function() {
+  return this.name;
+}};
+/** var name: String */
+var name = person.getName();
+/** var greeting: String */
+var greeting = "Hello, " + name;
+function makePoint(x, y) {
+  return {x: x, y: y, getX: function() {
+  return this.x;
+}, getY: function() {
+  return this.y;
+}};
+}
+var p = makePoint(3, 4);
+/** var px: Number */
+var px = p.getX();
+/** var py: Number */
+var py = p.getY();
+/** var dist: Number */
+var dist = (px * px) + (py * py);
+var mixed = {count: 42, label: "answer", getCount: function() {
+  return this.count;
+}, getLabel: function() {
+  return this.label;
+}};
+/** var num: Number */
+var num = mixed.getCount();
+/** var str: String */
+var str = mixed.getLabel();
+/** var check1: Number */
+var check1 = num + 1;
+/** var check2: String */
+var check2 = str + "!";
+All checks passed: crates/inty/tests/test_this_methods.js (30 symbols) in <time>
+--- stderr

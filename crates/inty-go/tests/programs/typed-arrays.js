@@ -46,3 +46,29 @@ const wrapU8 = new Uint8Array(2);
 wrapU8[0] = 300.9;
 wrapU8[1] = -1;
 console.log(wrapI32[0] + wrapI32[1] + wrapI32[2] + wrapU8[0] + wrapU8[1]);
+
+// The other integer kinds wrap to their own bits; a Uint8ClampedArray
+// clamps, rounding half to even.
+const i8 = new Int8Array(3);
+i8[0] = 200;
+i8[1] = -129.5;
+i8[2] = 7;
+i8[2] += 125;
+const u16 = Uint16Array.from([65537, -1]);
+const i16 = new Int16Array(2);
+i16[0] = 40000;
+i16[1] = 3;
+i16[1] -= 5;
+const u32 = new Uint32Array(2);
+u32[0] = -1;
+u32[1] = 4294967295;
+u32[1] += 2;
+console.log(String(i8[0] + i8[1] + i8[2]) + " " + String(u16[0] + u16[1]) + " " + String(i16[0] + i16[1]) + " " + String(u32[0] + u32[1]));
+const c8 = new Uint8ClampedArray(5);
+c8[0] = -5;
+c8[1] = 300;
+c8[2] = 1.5;
+c8[3] = 2.5;
+c8[4] = 0.4;
+console.log(String(c8[0]) + " " + String(c8[1]) + " " + String(c8[2]) + " " + String(c8[3]) + " " + String(c8[4]));
+console.log(new Float32Array(3).length + Uint32Array.from([1, 2]).length);

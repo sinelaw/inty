@@ -1,0 +1,15 @@
+$ inty crates/inty-cli/tests/soundness/text-decoder-array-buffer.js
+exit: 1
+--- stdout
+--- stderr
+
+Error: Type mismatch: expected 'Uint8Array', found '{byteLength: Number, slice: (Number, Number?) => ArrayBuffer}'
+   ╭─[ crates/inty-cli/tests/soundness/text-decoder-array-buffer.js:4:26 ]
+   │
+ 4 │ new TextDecoder().decode(new ArrayBuffer(4));
+   │                          ─────────┬────────  
+   │                                   ╰────────── Type mismatch: expected 'Uint8Array', found '{byteLength: Number, slice: (Number, Number?) => ArrayBuffer}'
+   │ 
+   │ Note: Cannot unify expected 'Uint8Array' with found '{byteLength: Number, slice: (Number, Number?) => ArrayBuffer}'
+───╯
+

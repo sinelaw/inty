@@ -2325,10 +2325,11 @@ impl<'a> Emitter<'a> {
     }
 
     /// `v` converted to a typed array's element type: a store wraps a
-    /// number to 32 or 8 bits, as JavaScript's ToInt32 / ToUint8 do (Go's
-    /// conversion of an integer computes that exactly).
+    /// number to the element's bits, as JavaScript's ToInt32 / ToUint8 /
+    /// … do (Go's conversion of an integer computes that exactly), and a
+    /// `Uint8ClampedArray` clamps it to 0..255, rounding half to even.
     fn typed_value(&mut self, k: TypedArrayKind, v: &Expr) -> Result<String> {
-        if matches!(k, TypedArrayKind::Int32 | TypedArrayKind::Uint8) {
+        if !matches!(k, TypedArrayKind::Float32 | TypedArrayKind::Float64) {
             if let Ok(t) = self.type_of(v) {
                 self.demand(&t);
             }
@@ -2340,14 +2341,23 @@ impl<'a> Emitter<'a> {
                 None
             })
         };
+        let elem = typed_elem(k);
         Ok(match k {
             TypedArrayKind::Int32 => match int(self)? {
                 Some(i) => format!("intyI32({})", i),
                 None => format!("intyToInt32({})", self.num_as(v, &GoType::Float)?),
             },
-            TypedArrayKind::Uint8 => match int(self)? {
-                Some(i) => format!("intyU8({})", i),
-                None => format!("uint8(intyToInt32({}))", self.num_as(v, &GoType::Float)?),
+            TypedArrayKind::Uint8Clamped => match int(self)? {
+                Some(i) => format!("intyClampU8(float64({}))", i),
+                None => format!("intyClampU8({})", self.num_as(v, &GoType::Float)?),
+            },
+            TypedArrayKind::Int8
+            | TypedArrayKind::Uint8
+            | TypedArrayKind::Int16
+            | TypedArrayKind::Uint16
+            | TypedArrayKind::Uint32 => match int(self)? {
+                Some(i) => format!("intyWrap[{}]({})", elem, i),
+                None => format!("{}(intyToInt32({}))", elem, self.num_as(v, &GoType::Float)?),
             },
             TypedArrayKind::Float32 => format!("float32({})", self.num_as(v, &GoType::Float)?),
             TypedArrayKind::Float64 => self.num_as(v, &GoType::Float)?,
@@ -2389,6 +2399,12 @@ impl<'a> Emitter<'a> {
                 ))
             }
         };
+        if k == TypedArrayKind::Uint8Clamped && o != "=" {
+            return Err(unsupported(
+                "an update of a Uint8ClampedArray element",
+                right.span(),
+            ));
+        }
         if k == TypedArrayKind::Float32 && o != "=" {
             return Err(unsupported(
                 "an update of a Float32Array element",
@@ -3044,7 +3060,9 @@ impl<'a> Emitter<'a> {
                 arguments,
                 span,
             } => match (&**callee, arguments.as_slice()) {
-                (Expr::Ident { name, .. }, [n]) if self.typed_constructor(name).is_some() => {
+                (Expr::Ident { name, .. }, [n])
+                    if self.typed_constructor(name).is_some() && is_num(&self.type_of(n)?) =>
+                {
                     let k = self.typed_constructor(name).expect("checked above");
                     let n = if self.type_of(n)? == GoType::Int {
                         self.num_as(n, &GoType::Int)?

@@ -99,6 +99,50 @@
   makes a recursive type: the type remembers the calls, so they are
   found after the class is generalised and used from another module.
 
+### Browser APIs
+
+- Typed arrays: `Int8Array`, `Uint8ClampedArray`, `Int16Array`,
+  `Uint16Array` and `Uint32Array` join `Int32Array`, `Uint8Array`,
+  `Float32Array` and `Float64Array` (each with `BYTES_PER_ELEMENT`; the Go
+  backend stores into them as JavaScript does, a `Uint8ClampedArray`
+  clamping). `new T(…)` is typed by its first argument's type: a length
+  (or nothing), a view of an `ArrayBuffer`, `new Uint32Array(buffer,
+  byteOffset?, length?)`, or a copy of a `Number[]` or another typed
+  array. A buffer view no longer needs a declaration of its own.
+- `TextEncoder.encode` gives a `Uint8Array`, and `encodeInto(string,
+  bytes)` gives `{read, written}`; `TextDecoder(label?, options?)`'s
+  `decode` takes a `Uint8Array` and `{stream}`.
+- WebAssembly: a compiled module is its own type, `WebAssemblyModule`,
+  and an instance `WebAssemblyInstance<E>` (`{exports: E}`).
+  `WebAssembly.instantiate(bytes, imports?)` resolves to `{instance,
+  module}`, `instantiate(module, imports?)` to the instance; `compile`,
+  `new WebAssembly.Module(bytes)` and `new WebAssembly.Instance(module,
+  imports?)`. What reads bytes takes a `BufferSource` (an `ArrayBuffer`
+  or any typed array).
+- `Error` is a type name (`(Error) => Undefined`); the error
+  constructors take an optional message.
+- `Worker<I, O>` (`new Worker(url, {type: "module"})`) and
+  `MessageChannel<M>`; a worker's own scope, `self` (a
+  `WorkerScope<I, O>`) and `postMessage`, with `--lib builtin:worker`.
+
+### Weak references
+
+- `FinalizationRegistry<T>` (`new FinalizationRegistry(cleanup)`,
+  `register(target, held: T, token?)` with a target of any type,
+  `unregister(token)`) and `WeakRef<T>` (`deref()` gives `T` or
+  `undefined`).
+
+### Generators
+
+- `function*` declarations, expressions and `export`s, and `*m() { … }`
+  methods of classes and object literals; `yield e`, `yield* it`, a bare
+  `yield`, and `return` in them. A generator gives an `Iterator<T>` of
+  what it yields (`{next: () => {done: Boolean, value: T},
+  [Symbol.iterator]: T}`, in the stdlib), which `for … of`, a spread and
+  `Array.from` iterate; an annotation `=> Iterator<T>` checks each
+  `yield` against `T`. The printed program writes them as written.
+  `async function*` isn't taken.
+
 ### DOM declarations
 
 - `el.focus({preventScroll, focusVisible})`; an event's `detail` (a
@@ -217,6 +261,42 @@ unterminated-comment error.
 
 ### Fixes
 
+- A type alias's optional parameters (`b?: T`) shared presence variables
+  with other aliases' and with ones inference made, so deciding one
+  decided another: after a `Worker`'s `postMessage(msg)`, a
+  `WorkerScope`'s `postMessage(msg, [buf])` was refused ("the function
+  takes 2 arguments, but 2 are passed").
+- `for (;;)`, `for (…; true; …)` and `do … while (true)` with no `break`
+  don't fall through: a function ending in one doesn't also return
+  `undefined`.
+- A program's own `Iterator`, `ArrayBuffer` or `WebAssemblyModule` alias
+  no longer stands in for the library's in a generator's type, a typed
+  array's `buffer` or `WebAssembly.instantiate`.
+- `/** this.x: T */` above a constructor's `this.x = …` line was ignored
+  (read as a prose doc comment), so a field set from an unannotated
+  constructor parameter stayed generic and the class took a type
+  parameter for it. It now types the field: the value set there is
+  checked against `T`, and so is the constructor parameter that flows
+  into it. One anywhere else is an error rather than ignored.
+- A class field's annotation that doesn't parse (`/** this.w: Wasm */`
+  with `Wasm` generic) stopped the whole class from being checked: it is
+  reported, the field's type is unknown, and the class is checked.
+- A class that failed to check left its name pointing at a type with no
+  definition: in modules checked after it, every use of an annotation
+  naming it was an error (`expected '{grammars: …}', found 'μ134'`). It
+  is now unknown there instead.
+- `Object.freeze({fg, wavy: null})` returned where a `{fg: String | Null,
+  wavy: String | Null}` is expected was rejected (`wavy`'s `Null` isn't
+  `String | Null`), though the literal itself was accepted there: a call
+  of a function giving back its argument, `<a>(a) => a` (`Object.freeze`,
+  `structuredClone`, a program's own identity), where a type is expected
+  now checks its argument against that type.
+- A class whose method reads `this` (`get(i) { return this.n + i; }`)
+  took a type parameter (`class 'A' takes 1 type argument (a type in
+  method 'get')`), so `/** function f(a: A) */` was rejected: the
+  method's `this` is the instance, a cycle the class's type is written
+  out through, and the variable where that cut it was taken for one the
+  class leaves open.
 - A module's reads of a field of a value an importing module gives
   (`y.k` in a method an importer calls) wait for the importer's value,
   each resolved against its type. The first read of each name became the

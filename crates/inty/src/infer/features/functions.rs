@@ -775,6 +775,12 @@ impl InferState {
         if let Some(result) = self.infer_array_from(env, callee, arguments, keywords) {
             return result;
         }
+        if let Some(result) = self.infer_wasm_instantiate(env, callee, arguments, keywords, span) {
+            return result;
+        }
+        if let Some(result) = self.infer_generator_marker(env, callee, arguments, None, span) {
+            return result;
+        }
         if let (Expr::Ident { name, .. }, [value]) = (callee, arguments) {
             if name == crate::types::ASYNC_RETURN {
                 let ty = self.infer_expr(env, value)?;
@@ -1164,6 +1170,275 @@ impl InferState {
             );
             self.check_expr(env, map_fn, &callback)?;
             Ok(Type::array(self.zonk_head(&result)))
+        })())
+    }
+
+    /// What a generator's iterator is, `Iterator<T>` (the stdlib's), for
+    /// elements `element`; without the stdlib, a record iterating them.
+    pub(in crate::infer) fn iterator_type(&mut self, element: Type) -> Type {
+        use crate::types::{FieldEntry, PropName, RowType, ITER_KEY};
+        match self.stdlib_aliases.get("Iterator").cloned() {
+            Some(def) if def.params.len() == 1 => match def.rec_id.or(def.nominal_id) {
+                Some(id) => Type::Named(id, vec![element]),
+                None => {
+                    let subst = HashMap::from([(def.params[0], element)]);
+                    super::super::type_parser::substitute_alias_body(&def.body, &subst)
+                }
+            },
+            _ => Type::Row(RowType::closed_entries(std::collections::BTreeMap::from([
+                (PropName(ITER_KEY.to_string()), FieldEntry::pre(element)),
+            ]))),
+        }
+    }
+
+    /// The calls a generator is lowered to (see
+    /// [`crate::types::GENERATOR`]): `GENERATOR(() => body)`, an
+    /// `Iterator<T>` of what `body`'s `yield`s give (`expected`, when
+    /// known, says what `T` is before the body is inferred, so each
+    /// `yield`'s value is checked against it); `YIELD(e)`, `e` one of the
+    /// innermost generator's elements; `YIELD_STAR(it)`, each element of
+    /// the iterable `it` one. A `yield` gives `undefined` (what `next()`
+    /// is called with). `None` for any other call.
+    pub(in crate::infer) fn infer_generator_marker(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Expr,
+        arguments: &[Expr],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> Option<InferResult<Type>> {
+        let Expr::Ident { name, .. } = callee else {
+            return None;
+        };
+        let name = name.as_str();
+        if ![
+            crate::types::GENERATOR,
+            crate::types::YIELD,
+            crate::types::YIELD_STAR,
+        ]
+        .contains(&name)
+        {
+            return None;
+        }
+        Some((|| {
+            if name == crate::types::GENERATOR {
+                let element = self.fresh_type_var();
+                let iterator = self.iterator_type(element.clone());
+                if let Some(expected) = expected {
+                    self.unify(span, &iterator, expected)?;
+                }
+                self.generator_elements.push(element);
+                let body = arguments
+                    .first()
+                    .map(|f| self.infer_expr(env, f))
+                    .transpose();
+                self.generator_elements.pop();
+                body?;
+                return Ok(self.zonk_head_into(iterator));
+            }
+            let element = self
+                .generator_elements
+                .last()
+                .cloned()
+                .unwrap_or_else(|| self.fresh_type_var());
+            let element = self.zonk_head(&element);
+            match (name, arguments) {
+                (_, []) => self.subsume(span, &Type::Undefined, &element)?,
+                (n, [value]) if n == crate::types::YIELD => {
+                    self.check_expr(env, value, &element)
+                        .map_err(|e| self.locate_in_value(value, e))?;
+                }
+                (_, [iterable]) => {
+                    let it = self.infer_expr(env, iterable)?;
+                    let each = self.fresh_type_var();
+                    self.require_iterable(&it, &each, iterable.span())?;
+                    let each = self.zonk_head(&each);
+                    self.subsume(iterable.span(), &each, &element)?;
+                }
+                _ => {
+                    for a in arguments {
+                        self.infer_expr(env, a)?;
+                    }
+                }
+            }
+            Ok(Type::Undefined)
+        })())
+    }
+
+    /// A call of `callee`, a function type chosen by the type of the
+    /// call's first argument (`first`, already synthesised as
+    /// `first_ty`): the first argument is subsumed to its parameter, the
+    /// others (`rest`) checked against theirs, as an ordinary call's are.
+    /// The rules that pick a signature by an argument's type (a typed
+    /// array's constructor, `WebAssembly.instantiate`) synthesise it
+    /// once, here, rather than again in the ordinary call.
+    fn apply_with_first_typed(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Type,
+        first: &Expr,
+        first_ty: &Type,
+        rest: &[Expr],
+        span: Span,
+    ) -> InferResult<Type> {
+        let params: Vec<Type> = (0..=rest.len()).map(|_| self.fresh_type_var()).collect();
+        let ret = self.fresh_type_var();
+        let this = self.fresh_type_var();
+        let expected = self.callable_row_open(Some(this), params.clone(), ret.clone());
+        let callee = self.fill_optional_params(callee, params.len(), span);
+        self.unify(span, &callee, &expected)?;
+        let want = self.zonk_head(&params[0]);
+        self.subsume(first.span(), first_ty, &want)
+            .map_err(|e| self.locate_in_value(first, e))?;
+        for (arg, param) in rest.iter().zip(&params[1..]) {
+            self.check_expr(env, arg, param)
+                .map_err(|e| self.locate_in_value(arg, e))?;
+        }
+        self.simplify_has_props()?;
+        Ok(self.zonk_head_into(ret))
+    }
+
+    /// A call of the standard library's `WebAssembly.instantiate`, whose
+    /// result depends on what it is given, which no one function type
+    /// says:
+    ///
+    /// - `instantiate(bytes, imports?)` compiles `bytes` (its declared
+    ///   type) and resolves to `{instance, module}`;
+    /// - `instantiate(module, imports?)`, a compiled
+    ///   `WebAssemblyModule`, resolves to the instance alone: what
+    ///   `new WebAssembly.Instance(module, imports)` makes.
+    ///
+    /// `None` for any other call (or a `WebAssembly` the program binds
+    /// itself).
+    fn infer_wasm_instantiate(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Expr,
+        arguments: &[Expr],
+        keywords: &[(String, Expr)],
+        span: Span,
+    ) -> Option<InferResult<Type>> {
+        let Expr::Member {
+            object,
+            property,
+            span: member_span,
+        } = callee
+        else {
+            return None;
+        };
+        let Expr::Ident {
+            name,
+            span: name_span,
+        } = object.as_ref()
+        else {
+            return None;
+        };
+        if name != "WebAssembly"
+            || property != "instantiate"
+            || !keywords.is_empty()
+            || !(1..=2).contains(&arguments.len())
+            || arguments.iter().any(|a| matches!(a, Expr::Spread { .. }))
+            || !self.ambient.contains(&self.key_of(*name_span, name))
+        {
+            return None;
+        }
+        let module = self.stdlib_aliases.get("WebAssemblyModule")?.nominal_id?;
+        let member_span = *member_span;
+        Some((|| {
+            let wasm = self.infer_expr(env, object)?;
+            let wasm = self.zonk_head(&wasm);
+            let source = self.infer_expr(env, &arguments[0])?;
+            let by_module = matches!(self.zonk_head(&source), Type::Named(id, _) if id == module);
+            let member = if by_module { "Instance" } else { "instantiate" };
+            let f = self.infer_member_on_type(&wasm, member, member_span)?;
+            let made = self.apply_with_first_typed(
+                env,
+                &f,
+                &arguments[0],
+                &source,
+                &arguments[1..],
+                span,
+            )?;
+            Ok(if by_module { Type::promise(made) } else { made })
+        })())
+    }
+
+    /// `new T(…)` of a standard-library typed array (`Uint8Array`, …),
+    /// whose parameters depend on what its first argument is, which no
+    /// one function type says:
+    ///
+    /// - `new T()` / `new T(length)`: a zeroed array (an argument of a
+    ///   type not known yet is taken to be the length);
+    /// - `new T(buffer, byteOffset?, length?)`: a view of an
+    ///   `ArrayBuffer` (any call with more than one argument is one);
+    /// - `new T(array)` / `new T(typedArray)`: a copy of a `Number[]` or
+    ///   of another typed array (of any kind).
+    ///
+    /// `None` for any other `new` (or a typed array the program binds
+    /// itself, or a call with a spread or more than three arguments,
+    /// which the declared constructor rejects).
+    fn infer_typed_array_new(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Expr,
+        arguments: &[Expr],
+        span: Span,
+    ) -> Option<InferResult<Type>> {
+        use crate::types::FuncParam;
+        let Expr::Ident {
+            name,
+            span: name_span,
+        } = callee
+        else {
+            return None;
+        };
+        let kind = crate::types::TypedArrayKind::from_name(name)?;
+        if arguments.len() > 3
+            || arguments.iter().any(|a| matches!(a, Expr::Spread { .. }))
+            || !self.ambient.contains(&self.key_of(*name_span, name))
+        {
+            return None;
+        }
+        let buffer = crate::builtins::array_buffer_type(self)?;
+        Some((|| {
+            // The constructor, recorded as the ordinary `new` would.
+            self.infer_expr(env, callee)?;
+            let made = Type::TypedArray(kind);
+            let Some((first, rest)) = arguments.split_first() else {
+                return Ok(made);
+            };
+            let source = self.infer_expr(env, first)?;
+            let head = self.zonk_head(&source);
+            let is_buffer = !rest.is_empty()
+                || match (&head, &buffer) {
+                    (Type::Named(id, _), Type::Named(b, _)) => id == b,
+                    // A record of an `ArrayBuffer`'s shape (not an
+                    // array-like one).
+                    (Type::Row(_), _) => {
+                        self.row_field_entry(&head, "byteLength").is_some()
+                            && self.row_field_entry(&head, "length").is_none()
+                    }
+                    _ => false,
+                };
+            let ctor = if is_buffer {
+                let (p1, p2) = (self.fresh_pvar(), self.fresh_pvar());
+                Type::simple_func_with_params(
+                    vec![
+                        FuncParam::required(buffer.clone()),
+                        FuncParam::optional(p1, Type::Number),
+                        FuncParam::optional(p2, Type::Number),
+                    ],
+                    made,
+                )
+            } else {
+                let from = match head {
+                    Type::TypedArray(k) => Type::TypedArray(k),
+                    Type::Array(_) | Type::Tuple(_) => Type::array(Type::Number),
+                    _ => Type::Number,
+                };
+                Type::simple_func(vec![from], made)
+            };
+            self.apply_with_first_typed(env, &ctor, first, &source, rest, span)
         })())
     }
 
@@ -1585,6 +1860,9 @@ impl InferState {
         arguments: &[Expr],
         span: Span,
     ) -> InferResult<Type> {
+        if let Some(result) = self.infer_typed_array_new(env, callee, arguments, span) {
+            return result;
+        }
         let callee_type = self.infer_expr(env, callee)?;
 
         // `new F(…)` calls `F` with a fresh object as `this` and gives
@@ -1958,6 +2236,21 @@ impl InferState {
             .filter(|v| v.is_flex() && !env_free.contains(v))
             .collect();
         brand_vars.sort_by_key(|v| v.id());
+        // A method reading `this` has the instance as its receiver, a
+        // row tail bound to the instance's row, which holds the method:
+        // that tail is no type the class leaves open. When the instance,
+        // written out whole (where the cycle is cut at a variable still
+        // bound), has no variable of its own, the class has no
+        // parameters. (One that has keeps its receiver tails as
+        // parameters too, so each instance's methods have their own.)
+        if !brand_vars.is_empty() {
+            let open = self.flatten_type(ret).free_vars().into_iter().any(|v| {
+                v.is_flex() && !env_free.contains(&v) && self.main_subst.resolve(&v).is_none()
+            });
+            if !open {
+                brand_vars.clear();
+            }
+        }
 
         // The id reserved for the class before the program's aliases
         // were parsed, so they could name it (`type C = { m: InsertIx }`).
@@ -2538,6 +2831,17 @@ pub(crate) fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
     result
 }
 
+/// Whether a loop's test is the literal `true`.
+fn is_true(test: &Expr) -> bool {
+    matches!(
+        test,
+        Expr::Lit {
+            value: Literal::Boolean(true),
+            ..
+        }
+    )
+}
+
 /// Conservative "does control definitely leave via `return`/`throw`
 /// rather than fall off the end" analysis, used to decide whether a
 /// function's inferred return type must also include `Undefined` (the
@@ -2576,15 +2880,14 @@ fn definitely_returns(
             }
             returns(block) && handler.as_ref().is_none_or(|h| returns(&h.body))
         }
-        // `while True:` never falls through, unless a `break` leaves it.
-        Stmt::While { test, body, .. } => {
-            matches!(
-                test,
-                Expr::Lit {
-                    value: Literal::Boolean(true),
-                    ..
-                }
-            ) && !super::control::breaks_out(body)
+        // A loop whose test is `true` (`while (true)`, `while True:`,
+        // `do … while (true)`) or missing (`for (;;)`) never falls
+        // through, unless a `break` leaves it.
+        Stmt::While { test, body, .. } | Stmt::DoWhile { test, body, .. } => {
+            is_true(test) && !super::control::breaks_out(body)
+        }
+        Stmt::For { test, body, .. } => {
+            test.as_ref().is_none_or(is_true) && !super::control::breaks_out(body)
         }
         // A switch that always takes some case, none of which breaks out
         // of it, runs on to its last case (falling through the others):

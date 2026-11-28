@@ -271,7 +271,16 @@ impl InferState {
                                 props.insert(prop_name, FieldEntry::pre(inferred));
                                 continue;
                             }
-                            Err(e) => return Err(e.into()),
+                            // An annotation that doesn't parse is reported,
+                            // and the field's type is unknown (`Error`): the
+                            // rest of the object (a class's instance) is
+                            // still checked, and what reads the field isn't
+                            // reported again.
+                            Err(e) => {
+                                self.push_error(e.into());
+                                props.insert(prop_name, FieldEntry::pre(Type::Error));
+                                continue;
+                            }
                         };
                         self.bump_pvar_id_to(next_pvar);
                         if let Some(&max) = var_map.values().max() {
@@ -1012,7 +1021,13 @@ impl InferState {
                                 props.insert(prop_name, value_type);
                                 continue;
                             }
-                            Err(e) => return Err(e.into()),
+                            // (Reported, the field unknown, as in synthesis.)
+                            Err(e) => {
+                                self.push_error(e.into());
+                                self.check_expr(env, value, &expected_prop_ty)?;
+                                props.insert(prop_name, Type::Error);
+                                continue;
+                            }
                         };
                         self.bump_pvar_id_to(next_pvar);
                         if let Some(&max) = var_map.values().max() {
@@ -1243,6 +1258,56 @@ impl InferState {
         Some(self.declared_callbacks_detached(&method))
     }
 
+    /// A member of the standard library's `FinalizationRegistry<T>`
+    /// (`obj_type`), each read with a fresh type for what it takes that
+    /// the registry doesn't fix: `register(target, held: T, token?)` and
+    /// `unregister(token) => Boolean`, a method of the registry. `None`
+    /// for anything else.
+    fn finalization_member(&mut self, obj_type: &Type, property: &str) -> Option<Type> {
+        use crate::types::FuncParam;
+        let Type::Named(id, args) = obj_type else {
+            return None;
+        };
+        let registry = self
+            .stdlib_aliases
+            .get("FinalizationRegistry")?
+            .nominal_id?;
+        let ([held], true) = (args.as_slice(), *id == registry) else {
+            return None;
+        };
+        let held = held.clone();
+        let (params, ret) = match property {
+            "register" => {
+                let target = self.fresh_type_var();
+                let token = self.fresh_type_var();
+                let optional = self.fresh_pvar();
+                (
+                    vec![
+                        FuncParam::required(target),
+                        FuncParam::required(held),
+                        FuncParam::optional(optional, token),
+                    ],
+                    Type::Undefined,
+                )
+            }
+            "unregister" => (
+                vec![FuncParam::required(self.fresh_type_var())],
+                Type::Boolean,
+            ),
+            _ => return None,
+        };
+        // A method of the registry: its `this` is the receiver as a call
+        // binds it, the brand seen through (`method_receiver`).
+        let this = self
+            .unroll_named(*id, args)
+            .unwrap_or_else(|| obj_type.clone());
+        Some(Type::wrap_callable(Type::raw_func_with_params(
+            Some(this),
+            params,
+            ret,
+        )))
+    }
+
     pub(crate) fn infer_member_on_type(
         &mut self,
         obj_type: &Type,
@@ -1266,6 +1331,9 @@ impl InferState {
         // synthesising singletons.
         if let Type::Literal(lit) = obj_type {
             return self.infer_member_on_type(&lit.base_type(), property, span);
+        }
+        if let Some(member) = self.finalization_member(obj_type, property) {
+            return Ok(member);
         }
 
         // Union elimination: read the property from every member and

@@ -1,0 +1,103 @@
+$ inty crates/inty-go/tests/programs/polymorphism.js
+exit: 0
+--- stdout
+/** function identity<a>(a) => a */
+function identity(x) {
+  return x;
+}
+console.log(identity(42));
+console.log(identity("forty-two"));
+console.log(identity(true));
+/** function first<a, b> where Indexable a 0 b => (a) => b */
+function first(xs) {
+  return xs[0];
+}
+console.log(first([3, 1, 2]));
+console.log(first(["c", "a", "b"]));
+/** function twice<a> where Plus a => (a) => a */
+function twice(x) {
+  return x + x;
+}
+console.log(twice(21));
+console.log(twice("ab"));
+/** function getX<a, b> where a has {x: b} => (a) => b */
+function getX(p) {
+  return p.x;
+}
+/** function point<a, b>(a, b) => {x: a, y: b} */
+function point(x, y) {
+  return {x: x, y: y};
+}
+/** const labelled: {name: String, tags: String[], x: Number} */
+const labelled = {x: 7, name: "seven", tags: ["odd", "prime"]};
+console.log(getX(point(1, 2)) + getX(labelled));
+function mapAll(xs, f) {
+  const out = [];
+  for (var x of xs) {
+    out.push(f(x));
+  }
+  return out;
+}
+function foldl(xs, f, acc) {
+  let result = acc;
+  /** var i: Number */
+  for (var i = 0; i < xs.length; i++) {
+    result = f(result, xs[i]);
+  }
+  return result;
+}
+/** const nums: Number[] */
+const nums = [1, 2, 3, 4];
+/** const words: String[] */
+const words = mapAll(nums, (n) => {
+  return `#${n}`;
+});
+console.log(words.join(" "));
+console.log(foldl(nums, (a, b) => {
+  return a + b;
+}, 0));
+console.log(foldl(words, (a, b) => {
+  return a + b;
+}, ""));
+console.log(mapAll(words, (w) => {
+  return w + "!";
+}).join(","));
+console.log(mapAll(words, identity).join("|"));
+/** function lastFrom<a, b> where Indexable a Number b, a has {length: Number} => (a, Number) => b */
+function lastFrom(xs, i) {
+  if (i >= (xs.length - 1)) {
+    return xs[i];
+  }
+  return lastFrom(xs, i + 1);
+}
+console.log(lastFrom([9, 8, 7], 0));
+console.log(lastFrom(["x", "y", "z"], 1));
+const pair = (a, b) => {
+  return {first: a, second: b};
+};
+/** const p1: {first: Number, second: String} */
+const p1 = pair(1, "one");
+/** const p2: {first: String, second: Number} */
+const p2 = pair("two", 2);
+console.log(`${p1.first} ${p1.second} ${p2.first} ${p2.second}`);
+/** function describe<a, b>(a, b) => String */
+function describe(n, s) {
+  function wrap(v) {
+    return [v, v];
+  }
+  const a = wrap(n);
+  const b = wrap(s);
+  return `${a.length + b.length}: ${a[0]} ${b[1]}`;
+}
+console.log(describe(5, "five"));
+/** function both<a>(a) => {first: a, second: a} */
+function both(x) {
+  return pair(x, identity(x));
+}
+/** const b1: {first: Number, second: Number} */
+const b1 = both(1.5);
+/** const b2: {first: String, second: String} */
+const b2 = both("s");
+console.log(`${b1.first + b1.second} ${b2.first + b2.second}`);
+All checks passed: crates/inty-go/tests/programs/polymorphism.js (18 symbols) in <time>
+--- stderr

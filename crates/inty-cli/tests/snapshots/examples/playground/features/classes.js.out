@@ -1,0 +1,20 @@
+$ inty examples/playground/features/classes.js
+exit: 0
+--- stdout
+class Counter {
+    #count = 0;
+    /** function inc() => Number */
+    inc() {
+        this.#count = this.#count + 1;
+        return this.#count;
+    }
+    get current() { return this.#count; }
+}
+/** var c: Counter */
+var c = new Counter();
+/** var n: Number */
+var n = c.inc();
+/** var v: Number */
+var v = c.current;
+All checks passed: examples/playground/features/classes.js (4 symbols) in <time>
+--- stderr

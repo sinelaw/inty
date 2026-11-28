@@ -1,0 +1,11 @@
+$ inty crates/inty-cli/tests/soundness/generator-user-iterator-alias.js
+exit: 1
+--- stdout
+--- stderr
+Error: Property 'current' not found in type {[Symbol.iterator]: Number, next: () => {done: Boolean, value: Number}}
+   ╭─[ crates/inty-cli/tests/soundness/generator-user-iterator-alias.js:6:11 ]
+   │
+ 6 │ const c = g().current.toFixed(1);
+   │           ─────┬─────  
+   │                ╰─────── Property 'current' not found in type {[Symbol.iterator]: Number, next: () => {done: Boolean, value: Number}}
+───╯

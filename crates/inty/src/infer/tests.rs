@@ -4955,6 +4955,32 @@ fn test_while_true_with_break_falls_through() {
 }
 
 #[test]
+fn an_endless_for_or_do_loop_does_not_fall_through() {
+    // `for (;;)`, `for (…; true; …)` and `do … while (true)` without a
+    // `break` leave only by `return` (or a throw): the function's end
+    // isn't reached, so its result isn't `undefined` too.
+    for loop_ in [
+        "for (;;) { if (i > 3) return i; i++; }",
+        "for (; true; i++) { if (i > 3) return i; }",
+        "do { if (i > 3) return i; i++; } while (true);",
+        "for (;;) { lbl: { if (i > 3) return i; } i++; }",
+    ] {
+        let src = format!("function f() {{ let i = 0; {loop_} }}\nconst r = f() - 1;\n");
+        assert!(infer_program_with_state(&src).is_ok(), "{src}");
+    }
+    // One a `break` leaves, or with a test that isn't `true`, falls through.
+    for loop_ in [
+        "for (;;) { if (i > 3) break; i++; }",
+        "for (;;) { lbl: { if (i > 3) break; } i++; }",
+        "for (; i < 9; i++) { if (i > 3) return i; }",
+        "do { if (i > 3) return i; i++; } while (i < 9);",
+    ] {
+        let src = format!("function f() {{ let i = 0; {loop_} }}\nconst r = f() - 1;\n");
+        assert!(infer_program_with_state(&src).is_err(), "{src}");
+    }
+}
+
+#[test]
 fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
     // A spread operand of unknown shape may hold any field written before
     // it, and then wins: the two must agree on its type. (Taking the
@@ -6977,4 +7003,117 @@ fn a_deferred_method_call_checks_the_methods_this() {
         check_program(ok, &["a", "b"]),
         Ok(vec!["Number".into(), "Number".into()])
     );
+}
+
+/// A call of a function that gives back its argument (`Object.freeze`,
+/// `structuredClone`, an identity of the program's) where a type is
+/// expected checks the argument against it, as the argument written
+/// there would be: an object literal's `null` fits a `String | Null`
+/// field.
+#[test]
+fn an_identity_call_checks_its_argument_against_what_is_expected() {
+    let src = "/** type D = {fg: String | Null, wavy: String | Null} */\n\
+               /** function d(fg: String | Null) => D */\n\
+               function d(fg) { return Object.freeze({ fg, wavy: null }); }\n\
+               /** const c: D */\n\
+               const c = structuredClone({ fg: null, wavy: \"x\" });\n\
+               function id(x) { return x; }\n\
+               /** const k: D */\n\
+               const k = id({ fg: \"a\", wavy: null });\n\
+               const n = Object.freeze([1, 2]).length;";
+    check_with_stdlib(src, &[]).unwrap();
+    // The argument must still fit.
+    for bad in [
+        "/** type D = {fg: String | Null} */ /** const e: D */ const e = Object.freeze({ fg: 1 });",
+        "/** type D = {fg: String | Null} */ /** const e: D */ const e = Object.freeze({ fg: null, x: 1 });",
+    ] {
+        assert!(check_with_stdlib(bad, &[]).is_err(), "{}", bad);
+    }
+}
+
+/// Generators: `function*`, generator methods, `yield`, `yield*` and
+/// `return` in one give an `Iterator<T>` of what they yield, which
+/// `for … of`, a spread and `Array.from` iterate and `next()` steps.
+#[test]
+fn generators_give_an_iterator_of_what_they_yield() {
+    let src = "/** type Row = {n: Number, text: String} */\n\
+               /** function rows(n: Number) => Iterator<Row> */\n\
+               function* rows(n) {\n\
+                 for (let i = 0; i < n; i++) {\n\
+                   if (i > 5) return;\n\
+                   yield { n: i, text: String(i) };\n\
+                 }\n\
+               }\n\
+               function* nums() { yield 1; yield* [2, 3]; yield* new Set([4]); }\n\
+               let total = 0;\n\
+               for (const r of rows(3)) { if (r.n > 1) break; total += r.text.length; }\n\
+               const all = [...nums()];\n\
+               const ns = Array.from(rows(2), (r) => r.n);\n\
+               const step = nums().next();\n\
+               const v = step.done ? 0 : step.value;\n\
+               class Tree {\n\
+                 constructor() { this.kids = [\"a\"]; }\n\
+                 *each() { for (const k of this.kids) yield k; }\n\
+               }\n\
+               const ks = [...new Tree().each()];\n\
+               const o = { *flags() { yield true; } };\n\
+               const fs = [...o.flags()];\n\
+               /** type Kind = {kind: \"a\"} | {kind: \"b\", n: Number} */\n\
+               /** function kinds() => Iterator<Kind> */\n\
+               function* kinds() { yield { kind: \"a\" }; yield { kind: \"b\", n: 1 }; }";
+    let t = check_with_stdlib(src, &["all", "ns", "v", "ks", "fs"]).unwrap();
+    assert_eq!(
+        t,
+        ["Number[]", "Number[]", "Number", "String[]", "Boolean[]"]
+    );
+    for bad in [
+        // What it yields must be what the annotation says.
+        "/** function f() => Iterator<Number> */ function* f() { yield \"s\"; }",
+        // One generator yields one type.
+        "function* f() { yield 1; yield \"s\"; }",
+        // `yield*` takes an iterable.
+        "function* f() { yield* 3; }",
+        // Its elements are what it yields.
+        "function* f() { yield 1; } for (const x of f()) { x.length; }",
+        // `yield` is an operator only in a generator's own body.
+        "function f() { yield 1; }",
+        "function* f() { [1].forEach((x) => { yield x; }); }",
+    ] {
+        assert!(check_with_stdlib(bad, &[]).is_err(), "{}", bad);
+    }
+}
+
+/// The presence variables of type aliases' optional parameters
+/// (`b?: T`) are numbered from the state's, as an annotation's are:
+/// numbered from zero, two aliases' were the same variable, and the same
+/// as ones inference made later, so one decided elsewhere (a `Worker`'s
+/// `postMessage(x)`) decided another (a `WorkerScope`'s, which then
+/// refused its transfer list: "takes 2 arguments, but 2 are passed").
+#[test]
+fn aliases_optional_parameters_have_presence_variables_of_their_own() {
+    let src = "/** type A = {f: (x: Number, y?: Number) => Undefined} */\n\
+               /** type B = {g: (x: Number, y?: Number) => Undefined} */\n\
+               /** function useA(a: A) => Undefined */ function useA(a) { a.f(1); }\n\
+               /** function useB(b: B) => Undefined */ function useB(b) { b.g(1, 2); }\n";
+    let (_, _, state) = infer_program_via_program_with_stdlib(src).unwrap();
+    let optional = |name: &str| -> crate::types::PVarName {
+        let def = &state.type_aliases[name];
+        let Type::Row(row) = &def.body else {
+            panic!("{name}: {:?}", def.body)
+        };
+        let field = row.props.values().next().unwrap();
+        let (_, params, _) = crate::infer::extract_callable(&field.ty).unwrap();
+        match &params[1].presence {
+            crate::types::Presence::Var(v) => v.clone(),
+            p => panic!("{name}'s `y?`: {p:?}"),
+        }
+    };
+    let (a, b) = (optional("A"), optional("B"));
+    assert_ne!(a, b);
+    for v in [a, b] {
+        let crate::types::PVarName::Flex(id) = v else {
+            panic!("a flexible presence variable")
+        };
+        assert!(id < state.next_pvar_id(), "{id} is below the next free id");
+    }
 }

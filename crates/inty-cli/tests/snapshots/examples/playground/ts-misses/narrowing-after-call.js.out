@@ -1,0 +1,13 @@
+$ inty examples/playground/ts-misses/narrowing-after-call.js
+exit: 1
+--- stdout
+--- stderr
+Error: Property 'toUpperCase' not found in type String | Null: the value may be null
+    ╭─[ examples/playground/ts-misses/narrowing-after-call.js:18:17 ]
+    │
+ 18 │     console.log(session.user.toUpperCase());
+    │                 ────────────┬───────────  
+    │                             ╰───────────── Property 'toUpperCase' not found in type String | Null: the value may be null
+    │ 
+    │ Help: test it first (`if (x !== null) x.toUpperCase`) or give a default (`(x ?? fallback).toUpperCase`); to test a property, copy it into a `const` and test that
+────╯

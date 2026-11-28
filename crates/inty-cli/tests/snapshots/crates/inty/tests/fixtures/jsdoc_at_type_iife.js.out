@@ -1,0 +1,50 @@
+$ inty crates/inty/tests/fixtures/jsdoc_at_type_iife.js
+exit: 0
+--- stdout
+var lib = (function() {
+  "use strict";
+  const api = {onLoad: onLoadHelper, process: processNode, addClass: addClass, removeClass: removeClass, trigger: triggerEvent, config: getConfig, requestCount: 0, historyEnabled: true, defaultSwapStyle: "innerHTML", version: "2.0.0"};
+  function onLoadHelper(callback) {
+    return callback;
+  }
+  function processNode(elt) {
+    return elt;
+  }
+  function addClass(elt, cls) {
+    return cls;
+  }
+  function removeClass(elt, cls) {
+    return cls;
+  }
+  function triggerEvent(elt, name, detail) {
+    return detail;
+  }
+  function getConfig() {
+    return {ready: true};
+  }
+  api.onLoad = onLoadHelper;
+  api.process = processNode;
+  api.addClass = addClass;
+  api.removeClass = removeClass;
+  api.trigger = triggerEvent;
+  api.config = getConfig;
+  return api;
+})();
+/** var x: Number */
+var x = lib.process(42);
+/** var s: String */
+var s = lib.addClass(0, "active");
+/** var detail: {x: Number, y: Number} */
+var detail = lib.trigger(0, "click", {x: 1, y: 2});
+/** var cfg: {ready: Boolean} */
+var cfg = lib.config();
+/** var ready: Boolean */
+var ready = cfg.ready;
+/** var count: Number */
+var count = lib.requestCount + 1;
+/** var historyOn: Boolean */
+var historyOn = lib.historyEnabled && true;
+/** var style: Number */
+var style = lib.defaultSwapStyle.length;
+All checks passed: crates/inty/tests/fixtures/jsdoc_at_type_iife.js (9 symbols) in <time>
+--- stderr

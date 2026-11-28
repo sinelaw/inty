@@ -1,0 +1,13 @@
+$ inty examples/playground/ts-misses/truthy-narrow.js
+exit: 0
+--- stdout
+/** function priceLabel(String) => String */
+function priceLabel(price) {
+  if (price) {
+    return "$" + price;
+  } else {
+    return "free";
+  }
+}
+All checks passed: examples/playground/ts-misses/truthy-narrow.js (1 symbol) in <time>
+--- stderr

@@ -910,8 +910,9 @@ pub enum Type {
     /// when their export shapes happen to coincide. See `modules.md` §2.
     Module(ModuleType),
 
-    /// A JavaScript typed array (`Int32Array`, `Uint8Array`,
-    /// `Float64Array`): a fixed-length array of one machine number type.
+    /// A JavaScript typed array (`Int8Array` … `Uint32Array`,
+    /// `Uint8ClampedArray`, `Float32Array`, `Float64Array`): a
+    /// fixed-length array of one machine number type.
     /// Nominal and without parameters; its elements are
     /// [`TypedArrayKind::element`].
     TypedArray(TypedArrayKind),
@@ -962,16 +963,26 @@ impl Nothing {
 /// Which typed array a [`Type::TypedArray`] is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TypedArrayKind {
-    Int32,
+    Int8,
     Uint8,
+    Uint8Clamped,
+    Int16,
+    Uint16,
+    Int32,
+    Uint32,
     Float32,
     Float64,
 }
 
 impl TypedArrayKind {
-    pub const ALL: [TypedArrayKind; 4] = [
-        TypedArrayKind::Int32,
+    pub const ALL: [TypedArrayKind; 9] = [
+        TypedArrayKind::Int8,
         TypedArrayKind::Uint8,
+        TypedArrayKind::Uint8Clamped,
+        TypedArrayKind::Int16,
+        TypedArrayKind::Uint16,
+        TypedArrayKind::Int32,
+        TypedArrayKind::Uint32,
         TypedArrayKind::Float32,
         TypedArrayKind::Float64,
     ];
@@ -979,8 +990,13 @@ impl TypedArrayKind {
     /// The JavaScript constructor's name, which is also the type's.
     pub fn name(self) -> &'static str {
         match self {
-            TypedArrayKind::Int32 => "Int32Array",
+            TypedArrayKind::Int8 => "Int8Array",
             TypedArrayKind::Uint8 => "Uint8Array",
+            TypedArrayKind::Uint8Clamped => "Uint8ClampedArray",
+            TypedArrayKind::Int16 => "Int16Array",
+            TypedArrayKind::Uint16 => "Uint16Array",
+            TypedArrayKind::Int32 => "Int32Array",
+            TypedArrayKind::Uint32 => "Uint32Array",
             TypedArrayKind::Float32 => "Float32Array",
             TypedArrayKind::Float64 => "Float64Array",
         }
@@ -991,8 +1007,9 @@ impl TypedArrayKind {
     }
 
     /// The type of an element as read, and as accepted by a store (an
-    /// integer array converts what it stores, as JavaScript does: ToInt32
-    /// or ToUint8, wrapping).
+    /// integer array converts what it stores, as JavaScript does: ToInt8,
+    /// ToUint8, ToInt16, ToUint16, ToInt32 or ToUint32, wrapping, or, for
+    /// a `Uint8ClampedArray`, ToUint8Clamp, clamping to 0..255).
     pub fn element(self) -> Type {
         Type::Number
     }

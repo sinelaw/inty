@@ -1,0 +1,13 @@
+$ inty examples/playground/ts-misses/mixed-array.js
+exit: 1
+--- stdout
+--- stderr
+Error: Array elements have different types: 'Number' and 'String'
+   ╭─[ examples/playground/ts-misses/mixed-array.js:9:17 ]
+   │
+ 9 │ var items = [1, "two", 3, "four"];
+   │                 ──┬──  
+   │                   ╰──── Array elements have different types: 'Number' and 'String'
+   │ 
+   │ Help: an array holds one element type. For a fixed group of values annotate a tuple, e.g. `/** const p: [Number, String] */` (or `[Number, String][]` for a list of them), or use a record `{ a: Number, b: String }`; for either type in any position, annotate the element union `(Number | String)[]`
+───╯

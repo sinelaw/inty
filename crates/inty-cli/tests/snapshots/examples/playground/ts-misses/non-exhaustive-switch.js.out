@@ -1,0 +1,28 @@
+$ inty examples/playground/ts-misses/non-exhaustive-switch.js
+exit: 0
+--- stdout
+/** type Status = "ok" | "warn" | "fail" */
+/** function color(s: Status) => String */
+function color(s) {
+  switch (s) {
+    case "ok":
+      return "green";
+    case "warn":
+      return "yellow";
+  }
+  return "gray";
+}
+console.log(color("fail"));
+All checks passed: examples/playground/ts-misses/non-exhaustive-switch.js (1 symbol, 1 warning) in <time>
+--- stderr
+
+Warning: non-exhaustive switch: missing case(s) for "fail"
+    ╭─[ examples/playground/ts-misses/non-exhaustive-switch.js:13:5 ]
+    │
+ 13 │ ╭─▶     switch (s) {
+    ┆ ┆   
+ 16 │ ├─▶     }
+    │ │           
+    │ ╰─────────── non-exhaustive switch: missing case(s) for "fail"
+────╯
+

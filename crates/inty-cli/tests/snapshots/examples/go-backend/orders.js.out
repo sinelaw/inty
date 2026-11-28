@@ -1,0 +1,122 @@
+$ inty examples/go-backend/orders.js
+exit: 0
+--- stdout
+/** let seed: Number */
+let seed = 7;
+/** function rand() => Number */
+function rand() {
+  seed = (seed * 16807) % 2147483647;
+  return seed / 2147483647;
+}
+/** function randInt(Number) => Number */
+function randInt(n) {
+  return Math.floor(rand() * n);
+}
+/** const REGIONS: String[] */
+const REGIONS = ["north", "south", "east", "west", "central"];
+/** const CATEGORIES: String[] */
+const CATEGORIES = ["books", "games", "garden", "kitchen", "music", "sports", "toys", "tools"];
+/** const CUSTOMERS: Number */
+const CUSTOMERS = 50000;
+/** function makeOrder<a>(a) => {category: Number, customer: Number, discount: Number, id: a, qty: Number, refunded: Boolean, region: Number, unitPrice: Number} */
+function makeOrder(id) {
+  /** const qty: Number */
+  const qty = 1 + randInt(5);
+  /** const price: Number */
+  const price = Math.round(rand() * 20000) / 100;
+  return {id: id, customer: randInt(CUSTOMERS), region: randInt(REGIONS.length), category: randInt(CATEGORIES.length), qty: qty, unitPrice: price, discount: (rand() < 0.2) ? 0.1 : 0, refunded: rand() < 0.03};
+}
+/** function lineTotal<a> where a has {qty: Number, unitPrice: Number, discount: Number} => (a) => Number */
+function lineTotal(o) {
+  /** const gross: Number */
+  const gross = o.qty * o.unitPrice;
+  return gross - (gross * o.discount);
+}
+/** function zeros(Number) => Number[] */
+function zeros(n) {
+  /** const xs: Number[] */
+  const xs = [];
+  /** var i: Number */
+  for (var i = 0; i < n; i++) {
+    xs.push(0);
+  }
+  return xs;
+}
+/** function main() => String */
+function main() {
+  seed = 7;
+  /** const lines: String[] */
+  const lines = [];
+  /** const orders: {category: Number, customer: Number, discount: Number, id: Number, qty: Number, refunded: Boolean, region: Number, unitPrice: Number}[] */
+  const orders = [];
+  /** var i: Number */
+  for (var i = 0; i < 1000000; i++) {
+    orders.push(makeOrder(i));
+  }
+  /** const valid: {category: Number, customer: Number, discount: Number, id: Number, qty: Number, refunded: Boolean, region: Number, unitPrice: Number}[] */
+  const valid = orders.filter((o) => {
+  return (!o.refunded) && (o.unitPrice > 0);
+});
+  /** const totals: Number[] */
+  const totals = valid.map((o) => {
+  return lineTotal(o);
+});
+  /** const cube: Number[] */
+  const cube = zeros(REGIONS.length * CATEGORIES.length);
+  /** const perCustomer: Number[] */
+  const perCustomer = zeros(CUSTOMERS);
+  /** let revenue: Number */
+  let revenue = 0;
+  /** var i: Number */
+  for (var i = 0; i < valid.length; i++) {
+    /** const o: {category: Number, customer: Number, discount: Number, id: Number, qty: Number, refunded: Boolean, region: Number, unitPrice: Number} */
+    const o = valid[i];
+    /** const t: Number */
+    const t = totals[i];
+    cube[(o.region * CATEGORIES.length) + o.category] += t;
+    perCustomer[o.customer] += t;
+    revenue += t;
+  }
+  /** const top: Number[] */
+  const top = [];
+  /** var k: Number */
+  for (var k = 0; k < 5; k++) {
+    /** let best: Number */
+    let best = -1;
+    /** var c: Number */
+    for (var c = 0; c < CUSTOMERS; c++) {
+      if ((top.indexOf(c) === (-1)) && ((best === (-1)) || (perCustomer[c] > perCustomer[best]))) {
+        best = c;
+      }
+    }
+    top.push(best);
+  }
+  lines.push(`orders: ${orders.length}, valid: ${valid.length}`);
+  lines.push(`revenue: ${Math.round(revenue)}`);
+  /** var r: Number */
+  for (var r = 0; r < REGIONS.length; r++) {
+    /** let best: Number */
+    let best = 0;
+    /** var c: Number */
+    for (var c = 1; c < CATEGORIES.length; c++) {
+      if (cube[(r * CATEGORIES.length) + c] > cube[(r * CATEGORIES.length) + best]) {
+        best = c;
+      }
+    }
+    lines.push(`${REGIONS[r]}: top category ${CATEGORIES[best]} (${Math.round(cube[(r * CATEGORIES.length) + best])})`);
+  }
+  lines.push(`top customers: ${top.join(", ")}`);
+  return lines.join("\n");
+}
+/** let report: String */
+let report = "";
+/** var iteration: Number */
+for (var iteration = 0; iteration < 4; iteration++) {
+  /** const t0: Number */
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);
+All checks passed: examples/go-backend/orders.js (11 symbols) in <time>
+--- stderr

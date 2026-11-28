@@ -203,6 +203,31 @@ pub(crate) fn read_doc_annotation(
                 content_start: None,
             });
         }
+        // `/** this.x: T */` above a constructor's `this.x = …` line: the
+        // field's type (named `this.x`; the parser attaches it).
+        "this" if !exported => {
+            // (Prose often starts with "this": anything not shaped
+            // `this.name:` is a doc comment.)
+            c.advance(keyword.len());
+            if c.peek() != Some('.') {
+                return None;
+            }
+            c.bump();
+            let field = c.read_identifier();
+            c.skip_whitespace();
+            if field.is_empty() || c.peek() != Some(':') {
+                return None;
+            }
+            c.bump();
+            let (content, content_start) = c.read_to_end();
+            out.annotations.push(TypeAnnotation {
+                name: format!("this.{field}"),
+                content,
+                span: Span::new(comment_start, comment_end),
+                kind: AnnotationKind::Inline,
+                content_start: Some(content_start),
+            });
+        }
         "type" | "nominal" if !exported => {
             let nominal = keyword == "nominal";
             c.advance(keyword.len());

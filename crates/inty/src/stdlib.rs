@@ -47,10 +47,15 @@ pub const BUILTIN_MODULE_PREFIX: &str = "<builtin>/";
 /// thread, loaded on request: `inty --lib builtin:audioworklet`.
 pub const AUDIO_WORKLET: &str = include_str!("../stdlib/audioworklet.d.js");
 
+/// A dedicated worker's global scope (`self`, `postMessage`), loaded on
+/// request: `inty --lib builtin:worker`.
+pub const WORKER: &str = include_str!("../stdlib/worker.d.js");
+
 /// The embedded declaration file a `--lib builtin:NAME` names.
 pub fn builtin_lib(name: &str) -> Option<&'static str> {
     match name {
         "audioworklet" => Some(AUDIO_WORKLET),
+        "worker" => Some(WORKER),
         _ => None,
     }
 }
@@ -80,6 +85,9 @@ pub fn initial_env_with_stdlib() -> Result<(TypeEnv, InferState), IntyError> {
     for (source, _name) in DEFAULT_LIBS {
         env = load_lib(&mut state, env, source)?;
     }
+    // Every alias so far is the standard library's (see
+    // `InferState::stdlib_aliases`).
+    state.stdlib_aliases = state.type_aliases.clone();
     Ok((env, state))
 }
 

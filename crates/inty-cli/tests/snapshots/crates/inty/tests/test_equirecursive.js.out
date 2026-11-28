@@ -1,0 +1,88 @@
+$ inty crates/inty/tests/test_equirecursive.js
+exit: 0
+--- stdout
+var counter = {value: 0, add: function(x) {
+  return this.value + x;
+}};
+/** var result1: Number */
+var result1 = counter.add(5);
+var point = {x: 10, y: 20, getX: function() {
+  return this.x;
+}, getY: function() {
+  return this.y;
+}, distanceFrom: function(other) {
+  /** var dx: Number */
+  var dx = this.x - other.x;
+  /** var dy: Number */
+  var dy = this.y - other.y;
+  return (dx * dx) + (dy * dy);
+}};
+/** var px: Number */
+var px = point.getX();
+/** var py: Number */
+var py = point.getY();
+/** var coordSum: Number */
+var coordSum = px + py;
+/** var other: {distanceFrom: Null, getX: Null, getY: Null, x: Number, y: Number} */
+var other = {x: 3, y: 4, getX: null, getY: null, distanceFrom: null};
+/** var dist: Number */
+var dist = point.distanceFrom(other);
+var builder = {value: 0, setValue: function(v) {
+  this.value = v;
+  return this;
+}, getValue: function() {
+  return this.value;
+}};
+/** var val: Number */
+var val = builder.setValue(42).getValue();
+var rectangle = {width: 10, height: 20, area: function() {
+  return this.width * this.height;
+}, perimeter: function() {
+  return 2 * (this.width + this.height);
+}};
+/** var area: Number */
+var area = rectangle.area();
+/** var perim: Number */
+var perim = rectangle.perimeter();
+function makeCounter(initial) {
+  return {count: initial, increment: function() {
+  this.count = this.count + 1;
+  return this.count;
+}, decrement: function() {
+  this.count = this.count - 1;
+  return this.count;
+}, get: function() {
+  return this.count;
+}};
+}
+var c1 = makeCounter(10);
+c1.increment();
+c1.increment();
+/** var count: Number */
+var count = c1.get();
+var calculator = {result: 0, add: function(n) {
+  this.result = this.result + n;
+  return this;
+}, multiply: function(n) {
+  this.result = this.result * n;
+  return this;
+}, compute: function() {
+  return this.result;
+}};
+/** var calcResult: Number */
+var calcResult = calculator.add(5).multiply(3).compute();
+var account = {balance: 1000, transactions: [], deposit: function(amount) {
+  this.balance = this.balance + amount;
+  return this.balance;
+}, withdraw: function(amount) {
+  this.balance = this.balance - amount;
+  return this.balance;
+}, getBalance: function() {
+  return this.balance;
+}};
+account.deposit(500);
+account.withdraw(200);
+/** var finalBalance: Number */
+var finalBalance = account.getBalance();
+All checks passed: crates/inty/tests/test_equirecursive.js (20 symbols) in <time>
+--- stderr

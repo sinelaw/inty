@@ -411,7 +411,7 @@ fn load_extra_libs(
             Some(Ok(text)) => text.to_string(),
             Some(Err(name)) => {
                 eprintln!(
-                    "error: no built-in declarations named '{}' (known: audioworklet)",
+                    "error: no built-in declarations named '{}' (known: audioworklet, worker)",
                     name
                 );
                 return Err(ExitCode::from(1));
@@ -891,7 +891,8 @@ USAGE:
 
 OPTIONS:
     --lib <path>         Load an additional declaration file (can be repeated);
-                         `builtin:audioworklet` loads the AudioWorklet globals
+                         `builtin:audioworklet` loads the AudioWorklet globals,
+                         `builtin:worker` a dedicated worker's (`self`)
     --no-stdlib          Skip the embedded core and DOM declarations
     --no-color           Disable ANSI colors in diagnostic output
     --timings            Report each module's checking time and the slowest

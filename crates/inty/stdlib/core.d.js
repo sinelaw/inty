@@ -76,6 +76,14 @@ const Object;
     } */
 const Array;
 
+// Iteration. A generator (`function* g() { … yield x; … }`, a `*m()`
+// method) gives an `Iterator<T>` of what it yields: `for … of`, a spread
+// and `Array.from` iterate it, and `next()` steps it by hand. Annotate
+// one as `/** function g(…) => Iterator<T> */`.
+// (`next()`'s `value` is read once `done` is false: the record has no
+// type for the value a finished generator returns.)
+/** type Iterator<T> = {next: () => {done: Boolean, value: T}, [Symbol.iterator]: T} */
+
 // Raw binary data, as `fetch`, `WebSocket` and WebAssembly memory hand
 // it out; read and write it through a typed-array view.
 /** type ArrayBuffer = {byteLength: Number, slice: (begin: Number, end?: Number) => ArrayBuffer} */
@@ -84,27 +92,57 @@ const ArrayBuffer;
 
 // Typed arrays: fixed-length arrays of one machine number type. An
 // integer array stores a number as JavaScript does, wrapping it to its
-// bits (see `TypedArrayKind::element`). A length makes a zeroed array;
-// `from` copies an ordinary array. (A view of an `ArrayBuffer`,
-// `new Float32Array(buffer, offset, length)`, would make the argument
-// `Number | ArrayBuffer`, which an unannotated argument can't pick between;
-// declare such a view in a typed FFI module — docs/patterns.md.)
-/** const Int32Array: {(Number) => Int32Array, from: (Number[]) => Int32Array} */
-const Int32Array;
-/** const Uint8Array: {(Number) => Uint8Array, from: (Number[]) => Uint8Array} */
+// bits (a `Uint8ClampedArray` clamps it to 0..255; see
+// `TypedArrayKind::element`). `new` is typed by its own rule (what it
+// takes depends on its first argument's type, which no one function type
+// says):
+//   new T() / new T(length)              a zeroed array
+//   new T(buffer, byteOffset?, length?)  a view of an `ArrayBuffer`
+//   new T(xs)                            a copy of a `Number[]` or of a
+//                                        typed array of any kind
+// An argument whose type isn't known yet is taken to be a length: annotate
+// a parameter that holds a buffer (`ArrayBuffer`). The signature below is
+// the constructor as a value. `from` copies an ordinary array.
+/** const Int8Array: {(Number) => Int8Array, from: (Number[]) => Int8Array, BYTES_PER_ELEMENT: Number} */
+const Int8Array;
+/** const Uint8Array: {(Number) => Uint8Array, from: (Number[]) => Uint8Array, BYTES_PER_ELEMENT: Number} */
 const Uint8Array;
-/** const Float32Array: {(Number) => Float32Array, from: (Number[]) => Float32Array} */
+/** const Uint8ClampedArray: {(Number) => Uint8ClampedArray, from: (Number[]) => Uint8ClampedArray, BYTES_PER_ELEMENT: Number} */
+const Uint8ClampedArray;
+/** const Int16Array: {(Number) => Int16Array, from: (Number[]) => Int16Array, BYTES_PER_ELEMENT: Number} */
+const Int16Array;
+/** const Uint16Array: {(Number) => Uint16Array, from: (Number[]) => Uint16Array, BYTES_PER_ELEMENT: Number} */
+const Uint16Array;
+/** const Int32Array: {(Number) => Int32Array, from: (Number[]) => Int32Array, BYTES_PER_ELEMENT: Number} */
+const Int32Array;
+/** const Uint32Array: {(Number) => Uint32Array, from: (Number[]) => Uint32Array, BYTES_PER_ELEMENT: Number} */
+const Uint32Array;
+/** const Float32Array: {(Number) => Float32Array, from: (Number[]) => Float32Array, BYTES_PER_ELEMENT: Number} */
 const Float32Array;
-/** const Float64Array: {(Number) => Float64Array, from: (Number[]) => Float64Array} */
+/** const Float64Array: {(Number) => Float64Array, from: (Number[]) => Float64Array, BYTES_PER_ELEMENT: Number} */
 const Float64Array;
+
+// Any typed array or an `ArrayBuffer`: what reads bytes
+// (`WebAssembly.compile`, …) takes.
+/** type BufferSource = ArrayBuffer | Int8Array | Uint8Array | Uint8ClampedArray | Int16Array | Uint16Array | Int32Array | Uint32Array | Float32Array | Float64Array */
 
 // WebAssembly. A module's exports are whatever the program says they
 // are (`E`): annotate the result of `instantiate` where it is used.
+// `instantiate` is typed by its own rule: given the bytes of a module it
+// resolves to `{instance, module}`; given a compiled `WebAssemblyModule`
+// (`compile`'s, or `module` of an earlier `instantiate`), to the
+// instance alone. A compiled module is its own type (it can be posted to
+// a worker and instantiated there), not a record.
 /** type WebAssemblyMemory = {buffer: ArrayBuffer, grow: (Number) => Number} */
+/** nominal type WebAssemblyModule = {} */
+/** type WebAssemblyInstance<E> = {exports: E} */
 /** const WebAssembly: <E, I>{
-        instantiate: (bytes: ArrayBuffer | Uint8Array, imports?: I) => Promise<{instance: {exports: E}, module: {}}>,
-        Memory: (descriptor: {initial: Number, maximum?: Number}) => WebAssemblyMemory,
-        validate: (ArrayBuffer | Uint8Array) => Boolean
+        instantiate: (bytes: BufferSource, imports?: I) => Promise<{instance: WebAssemblyInstance<E>, module: WebAssemblyModule}>,
+        compile: (bytes: BufferSource) => Promise<WebAssemblyModule>,
+        Module: (bytes: BufferSource) => WebAssemblyModule,
+        Instance: (module: WebAssemblyModule, imports?: I) => WebAssemblyInstance<E>,
+        Memory: (descriptor: {initial: Number, maximum?: Number, shared?: Boolean}) => WebAssemblyMemory,
+        validate: (bytes: BufferSource) => Boolean
     } */
 const WebAssembly;
 
@@ -233,22 +271,24 @@ const NaN;
 const Infinity;
 
 // Error constructors. The standard JS Error hierarchy collapses to a
-// single shape here because inty has no nominal types — every Error
-// instance has the same `name` / `message` / `stack` row. Callers can
-// still throw and catch any of them; they unify structurally.
-/** const Error: <T>(String) => {name: String, message: String, stack: String} */
+// single shape here, `Error` (a type name too, `/** type R = {reject:
+// (Error) => Undefined} */`): every Error instance has the same `name` /
+// `message` / `stack` row. Callers can still throw and catch any of them;
+// they unify structurally.
+/** type Error = {name: String, message: String, stack: String} */
+/** const Error: (message?: String) => Error */
 const Error;
 
-/** const TypeError: <T>(String) => {name: String, message: String, stack: String} */
+/** const TypeError: (message?: String) => Error */
 const TypeError;
 
-/** const RangeError: <T>(String) => {name: String, message: String, stack: String} */
+/** const RangeError: (message?: String) => Error */
 const RangeError;
 
-/** const SyntaxError: <T>(String) => {name: String, message: String, stack: String} */
+/** const SyntaxError: (message?: String) => Error */
 const SyntaxError;
 
-/** const ReferenceError: <T>(String) => {name: String, message: String, stack: String} */
+/** const ReferenceError: (message?: String) => Error */
 const ReferenceError;
 
 // RegExp constructor. Returns the primitive `Regex` type, which inty
@@ -310,6 +350,22 @@ const WeakMap;
     } */
 /** const WeakSet: <T>() => WeakSet<T> */
 const WeakSet;
+
+// A weak reference: `deref()` gives the target, or `undefined` once it is
+// collected.
+/** type WeakRef<T> = {deref: (this: WeakRef<T>) => T | Undefined} */
+/** const WeakRef: <T>(T) => WeakRef<T> */
+const WeakRef;
+
+// A finalization registry: `new FinalizationRegistry(cleanup)`, then
+// `r.register(target, held, token?)` calls `cleanup(held)` some time after
+// `target` (any object) is collected, unless `r.unregister(token)` came
+// first. `register` takes a target of any type at each call, which no
+// record field can say: its members are typed by a rule
+// (`finalization_member`), and the type itself is opaque.
+/** nominal type FinalizationRegistry<T> = {} */
+/** const FinalizationRegistry: <T, R>((T) => R) => FinalizationRegistry<T> */
+const FinalizationRegistry;
 
 // Proxy. The handler shape is opaque (H) — modelling all the trap
 // signatures correctly requires variadic arguments and self-reference,

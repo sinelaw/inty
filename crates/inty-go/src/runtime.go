@@ -305,21 +305,41 @@ func intySetGrow[T any](a *[]T, j int, v T) []T {
 	return *a
 }
 
-// Typed arrays (Int32Array, Uint8Array, Float64Array) are fixed-length
-// slices of the machine type. A store wraps an integer as JavaScript's
-// ToInt32 / ToUint8 do, which is Go's conversion; the helpers keep a
+// Typed arrays (Int8Array … Uint32Array, Uint8ClampedArray, Float32Array,
+// Float64Array) are fixed-length slices of the machine type. A store wraps
+// an integer as JavaScript's ToInt32 / ToUint8 / … do, which is Go's
+// conversion (a Uint8ClampedArray clamps it instead); the helpers keep a
 // constant argument from being converted at compile time, where Go
 // rejects an overflow instead of wrapping it.
 
 func intyI32(v int) int32 { return int32(v) }
-func intyU8(v int) uint8  { return uint8(v) }
 
-func intyTypedNew[E int32 | uint8 | float64](n int) *[]E {
+type intyTypedElem interface {
+	int8 | uint8 | int16 | uint16 | int32 | uint32 | float32 | float64
+}
+
+// intyWrap is an integer stored into an integer typed array: its low
+// bits, as JavaScript's ToInt8 / ToUint8 / … do.
+func intyWrap[E int8 | uint8 | int16 | uint16 | uint32](v int) E { return E(v) }
+
+// intyClampU8 is ToUint8Clamp, a store into a Uint8ClampedArray: NaN is
+// 0, the number clamped to 0..255 and rounded half to even.
+func intyClampU8(f float64) uint8 {
+	if !(f > 0) {
+		return 0
+	}
+	if f >= 255 {
+		return 255
+	}
+	return uint8(math.RoundToEven(f))
+}
+
+func intyTypedNew[E intyTypedElem](n int) *[]E {
 	s := make([]E, n)
 	return &s
 }
 
-func intyTypedFrom[E int32 | uint8 | float64, S int | float64](xs *[]S) *[]E {
+func intyTypedFrom[E intyTypedElem, S int | float64](xs *[]S) *[]E {
 	s := make([]E, len(*xs))
 	for i, v := range *xs {
 		s[i] = E(v)
