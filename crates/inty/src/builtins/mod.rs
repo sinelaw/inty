@@ -916,9 +916,11 @@ impl InferState {
                 // type nothing else constrains, and it can let the
                 // `Indexable`s on the same receivers resolve.
                 // Only the first read of each (receiver, name) becomes the
-                // field: the receiver has no value, so further reads of
-                // the name (`s.slice(i)`, `s.slice(i, j)`) are vacuous and
-                // needn't agree.
+                // field, of a receiver nothing after this module sees: it
+                // has no value, so further reads of the name (`s.slice(i)`,
+                // `s.slice(i, j)`) are vacuous and needn't agree. One an
+                // importing module sees has the importer's values: each
+                // read is of the field.
                 // (Keys are taken before any defaulting binds a receiver.)
                 let keys: Vec<Option<(Type, String)>> = deferred
                     .iter()
@@ -950,11 +952,21 @@ impl InferState {
                         {
                             rest.push(c)
                         }
+                        // A receiver an importing module still sees has the
+                        // importer's values: its reads wait for them, each
+                        // resolved against the value's type (an array's
+                        // `map`, read twice, instantiated for each). Made
+                        // the first read's field, a record, every other
+                        // read's requirement was lost (a `.toUpperCase()` on
+                        // what it gives), and an array or a string given
+                        // didn't fit.
+                        Some(key) if matches!(&key.0, Type::Var(v) if keep.contains(v)) => {
+                            rest.push(c)
+                        }
                         Some(key) => {
                             if !seen.contains(&key) {
-                                let kept = matches!(&key.0, Type::Var(v) if keep.contains(v));
                                 seen.push(key);
-                                self.default_has_prop(&c, kept)?;
+                                self.default_has_prop(&c)?;
                             }
                             defaulted = true;
                         }
@@ -962,24 +974,23 @@ impl InferState {
                     }
                 }
                 if !defaulted {
-                    // Whatever is left has a container nothing ever pinned
-                    // down: no use of it depends on the element type.
+                    // Whatever is left on a variable nothing will decide has
+                    // a container nothing ever pinned down: no use of it
+                    // depends on the element type, and no value has a type
+                    // nothing fixes (so no run reaches a `Spread` on it, as
+                    // the Lean model leaves its `Merge`s): it is dropped.
+                    // One on a variable an importing module still sees,
+                    // whatever its class, waits for its uses there (an
+                    // `Inject`: `put(true)` deciding what a cell's sum
+                    // holds; an `Iterable` or `Indexable`: what the
+                    // importer's array holds, iterated): dropped, the
+                    // importer's value was never checked against it.
                     self.pending_constraints = rest;
-                    // An `Inject` or a `Strip` on a variable an importing
-                    // module still sees waits for its uses there (`put(true)`
-                    // deciding what a cell's sum holds); dropped, they would
-                    // let a value of no case through. (So does a `Spread`;
-                    // one on a variable nothing will decide is dropped, as
-                    // the Lean model leaves its `Merge`s: no value has a
-                    // type nothing fixes, so no run reaches the spread.)
                     let pending = std::mem::take(&mut self.pending_constraints);
                     self.pending_constraints = pending
                         .into_iter()
                         .filter(|c| {
                             matches!(
-                                c.pred.class,
-                                ClassName::Inject | ClassName::Strip | ClassName::Spread
-                            ) && matches!(
                                 c.pred.types.first().map(|t| self.zonk_head(t)),
                                 Some(Type::Var(v)) if keep.contains(&v)
                             )
@@ -1057,36 +1068,71 @@ impl InferState {
     /// on any receiver as well as detached, so the callee's `this` waits
     /// as an unknown callee's does (`settle_receivers`, at the end of the
     /// importer) rather than making it a method of the receiver now.
-    fn default_has_prop(
-        &mut self,
-        c: &crate::infer::PendingConstraint,
-        kept: bool,
-    ) -> Result<(), IntyError> {
+    fn default_has_prop(&mut self, c: &crate::infer::PendingConstraint) -> Result<(), IntyError> {
         let (recv, name, result) = c
             .pred
             .as_has_prop()
             .expect("default_has_prop: a HasProp constraint");
         let tail = self.fresh_flex();
         self.note_field_read(&tail, name, result);
-        let row = Type::object_open([(name, result.clone())], tail);
+        // A field as a read leaves it (`read_entry`): whether it takes
+        // stores, and is the object's own, are for its other uses to say.
+        // (An assignable own field, a class's method or getter given for
+        // the receiver later didn't fit: `v.setTop(0, 0)` on the elements
+        // of an array an importer fills with views.)
+        let entry = self.read_entry(result.clone());
+        let row = Type::Row(crate::types::RowType::open_entries(
+            std::collections::BTreeMap::from([(crate::types::PropName(name.to_string()), entry)]),
+            tail,
+        ));
         self.unify(c.span, recv, &row)?;
         if let Some(this) = c.pred.method_this() {
-            match self.zonk_head(this) {
-                Type::Var(v) if kept && v.is_flex() => {
-                    // Settled as a method of the receiver, as without an
-                    // importer, unless what the importer gives first is a
-                    // function that uses no `this`.
-                    self.pending_receivers.push(crate::infer::PendingReceiver {
-                        this: Type::Var(v),
-                        receiver: recv.clone(),
-                        span: c.span,
-                        unknown_is_method: true,
-                    });
-                }
-                _ => self.unify_this(c.span, this, recv)?,
-            }
+            self.unify_this(c.span, this, recv)?;
         }
         Ok(())
+    }
+
+    /// A read's type not fitting the field it reads, said as a mismatch
+    /// at that member of the receiver (the record the read asks for, and
+    /// the receiver), with where each side came from: a read resolved
+    /// late (the receiver an importer's value) is reported as a direct
+    /// one is.
+    fn as_member_mismatch(
+        &mut self,
+        e: &mut IntyError,
+        name: &str,
+        result: &Type,
+        receiver: &Type,
+    ) {
+        use crate::error::ShownType;
+        let tail = self.fresh_flex();
+        self.note_field_read(&tail, name, result);
+        let asked = Type::object_open([(name, result.clone())], tail);
+        // Where the receiver's field came from (an object literal's, kept
+        // on the field's type as it was written).
+        let field_origin = match self.zonk_head(receiver) {
+            Type::Row(row) => row
+                .props
+                .get(&crate::types::PropName(name.to_string()))
+                .and_then(|f| self.get_origin(&f.ty).cloned()),
+            _ => None,
+        };
+        if let Some(TypeError::UnificationError {
+            member,
+            whole,
+            found_origin,
+            ..
+        }) = e.as_type_mut()
+        {
+            if member.is_none() {
+                *member = Some(name.to_string());
+                *whole = Some(Box::new((ShownType::ty(&asked), ShownType::ty(receiver))));
+                if found_origin.is_none() {
+                    *found_origin = field_origin;
+                }
+                self.settle_error(e);
+            }
+        }
     }
 
     /// A constraint that must wait for its first type (an `Indexable`'s
@@ -1102,6 +1148,12 @@ impl InferState {
                 | ClassName::Strip
                 | ClassName::Spread
                 | ClassName::Plus
+                // A store, or a test, on a variable waits for it too:
+                // resolved on one, it said nothing and was gone, and a
+                // value an importer gives later wasn't checked.
+                | ClassName::FieldWrite
+                | ClassName::IndexWrite
+                | ClassName::Testable
         ) && pred.types.first().is_some_and(|c| {
             // Only the head matters: follow the variable's bindings (a
             // whole substitution, applied to each pending constraint at
@@ -1193,8 +1245,21 @@ impl InferState {
                 self.apply_deferred_call(span, result, &found)?;
                 let receiver = self.method_receiver(&receiver);
                 self.unify_this(span, this, &receiver)?;
+                // The method's own `this` is the receiver too, as in a
+                // direct call (`apply_deferred_call` relates the
+                // arguments and the result): a method of another object,
+                // reading its `this` (`new K().say`), doesn't fit.
+                let callee = self.zonk_head(&found);
+                if let Some((Some(callee_this), _, _)) = crate::infer::extract_callable(&callee) {
+                    self.unify_this(span, &callee_this, &receiver)?;
+                }
             }
-            None => self.unify(span, result, &found)?,
+            None => {
+                if let Err(mut e) = self.unify(span, result, &found) {
+                    self.as_member_mismatch(&mut e, name, result, &receiver);
+                    return Err(e);
+                }
+            }
         }
         // A deferred `p.then(cb)`: the call was checked already.
         self.settle_promise_results(promise_mark, span)?;
@@ -1845,6 +1910,40 @@ mod tests {
         assert!(env.lookup("Array").is_some());
         assert!(env.lookup("Object").is_some());
         assert!(env.lookup("undefined").is_some());
+    }
+
+    /// A read left at a module's end, on a receiver no importer sees, is
+    /// made a field as a read needs it: present, of any kind. A class's
+    /// method or a getter the receiver is found to be afterwards (as the
+    /// rest of the module's constraints resolve) fits it; an own field
+    /// that takes stores, as a store would need, it wouldn't.
+    #[test]
+    fn a_read_left_at_a_modules_end_takes_a_classs_method() {
+        let mut state = InferState::new();
+        let v = state.fresh_flex();
+        let r = state.fresh_type_var();
+        state.add_constraint(
+            TypePred::has_prop(Type::Var(v.clone()), "setTop", r),
+            Span::new(0, 0),
+        );
+        state
+            .resolve_constraints_keeping(&std::collections::HashSet::new())
+            .expect("the read is defaulted");
+        let method = Type::Row(crate::types::RowType::closed_entries(
+            std::collections::BTreeMap::from([(
+                crate::types::PropName("setTop".to_string()),
+                crate::types::FieldEntry {
+                    presence: Presence::Pre,
+                    ty: Type::Number,
+                    writable: Presence::Abs,
+                    own: Presence::Abs,
+                },
+            )]),
+        ));
+        assert!(
+            state.unify(Span::new(0, 0), &Type::Var(v), &method).is_ok(),
+            "a class's method fits the read"
+        );
     }
 
     #[test]

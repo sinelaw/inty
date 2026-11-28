@@ -241,7 +241,7 @@ impl InferState {
         }
         self.var_table.link_to_root(ra, rb);
         self.main_subst
-            .insert(TVarName::Flex(ra), Type::Var(TVarName::Flex(rb)));
+            .link_equal(TVarName::Flex(ra), Type::Var(TVarName::Flex(rb)));
     }
 
     /// Whether the type `from` is bound to mentions the variable `to`,
@@ -692,6 +692,14 @@ impl InferState {
             let rest = self.fresh_flex();
             let row = Type::Row(RowType::open_entries(fields, rest));
             return self.var_bind(span, var, &row);
+        }
+
+        // A type that can't reach `var` through the substitution (the
+        // usual case) needs neither check below: each walks all the type
+        // reaches (as `row_ends_in` doesn't), and neither looks inside a
+        // recursive type's body.
+        if !self.main_subst.may_reach(&TVarName::Flex(var), ty) {
+            return self.extend_subst(span, TVarName::Flex(var), ty.clone());
         }
 
         // Check if this would create a recursive type inside a row

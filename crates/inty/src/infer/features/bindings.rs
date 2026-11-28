@@ -749,25 +749,28 @@ impl InferState {
         ann_span: Span,
     ) -> InferResult<()> {
         let skolem_set: HashSet<TVarName> = skolems.into_iter().collect();
-        for v in env_free_before {
-            if !v.is_flex() {
-                continue;
-            }
-            let after = self.zonk_head(&Type::Var(v.clone()));
-            if after.free_vars().iter().any(|s| skolem_set.contains(s)) {
-                return Err(TypeError::EscapedSkolem { span: ann_span }.into());
-            }
+        // What the context's variables reach through the substitution
+        // (through each binding, not only a variable's own: a skolem a
+        // binding of a variable in its type holds has escaped too), in one
+        // walk, as only the union is wanted.
+        let mut reached = crate::types::subst::Reach::default();
+        let mut walk = crate::types::subst::ReachWalk::default();
+        for v in env_free_before.iter().filter(|v| v.is_flex()) {
+            self.main_subst
+                .reach_in(&Type::Var(v.clone()), &mut reached, &mut walk);
         }
-        let pending: Vec<Type> = self
-            .pending_constraints
+        if reached.vars.iter().any(|s| skolem_set.contains(s)) {
+            return Err(TypeError::EscapedSkolem { span: ann_span }.into());
+        }
+        // And what the pending constraints reach (kept up to date, rather
+        // than each constraint's types written out again here).
+        let escaped = self
+            .pending_constraint_reaches()
             .iter()
-            .flat_map(|c| c.pred.types.clone())
-            .collect();
-        for t in pending {
-            let t = self.zonk(&t);
-            if t.free_vars().iter().any(|s| skolem_set.contains(s)) {
-                return Err(TypeError::EscapedSkolem { span: ann_span }.into());
-            }
+            .flat_map(|rs| rs.iter())
+            .any(|r| r.vars.iter().any(|s| skolem_set.contains(s)));
+        if escaped {
+            return Err(TypeError::EscapedSkolem { span: ann_span }.into());
         }
         Ok(())
     }

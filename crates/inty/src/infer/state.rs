@@ -263,7 +263,16 @@ pub struct InferState {
     /// Named types whose body has no variable but its parameters (most
     /// declared ones): nothing in them is fixed by an environment that
     /// reaches them, so `env_fixed_vars` needn't resolve them again.
+    /// A body found closed through bindings stays closed as bindings are
+    /// added (they bind free variables, which it has none of), but not
+    /// when one is undone or replaced: see `closed_log`.
     pub(crate) closed_named: std::collections::HashSet<TypeId>,
+    /// The types put in `closed_named`, in order, so a snapshot's restore
+    /// takes back those found closed since (under bindings it undoes).
+    closed_log: Vec<TypeId>,
+    /// The free variables of the bindings of every imported module
+    /// checked so far (see [`Self::importer_reachable_vars`]).
+    imported_roots: crate::infer::EnvFree,
     /// What the environment's variables reach through the substitution,
     /// kept from one generalisation to the next (see [`EnvReach`]).
     env_reach: EnvReach,
@@ -611,6 +620,8 @@ pub(crate) struct InferSnapshot {
     /// `constraint_removals` at the snapshot, to check that claim.
     pub(crate) constraint_removals: u64,
     pub(crate) trail: TrailMark,
+    /// How many types `closed_log` held.
+    pub(crate) closed: usize,
 }
 
 /// A parsed generic type alias. Treated as not-nominal: applying
@@ -681,6 +692,8 @@ impl InferState {
             caught_exceptions: std::collections::HashSet::new(),
             recording_member_receiver: false,
             closed_named: std::collections::HashSet::new(),
+            closed_log: Vec::new(),
+            imported_roots: Default::default(),
             env_reach: EnvReach::default(),
             constraint_reaches: Default::default(),
             decl_types: HashMap::new(),
@@ -1375,6 +1388,7 @@ impl InferState {
             constraints: self.pending_constraints.len(),
             constraint_removals: self.constraint_removals,
             trail: self.var_table.snapshot(),
+            closed: self.closed_log.len(),
         }
     }
 
@@ -1397,6 +1411,11 @@ impl InferState {
         );
         self.pending_constraints.truncate(snap.constraints);
         self.var_table.restore(snap.trail);
+        // A body found closed under bindings now undone may not be.
+        let from = snap.closed.min(self.closed_log.len());
+        for id in self.closed_log.drain(from..) {
+            self.closed_named.remove(&id);
+        }
         // A pair unified in what was undone isn't unified any more.
         self.unify_bound_pairs.clear();
         self.unified_bound_pairs.clear();
@@ -2439,6 +2458,8 @@ impl InferState {
     /// Used when we discover a more specific type for a variable that was
     /// previously bound to a less specific type (e.g., Row -> Array).
     pub fn rebind_var(&mut self, var: TVarName, ty: Type) {
+        // A replaced binding may give a body found closed a variable.
+        self.forget_closed_named();
         // Mirror into the var_table by direct cell-rewrite. We can't
         // use `bind` here because the root may already be `Bound`
         // (that's exactly why `rebind_var` exists). Rewrite the
@@ -2454,8 +2475,19 @@ impl InferState {
 
     /// Register a named type definition.
     pub fn register_named_type(&mut self, def: TypeDef) {
-        self.closed_named.remove(&def.id);
+        // A body redefined may have variables, and so may those found
+        // closed for holding it.
+        if self.named_types.contains_key(&def.id) {
+            self.forget_closed_named();
+        }
         self.named_types.insert(def.id, def);
+    }
+
+    /// Forget which named types were found closed (see `closed_named`).
+    fn forget_closed_named(&mut self) {
+        // (The log stays: a snapshot's restore takes back what was put
+        // since by its position.)
+        self.closed_named.clear();
     }
 
     /// Look up a named type definition.
@@ -2785,7 +2817,6 @@ impl InferState {
                 this,
                 receiver,
                 span,
-                unknown_is_method,
             } = pending.clone();
             let result = match self.zonk_head(&this) {
                 Type::Var(TVarName::Flex(id))
@@ -2804,20 +2835,11 @@ impl InferState {
                     self.unify_this(span, &this, &receiver)
                 }
                 Type::Var(v) if v.is_flex() => {
-                    // (A call on a value an importer decides waits for the
-                    // importers: at the end of an imported module, the one
-                    // that decides it may still be to come.)
-                    if reached.is_some_and(|r| !r.contains(&v))
-                        || (unknown_is_method && reached.is_none() && self.module_depth > 0)
-                    {
+                    if reached.is_some_and(|r| !r.contains(&v)) {
                         keep.push(pending);
                         continue;
                     }
-                    if unknown_is_method {
-                        self.unify_this(span, &this, &receiver)
-                    } else {
-                        self.unify(span, &Type::Var(v), &Type::ArrowThis)
-                    }
+                    self.unify(span, &Type::Var(v), &Type::ArrowThis)
                 }
                 _ => self.unify_this(span, &this, &receiver),
             };
@@ -3217,6 +3239,24 @@ impl InferState {
         self.env_fixed_vars(&env.free(), &Type::Undefined).0
     }
 
+    /// The type variables an importer may still decide at the end of a
+    /// module imported with `env`: what `env`'s bindings reach, and what
+    /// those of each module imported before do (a later importer may
+    /// import that one, and decide what its bindings reach, whatever the
+    /// module ending now imported of it). `env` is then counted among
+    /// those modules'.
+    pub fn importer_reachable_vars(
+        &mut self,
+        env: &crate::infer::TypeEnv,
+    ) -> std::collections::HashSet<TVarName> {
+        let free = env.free();
+        self.imported_roots.vars.extend(free.vars);
+        self.imported_roots.pvars.extend(free.pvars);
+        self.imported_roots.named.extend(free.named);
+        let roots = self.imported_roots.clone();
+        self.env_fixed_vars(&roots, &Type::Undefined).0
+    }
+
     /// What each pending constraint's types reach through the
     /// substitution, in order. Found again only when the substitution or
     /// the constraints have changed since: generalising asks several
@@ -3241,6 +3281,8 @@ impl InferState {
             if c.version == version && same_preds(c) {
                 let reaches = c.reaches.clone();
                 *self.constraint_reaches.borrow_mut() = old;
+                #[cfg(debug_assertions)]
+                self.debug_check_constraint_reaches(&reaches);
                 return reaches;
             }
         }
@@ -3253,18 +3295,37 @@ impl InferState {
             if let Some(writes) = self.main_subst.writes_since(c.stamp) {
                 let mut bound: Vec<TVarName> = Vec::new();
                 let mut pbound: Vec<crate::types::PVarName> = Vec::new();
+                let mut rebound: Vec<TVarName> = Vec::new();
                 let mut afresh = false;
                 for w in writes {
                     match w {
                         SubstWrite::Compressed => {}
                         SubstWrite::Bound(v) => bound.push(v.clone()),
                         SubstWrite::PresenceBound(p) => pbound.push(p.clone()),
-                        SubstWrite::Rebound(_) | SubstWrite::PresenceRebound(_) => {
+                        // A binding replaced (`rebind_var`): only the reaches
+                        // that went through it are found again.
+                        SubstWrite::Rebound(v) => rebound.push(v.clone()),
+                        SubstWrite::PresenceRebound(_) => {
                             afresh = true;
                             break;
                         }
                     }
                 }
+                // The constraints whose types may reach a replaced binding
+                // (`Subst::may_reach`: no constraint it says can't reach
+                // one ever could, as its index keeps what was undone).
+                let types_of: HashMap<u64, &[Type]> = self
+                    .pending_constraints
+                    .iter()
+                    .map(|c| (c.id, c.pred.types.as_slice()))
+                    .collect();
+                let through_rebound = |id: &u64| {
+                    !rebound.is_empty()
+                        && types_of.get(id).is_none_or(|ts| {
+                            ts.iter()
+                                .any(|t| rebound.iter().any(|x| self.main_subst.may_reach(x, t)))
+                        })
+                };
                 if !afresh {
                     let mut of_var: HashMap<TVarName, Reach> = HashMap::new();
                     let mut of_pvar: HashMap<crate::types::PVarName, Reach> = HashMap::new();
@@ -3304,6 +3365,9 @@ impl InferState {
                         }
                     };
                     for (id, mut rs) in c.ids.into_iter().zip(reaches) {
+                        if through_rebound(&id) {
+                            continue;
+                        }
                         let touched = rs.iter().any(|r| !hit(r).is_empty() || !phit(r).is_empty());
                         if touched {
                             for r in Arc::make_mut(&mut rs) {
@@ -3362,7 +3426,122 @@ impl InferState {
             ids,
             reaches: reaches.clone(),
         });
+        #[cfg(debug_assertions)]
+        self.debug_check_constraint_reaches(&reaches);
         reaches
+    }
+
+    /// Debug-build invariant for [`Self::pending_constraint_reaches`]: what
+    /// it kept and brought up to date is what a walk finds now.
+    #[cfg(debug_assertions)]
+    fn debug_check_constraint_reaches(
+        &self,
+        reaches: &[std::sync::Arc<Vec<crate::types::subst::Reach>>],
+    ) {
+        assert_eq!(reaches.len(), self.pending_constraints.len());
+        // (The free variables: a binding replaced by a link to an equal
+        // type reaches the same ones, though not always through the same
+        // named types or bound variables.)
+        let free =
+            |vs: &std::collections::HashSet<TVarName>| -> std::collections::HashSet<TVarName> {
+                vs.iter()
+                    .filter(|v| !self.main_subst.contains(v))
+                    .cloned()
+                    .collect()
+            };
+        let pfree = |ps: &std::collections::HashSet<crate::types::PVarName>| -> std::collections::HashSet<crate::types::PVarName> {
+            ps.iter().filter(|p| !self.main_subst.contains_presence(p)).cloned().collect()
+        };
+        for (c, rs) in self.pending_constraints.iter().zip(reaches) {
+            for (t, r) in c.pred.types.iter().zip(rs.iter()) {
+                let mut fresh = crate::types::subst::Reach::default();
+                self.main_subst.reach(t, &mut fresh);
+                assert!(
+                    free(&fresh.vars) == free(&r.vars) && pfree(&fresh.pvars) == pfree(&r.pvars),
+                    "a kept reach of {:?} differs from a walk's: {:?} vs {:?}",
+                    c.pred,
+                    r,
+                    fresh
+                );
+            }
+        }
+    }
+
+    /// Debug-build invariant for [`Self::env_fixed_vars`]: the variables
+    /// it found the environment reaching (before the functional
+    /// dependencies), with its kept layers, shared walks and bodies found
+    /// closed, are those walks of their own find now, with no body
+    /// skipped.
+    #[cfg(debug_assertions)]
+    fn debug_check_env_reach(
+        &self,
+        env_free: &crate::infer::EnvFree,
+        ty: &Type,
+        env_vars: &[TVarName],
+        vars: &std::collections::HashSet<TVarName>,
+        pvars: &std::collections::HashSet<crate::types::PVarName>,
+    ) {
+        use crate::types::subst::Reach;
+        use std::collections::HashSet;
+        let free = |v: &TVarName| !self.main_subst.contains(v);
+        let pfree = |p: &crate::types::PVarName| !self.main_subst.contains_presence(p);
+        let mut want = Reach::default();
+        let mut named: Vec<TypeId> = env_free.named.iter().copied().collect();
+        want.pvars.extend(env_free.pvars.iter().cloned());
+        for id in &self.escaped_locals {
+            if let Some(scheme) = self.local_types.get(id) {
+                want.pvars.extend(scheme.free_pvars());
+                named.extend(scheme.body.ty.named_ids());
+            }
+        }
+        for p in want.pvars.clone() {
+            self.main_subst.reach_presence_var(&p, &mut want);
+        }
+        for v in env_vars {
+            want.vars.insert(v.clone());
+            self.main_subst.reach(&Type::Var(v.clone()), &mut want);
+        }
+        named.extend(ty.named_ids());
+        for c in &self.pending_constraints {
+            for t in &c.pred.types {
+                let mut r = Reach::default();
+                self.main_subst.reach(t, &mut r);
+                named.extend(r.named);
+            }
+        }
+        named.extend(want.named.iter().copied());
+        let mut seen = HashSet::new();
+        while let Some(id) = named.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(def) = self.named_types.get(&id) else {
+                continue;
+            };
+            let mut body = Reach::default();
+            self.main_subst.reach(&def.body, &mut body);
+            want.vars
+                .extend(body.vars.into_iter().filter(|v| !def.params.contains(v)));
+            want.pvars.extend(body.pvars);
+            named.extend(body.named);
+        }
+        let got: HashSet<&TVarName> = vars.iter().filter(|v| free(v)).collect();
+        let wanted: HashSet<&TVarName> = want.vars.iter().filter(|v| free(v)).collect();
+        assert!(
+            got == wanted,
+            "the environment's reach differs from a walk's: missing {:?}, extra {:?}",
+            wanted.difference(&got).collect::<Vec<_>>(),
+            got.difference(&wanted).collect::<Vec<_>>()
+        );
+        let got: HashSet<&crate::types::PVarName> = pvars.iter().filter(|p| pfree(p)).collect();
+        let wanted: HashSet<&crate::types::PVarName> =
+            want.pvars.iter().filter(|p| pfree(p)).collect();
+        assert!(
+            got == wanted,
+            "the environment's presence reach differs from a walk's: missing {:?}, extra {:?}",
+            wanted.difference(&got).collect::<Vec<_>>(),
+            got.difference(&wanted).collect::<Vec<_>>()
+        );
     }
 
     /// Bring `cache` up to date (see [`EnvReach`]) and make its layers
@@ -3411,12 +3590,29 @@ impl InferState {
                 for l in &mut cache.layers {
                     l.reach.vars.remove(&v);
                 }
+                // A binding that may close a cycle (one that may reach the
+                // variable it binds, `Subst::may_reach`) is gone through on a
+                // walk of its own: the cycle may run through bindings the
+                // layers went through, which their walk skips (and a fresh
+                // walk lists). Any other is gone through as part of theirs.
                 cache.walk.set_level(i);
-                self.main_subst.reach_in(
-                    &Type::Var(v),
-                    &mut cache.layers[i].reach,
-                    &mut cache.walk,
-                );
+                let closes_cycle = self
+                    .main_subst
+                    .get(&v)
+                    .is_some_and(|b| self.main_subst.may_reach(&v, b));
+                if closes_cycle {
+                    self.main_subst.reach_afresh_in(
+                        &Type::Var(v),
+                        &mut cache.layers[i].reach,
+                        &mut cache.walk,
+                    );
+                } else {
+                    self.main_subst.reach_in(
+                        &Type::Var(v),
+                        &mut cache.layers[i].reach,
+                        &mut cache.walk,
+                    );
+                }
             }
             for (i, p) in pbound {
                 self.main_subst
@@ -3504,8 +3700,8 @@ impl InferState {
         // be far larger than the substitution: see `Subst::reach`).
         // One walk for them all: they share most of what they reach (a
         // module's bindings, its imports), and only the union is wanted.
-        // In order of id, as where a shared walk cuts a cycle of bindings
-        // depends on the order.
+        // (In order of id, so the walk is the same each time; what it
+        // finds doesn't depend on the order: see `Subst::reach`.)
         env_vars.sort_by_key(|v| (v.is_flex(), v.id()));
         env_vars.dedup();
         let mut cache = std::mem::take(&mut self.env_reach);
@@ -3560,9 +3756,7 @@ impl InferState {
         let top = cache.layers.len();
         let mut walk = std::mem::take(&mut cache.walk);
         walk.set_level(top);
-        // In order of id: where a shared walk cuts a cycle of bindings
-        // depends on the order the bodies are gone through, and the
-        // result must not depend on hashing.
+        // (In order of id, so the walk is the same each time.)
         let mut named: std::collections::BinaryHeap<std::cmp::Reverse<TypeId>> =
             named.into_iter().map(std::cmp::Reverse).collect();
         while let Some(std::cmp::Reverse(id)) = named.pop() {
@@ -3603,6 +3797,7 @@ impl InferState {
                 && inner.iter().all(|n| self.closed_named.contains(n))
             {
                 self.closed_named.insert(id);
+                self.closed_log.push(id);
             }
             vars.extend(free);
             pvars.extend(free_pvars);
@@ -3611,21 +3806,15 @@ impl InferState {
         walk.forget_from(top);
         cache.walk = walk;
         self.env_reach = cache;
+        #[cfg(debug_assertions)]
+        self.debug_check_env_reach(env_free, ty, &env_vars, &vars, &pvars);
         // Close over the pending constraints' functional dependencies:
         // each type's free variables through the substitution (`reach`,
         // not a flattened copy of it).
         loop {
             let mut changed = false;
             for (class, types) in &preds {
-                // A bound variable in a reach is one a cycle of bindings was
-                // cut at: what it reaches is in the reach already, and
-                // whether it is listed itself depends on where the walk
-                // entered the cycle.
-                let fixed = |r: &crate::types::subst::Reach| {
-                    r.vars
-                        .iter()
-                        .all(|v| vars.contains(v) || self.main_subst.contains(v))
-                };
+                let fixed = |r: &crate::types::subst::Reach| r.vars.is_subset(&vars);
                 let determined: Vec<&crate::types::subst::Reach> = match (class, *types) {
                     // container → index, element
                     (ClassName::Indexable, [container, index, element]) => {
@@ -4190,6 +4379,169 @@ fn collect_literal_fields(
 mod tests {
     use super::*;
 
+    /// A recursive type's body found to have no free variable under a
+    /// speculative binding has one again once the binding is undone: the
+    /// environment that reaches the type fixes it then.
+    #[test]
+    fn a_body_found_closed_while_speculating_is_reopened_on_restore() {
+        let mut state = InferState::new();
+        let alpha = state.fresh_flex();
+        let id = state.fresh_type_id();
+        let body = Type::Row(crate::types::RowType::closed(
+            [(
+                crate::types::PropName("x".to_string()),
+                Type::Var(alpha.clone()),
+            )]
+            .into_iter()
+            .collect(),
+        ));
+        state.register_named_type(TypeDef::recursive(id, vec![], body));
+        let env = crate::infer::EnvFree {
+            named: [id].into_iter().collect(),
+            ..Default::default()
+        };
+        assert!(state
+            .env_fixed_vars(&env, &Type::Undefined)
+            .0
+            .contains(&alpha));
+
+        let snap = state.snapshot_inference();
+        state
+            .extend_subst(Span::default(), alpha.clone(), Type::Number)
+            .expect("binds");
+        assert!(!state
+            .env_fixed_vars(&env, &Type::Undefined)
+            .0
+            .contains(&alpha));
+        state.restore_snapshot(snap);
+
+        assert!(
+            state
+                .env_fixed_vars(&env, &Type::Undefined)
+                .0
+                .contains(&alpha),
+            "the body reaches `alpha` again"
+        );
+    }
+
+    /// A body found closed is found again once a binding it went through
+    /// is replaced (`rebind_var`), or the body itself redefined: either
+    /// may give it a variable.
+    #[test]
+    fn a_body_found_closed_is_reopened_by_a_rebinding_or_a_redefinition() {
+        let mut state = InferState::new();
+        let alpha = state.fresh_flex();
+        let beta = state.fresh_flex();
+        let gamma = state.fresh_flex();
+        let id = state.fresh_type_id();
+        let body_of = |v: &TVarName| {
+            Type::Row(crate::types::RowType::closed(
+                [(
+                    crate::types::PropName("x".to_string()),
+                    Type::Var(v.clone()),
+                )]
+                .into_iter()
+                .collect(),
+            ))
+        };
+        state.register_named_type(TypeDef::recursive(id, vec![], body_of(&alpha)));
+        state
+            .extend_subst(Span::default(), alpha.clone(), Type::Number)
+            .expect("binds");
+        let env = crate::infer::EnvFree {
+            named: [id].into_iter().collect(),
+            ..Default::default()
+        };
+        let fixed = |state: &mut InferState| state.env_fixed_vars(&env, &Type::Undefined).0;
+        assert!(fixed(&mut state).is_empty(), "the body is closed");
+
+        state.rebind_var(alpha.clone(), Type::Var(beta.clone()));
+        assert!(fixed(&mut state).contains(&beta), "the body reaches `beta`");
+
+        state.register_named_type(TypeDef::recursive(id, vec![], body_of(&gamma)));
+        assert!(
+            fixed(&mut state).contains(&gamma),
+            "the redefined body reaches `gamma`"
+        );
+    }
+
+    /// A binding that closes a cycle through bindings the environment's
+    /// fixed variables were found through before is gone through again
+    /// whole: a cycle's bound variables are all reached, wherever a walk
+    /// enters it (`Subst::reach`), so they are as a fresh walk finds them.
+    #[test]
+    fn a_binding_closing_a_cycle_keeps_the_envs_fixed_variables() {
+        let mut state = InferState::new();
+        let a = state.fresh_flex();
+        let b = state.fresh_flex();
+        let row = |k: &str, v: &TVarName| {
+            Type::Row(crate::types::RowType::closed(
+                [(crate::types::PropName(k.to_string()), Type::Var(v.clone()))]
+                    .into_iter()
+                    .collect(),
+            ))
+        };
+        state
+            .extend_subst(Span::default(), a.clone(), row("f", &b))
+            .expect("binds");
+        let env = crate::infer::EnvFree {
+            vars: [a.clone()].into_iter().collect(),
+            ..Default::default()
+        };
+        let before = state.env_fixed_vars(&env, &Type::Undefined).0;
+        assert!(before.contains(&b), "{before:?}");
+
+        // (Written to the substitution alone: the cycles of bindings a
+        // program makes, among rows' tails, the union-find mirror keeps
+        // apart.)
+        state.main_subst.insert(b.clone(), row("g", &a));
+        let mut fresh = crate::types::subst::Reach::default();
+        state.main_subst.reach(&Type::Var(a.clone()), &mut fresh);
+        let after = state.env_fixed_vars(&env, &Type::Undefined).0;
+        assert!(fresh.vars.contains(&a) && fresh.vars.contains(&b));
+        for v in &fresh.vars {
+            assert!(after.contains(v), "{v:?} is reached");
+        }
+    }
+
+    /// A pending constraint's cached reach is found again when a binding
+    /// it went through is replaced (`rebind_var`).
+    #[test]
+    fn a_rebinding_updates_a_pending_constraints_reach() {
+        let mut state = InferState::new();
+        let x = state.fresh_flex();
+        let y = state.fresh_flex();
+        let z = state.fresh_flex();
+        let row = |v: &TVarName| {
+            Type::Row(crate::types::RowType::closed(
+                [(
+                    crate::types::PropName("f".to_string()),
+                    Type::Var(v.clone()),
+                )]
+                .into_iter()
+                .collect(),
+            ))
+        };
+        state
+            .extend_subst(Span::default(), x.clone(), row(&y))
+            .expect("binds");
+        state.add_constraint(TypePred::testable(Type::Var(x.clone())), Span::default());
+        let reached = |state: &InferState| -> std::collections::HashSet<TVarName> {
+            state
+                .pending_constraint_reaches()
+                .iter()
+                .flat_map(|rs| rs.iter())
+                .flat_map(|r| r.vars.iter().cloned())
+                .collect()
+        };
+        assert!(reached(&state).contains(&y));
+
+        state.rebind_var(x.clone(), row(&z));
+        let after = reached(&state);
+        assert!(after.contains(&z), "reaches `z`: {after:?}");
+        assert!(!after.contains(&y), "no longer reaches `y`: {after:?}");
+    }
+
     #[test]
     fn test_fresh_vars() {
         let mut state = InferState::new();
@@ -4347,13 +4699,12 @@ mod tests {
 
 /// A method call whose callee's `this` wasn't known at the call (see
 /// `InferState::settle_receivers`): its `this`, the receiver, and where.
-/// One still unknown when settled is, unless `unknown_is_method`, a
-/// function that uses no `this`; if it is, a method of the receiver (a
-/// call on a value an importer decided, whose callee was read off it).
+/// One still unknown when settled is a function that uses no `this`. (A
+/// call on a value an importer decides waits as a `HasProp`, resolved
+/// against the importer's value.)
 #[derive(Debug, Clone)]
 pub(crate) struct PendingReceiver {
     pub(crate) this: Type,
     pub(crate) receiver: Type,
     pub(crate) span: Span,
-    pub(crate) unknown_is_method: bool,
 }

@@ -6722,17 +6722,69 @@ fn an_array_has_the_methods_a_record_of_reads_needs() {
 /// failing to agree is a mismatch in that member: the error named neither.
 #[test]
 fn a_flag_mismatch_names_the_member() {
+    // `primary` is stored to: a getter doesn't take stores. (Only read,
+    // a getter fits.)
     let module = "let view;\n\
                   function attach(v) { view = v; }\n\
+                  function reset() { view.primary = {pos: 0}; }\n\
                   function pos() { return view.primary.pos + 1; }";
     let user = "class View {\n\
                   constructor() { this.cursors = [{pos: 1}]; }\n\
                   get primary() { return this.cursors[0]; }\n\
                 }\n\
                 attach(new View());";
-    let (err, _) = first_error_across(module, user);
-    let text = err.to_string();
+    // (Ended as an imported module is: what `view` is, the importer says.)
+    let mut state = InferState::new();
+    let program = crate::frontends::javascript::parse_source(module).unwrap();
+    let (_, env) = state
+        .infer_program_with_env(&initial_env(), &program)
+        .unwrap();
+    let keep = state.importer_reachable_vars(&env);
+    state.resolve_constraints_keeping(&keep).unwrap();
+    let program = crate::frontends::javascript::parse_at(user, module.len() + 1).unwrap();
+    let err = match state.infer_program_with_env(&env, &program) {
+        Err(e) => e,
+        Ok(_) => state
+            .errors
+            .first()
+            .cloned()
+            .unwrap_or_else(|| state.resolve_constraints().unwrap_err()),
+    };
+    let text = state.render_error(err).to_string();
     assert!(text.contains("in member `primary`"), "{text}");
+}
+
+/// A module that only reads a property of a value its importer gives
+/// takes a getter, or a class's method, for it: a read leaves the
+/// property's kind open, as in a single file.
+#[test]
+fn a_read_of_an_imported_value_takes_a_getter() {
+    let module = "let view;\n\
+                  function attach(v) { view = v; }\n\
+                  function pos() { return view.primary.pos + view.top(); }";
+    let user = "class View {\n\
+                  constructor() { this.cursors = [{pos: 1}]; }\n\
+                  get primary() { return this.cursors[0]; }\n\
+                  top() { return 0; }\n\
+                }\n\
+                attach(new View());";
+    let mut state = InferState::new();
+    let program = crate::frontends::javascript::parse_source(module).unwrap();
+    let (_, env) = state
+        .infer_program_with_env(&initial_env(), &program)
+        .unwrap();
+    // Ended as an imported module is.
+    let keep = state.importer_reachable_vars(&env);
+    state.resolve_constraints_keeping(&keep).unwrap();
+    let program = crate::frontends::javascript::parse_at(user, module.len() + 1).unwrap();
+    let r = state
+        .infer_program_with_env(&env, &program)
+        .and_then(|_| state.resolve_constraints());
+    assert!(
+        r.is_ok() && state.errors.is_empty(),
+        "{r:?} {:?}",
+        state.errors
+    );
 }
 
 /// An expansive alias is reported, and the rest of the program is still
@@ -6900,4 +6952,29 @@ fn a_spread_fixes_the_slots_of_the_fields_after_it() {
         let src = format!("{head}{bad}");
         assert!(check_program(&src, &[]).is_err(), "{bad} is accepted");
     }
+}
+
+/// A method call a generic function makes on its parameter is resolved
+/// when the argument is known, and checked as a direct method call is: a
+/// method of another object, reading its `this` (`new K().say` detached),
+/// doesn't fit a receiver without what it reads. Only the arguments and
+/// the result were related, and the call ran with the wrong `this`.
+#[test]
+fn a_deferred_method_call_checks_the_methods_this() {
+    let class = "class K { constructor() { this.n = 1; } say(t) { return this.n + t.length; } }\n";
+    let through_generic =
+        format!("{class}function hello(ed) {{ return ed.say(\"hi\"); }}\nconst x = hello({{ say: new K().say }});");
+    let direct = format!("{class}const ed = {{ say: new K().say }};\nconst x = ed.say(\"hi\");");
+    for src in [through_generic, direct] {
+        assert!(check_program(&src, &["x"]).is_err(), "accepted:\n{src}");
+    }
+    // A function that uses no `this`, or a method of the receiver itself,
+    // still fits.
+    let ok = "function hello(ed) { return ed.say(\"hi\"); }\n\
+              const a = hello({ say: (t) => t.length });\n\
+              const b = hello({ n: 1, say(t) { return this.n + t.length; } });";
+    assert_eq!(
+        check_program(ok, &["a", "b"]),
+        Ok(vec!["Number".into(), "Number".into()])
+    );
 }

@@ -659,10 +659,12 @@ fn load_module(
     // The module is complete: what its checking left pending is decided
     // now, while it is the module being checked (errors point into it),
     // rather than carried into every importer (where each
-    // generalisation would scan it again) — except the numeric variables
-    // its bindings reach, which its importers' uses decide.
+    // generalisation would scan it again) — except what an importer may
+    // still decide: what this module's bindings reach, and those of every
+    // module imported before it (a later module may import that one, and
+    // what this module made of it must not decide it first).
     let keep = if imported {
-        state.reachable_vars(&module_env)
+        state.importer_reachable_vars(&module_env)
     } else {
         Default::default()
     };
@@ -1071,6 +1073,222 @@ mod tests {
                 r.is_ok() && state.errors.is_empty(),
                 ok,
                 "put({arg}): {r:?}"
+            );
+        }
+    }
+
+    /// Two reads of a field of a value an importer gives are reads of the
+    /// one field, whichever comes first: what the second does with it
+    /// (`.toUpperCase()`) is still asked of the importer's value. Only the
+    /// first read was kept, so with `r` read first the call below passed.
+    #[test]
+    fn each_read_of_an_imported_receivers_field_is_kept() {
+        let dir = tempdir();
+        for (body, arg, ok) in [
+            (
+                "const r = y.k; const s = y.k.toUpperCase(); return r;",
+                "1",
+                false,
+            ),
+            (
+                "const s = y.k.toUpperCase(); const r = y.k; return r;",
+                "1",
+                false,
+            ),
+        ] {
+            write_file(
+                dir.path(),
+                "lib.js",
+                &format!("export const o = {{ m(y) {{ {body} }} }};"),
+            );
+            write_file(
+                dir.path(),
+                "main.js",
+                &format!("import {{ o }} from \"./lib.js\"; const r = o.m({{k: {arg}}});"),
+            );
+            let main_path = dir.path().join("main.js");
+            let mut state = InferState::new();
+            let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+                .and_then(|_| state.resolve_constraints());
+            assert_eq!(
+                r.is_ok() && state.errors.is_empty(),
+                ok,
+                "{body} with k = {arg}: {r:?} {:?}",
+                state.errors
+            );
+        }
+    }
+
+    /// What a module asks of a value an importer gives, iterated or
+    /// indexed (`for (const s of v) s.toUpperCase()`), is asked of the
+    /// importer's value. A receiver also read (`v.length`) left a read for
+    /// the importer while its `Iterable` or `Indexable` was dropped.
+    #[test]
+    fn an_imported_receivers_elements_are_checked() {
+        let dir = tempdir();
+        for (body, arg, ok) in [
+            (
+                "let n = v.length; for (const s of v) { n += s.toUpperCase().length; } return n;",
+                "[1, 2]",
+                false,
+            ),
+            (
+                "for (const s of v) { s.toUpperCase(); } return 1;",
+                "[1, 2]",
+                false,
+            ),
+            ("return v[0].toUpperCase() + v.length;", "[1, 2]", false),
+            (
+                "let n = v.length; for (const s of v) { n += s.toUpperCase().length; } return n;",
+                "[\"a\"]",
+                true,
+            ),
+        ] {
+            write_file(
+                dir.path(),
+                "lib.js",
+                &format!(
+                    "let v; export function set(x) {{ v = x; }} export function use() {{ {body} }}"
+                ),
+            );
+            write_file(
+                dir.path(),
+                "main.js",
+                &format!("import {{ set, use }} from \"./lib.js\"; set({arg}); use();"),
+            );
+            let main_path = dir.path().join("main.js");
+            let mut state = InferState::new();
+            let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+                .and_then(|_| state.resolve_constraints());
+            assert_eq!(
+                r.is_ok() && state.errors.is_empty(),
+                ok,
+                "{body} given {arg}: {r:?} {:?}",
+                state.errors
+            );
+        }
+    }
+
+    /// What a module does to a value an importer gives, beyond reading it,
+    /// is checked against the importer's value as well: a store to one of
+    /// its fields or elements, and a test of its truthiness, each wait for
+    /// it rather than pass as on a value nothing gives.
+    #[test]
+    fn an_imported_values_stores_and_tests_are_checked() {
+        let dir = tempdir();
+        for (body, arg, ok) in [
+            ("v[0] = \"a\"; return 1;", "\"abc\"", false),
+            ("v[0] = \"a\"; return 1;", "[\"b\"]", true),
+            ("v.k = 1; return 1;", "\"abc\"", false),
+            ("v.k = 1; return 1;", "{k: 2}", true),
+            ("if (v) { return 1; } return 2;", "() => 1", false),
+            ("if (v) { return 1; } return 2;", "1", true),
+        ] {
+            write_file(
+                dir.path(),
+                "lib.js",
+                &format!(
+                    "let v; export function set(x) {{ v = x; }} export function use() {{ {body} }}"
+                ),
+            );
+            write_file(
+                dir.path(),
+                "main.js",
+                &format!("import {{ set, use }} from \"./lib.js\"; set({arg}); use();"),
+            );
+            let main_path = dir.path().join("main.js");
+            let mut state = InferState::new();
+            let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+                .and_then(|_| state.resolve_constraints());
+            assert_eq!(
+                r.is_ok() && state.errors.is_empty(),
+                ok,
+                "{body} given {arg}: {r:?} {:?}",
+                state.errors
+            );
+        }
+    }
+
+    /// A method call on what a library's class holds for an importer (its
+    /// elements, iterated) asks only to read the method: a class's
+    /// method, which takes no stores, fits it.
+    #[test]
+    fn a_class_method_fits_a_call_on_what_a_library_holds() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "lib.js",
+            "export class A {\n  constructor() { this.vs = []; }\n  add(v) { this.vs.push(v); }\n  go() { for (const v of this.vs) { v.setTop(0); } }\n}\n",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { A } from \"./lib.js\";\nclass D { setTop(n) { return n; } }\nconst a = new A();\na.add(new D());\na.go();\n",
+        );
+        let main_path = dir.path().join("main.js");
+        let mut state = InferState::new();
+        let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+            .and_then(|_| state.resolve_constraints());
+        assert!(
+            r.is_ok() && state.errors.is_empty(),
+            "{r:?} {:?}",
+            state.errors
+        );
+    }
+
+    /// A module imported first by one that doesn't use what a value
+    /// reaches (`b`, importing `hello` only) doesn't decide that value's
+    /// reads: the importer that gives it (`main`, importing `b` first) does,
+    /// whatever the order of its imports.
+    #[test]
+    fn an_intermediate_importer_leaves_another_modules_reads() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "a.js",
+            "let y; export function set(x) { y = x; } \
+             export function get() { const r = y.k; y.k.toUpperCase(); return r; } \
+             let ed; export function give(e) { ed = e; } \
+             export function hello() { return ed.say(\"hi\"); }",
+        );
+        write_file(
+            dir.path(),
+            "b.js",
+            "import { hello } from \"./a.js\"; export const z = 1;",
+        );
+        for (imports, uses, ok) in [
+            (
+                "import { z } from \"./b.js\"; import { set, get } from \"./a.js\";",
+                "set({k: 1}); get();",
+                false,
+            ),
+            (
+                "import { set, get } from \"./a.js\"; import { z } from \"./b.js\";",
+                "set({k: 1}); get();",
+                false,
+            ),
+            (
+                "import { z } from \"./b.js\"; import { set, get } from \"./a.js\";",
+                "set({k: \"s\"}); get();",
+                true,
+            ),
+            // A function that uses no `this` fits the method call.
+            (
+                "import { z } from \"./b.js\"; import { give, hello } from \"./a.js\";",
+                "give({ say: (t) => t.length }); hello();",
+                true,
+            ),
+        ] {
+            write_file(dir.path(), "main.js", &format!("{imports} {uses}"));
+            let main_path = dir.path().join("main.js");
+            let mut state = InferState::new();
+            let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+                .and_then(|_| state.resolve_constraints());
+            assert_eq!(
+                r.is_ok() && state.errors.is_empty(),
+                ok,
+                "{imports} {uses}: {r:?} {:?}",
+                state.errors
             );
         }
     }

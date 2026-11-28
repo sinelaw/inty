@@ -1040,7 +1040,6 @@ impl InferState {
                             this: Type::Var(v),
                             receiver: obj_for_this.into_owned(),
                             span,
-                            unknown_is_method: false,
                         })
                 }
                 this => {
