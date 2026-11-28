@@ -7056,3 +7056,38 @@ fn generators_give_an_iterator_of_what_they_yield() {
         assert!(check_with_stdlib(bad, &[]).is_err(), "{}", bad);
     }
 }
+
+/// The presence variables of type aliases' optional parameters
+/// (`b?: T`) are numbered from the state's, as an annotation's are:
+/// numbered from zero, two aliases' were the same variable, and the same
+/// as ones inference made later, so one decided elsewhere (a `Worker`'s
+/// `postMessage(x)`) decided another (a `WorkerScope`'s, which then
+/// refused its transfer list: "takes 2 arguments, but 2 are passed").
+#[test]
+fn aliases_optional_parameters_have_presence_variables_of_their_own() {
+    let src = "/** type A = {f: (x: Number, y?: Number) => Undefined} */\n\
+               /** type B = {g: (x: Number, y?: Number) => Undefined} */\n\
+               /** function useA(a: A) => Undefined */ function useA(a) { a.f(1); }\n\
+               /** function useB(b: B) => Undefined */ function useB(b) { b.g(1, 2); }\n";
+    let (_, _, state) = infer_program_via_program_with_stdlib(src).unwrap();
+    let optional = |name: &str| -> crate::types::PVarName {
+        let def = &state.type_aliases[name];
+        let Type::Row(row) = &def.body else {
+            panic!("{name}: {:?}", def.body)
+        };
+        let field = row.props.values().next().unwrap();
+        let (_, params, _) = crate::infer::extract_callable(&field.ty).unwrap();
+        match &params[1].presence {
+            crate::types::Presence::Var(v) => v.clone(),
+            p => panic!("{name}'s `y?`: {p:?}"),
+        }
+    };
+    let (a, b) = (optional("A"), optional("B"));
+    assert_ne!(a, b);
+    for v in [a, b] {
+        let crate::types::PVarName::Flex(id) = v else {
+            panic!("a flexible presence variable")
+        };
+        assert!(id < state.next_pvar_id(), "{id} is below the next free id");
+    }
+}

@@ -212,3 +212,72 @@ fn a_class_that_failed_to_check_is_unknown_elsewhere() {
     assert!(all.contains("h.js:6:"), "{all}");
     assert!(!all.contains("g.js:"), "no error in g.js:\n{all}");
 }
+
+/// A worker's `scope.postMessage(msg, [])` was refused ("the function
+/// takes 2 arguments, but 2 are passed") after another module called a
+/// `Worker`'s `postMessage(msg)`: the type aliases' optional parameters
+/// shared presence variables, so deciding one decided the other. (Cut
+/// down from Fresh's grammars.js and grammar-worker.js; their other
+/// errors are beside the point.)
+#[test]
+fn an_optional_parameter_of_one_alias_is_not_decided_by_another() {
+    let dir = tmp_dir();
+    write(
+        &dir,
+        "grammars.js",
+        r#"export class Grammars {
+  constructor(highlighting) {
+    this.turn = Promise.resolve(undefined);
+  }
+  register(language, source, extensions) {
+    const run = this.turn.then(async () => {
+    });
+  }
+  build(hl, set) {
+    const worker = this.workerFor(hl);
+    return new Promise((resolve, reject) => {
+      worker.postMessage(buildMsg(id, set.map((g) => ({ name: g.language, source: g.source }))));
+    });
+  }
+  workerFor(hl) {
+    const w = new Worker("/js/grammar-worker.js", { type: "module" });
+    w.onmessage = (e) => {
+      for (const b of found(this.builds.get(m.id))) {
+      }
+    };
+    w.onerror = (e) => {
+    };
+    return w;
+  }
+}
+"#,
+    );
+    write(
+        &dir,
+        "grammar-worker.js",
+        r#"function build(wasm, packdump, grammars) {
+}
+const scope = self;
+scope.onmessage = (e) => {
+  if (m.kind === "start") {
+  }
+  for (const s of started) {
+    s.then((w) => {
+    }).catch((err) => { scope.postMessage(failedMsg(id, err instanceof Error ? err.message : String(err)), []); });
+  }
+  scope.postMessage(failedMsg(id, "the grammar worker was not started"), []);
+};
+"#,
+    );
+    let (_, stdout, stderr) = run_inty_args(
+        &dir,
+        &[
+            "--lib",
+            "builtin:worker",
+            "grammars.js",
+            "grammar-worker.js",
+        ],
+    );
+    let all = format!("{stdout}{stderr}");
+    assert!(!all.contains("Arity mismatch"), "{all}");
+}

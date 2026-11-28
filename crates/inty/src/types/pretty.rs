@@ -958,6 +958,19 @@ fn shows_this(this_type: Option<&Type>) -> bool {
     this_type.is_some_and(|t| !matches!(t, Type::Undefined | Type::Var(_) | Type::ArrowThis))
 }
 
+/// Whether two presences (a field's, a parameter's) print alike: both
+/// present, both absent, or both undecided (`name?`, whichever variable
+/// it is).
+fn prints_alike(a: &crate::types::Presence, b: &crate::types::Presence) -> bool {
+    use crate::types::Presence;
+    matches!(
+        (a, b),
+        (Presence::Pre, Presence::Pre)
+            | (Presence::Abs, Presence::Abs)
+            | (Presence::Var(_), Presence::Var(_))
+    )
+}
+
 /// Whether `ty` is `pattern` with its `params` (variable ids) replaced by
 /// some types — recorded in `bound`, consistently. It is when `ty` prints
 /// as `pattern` would, so a function's `this` that isn't printed matches
@@ -981,7 +994,8 @@ fn match_alias(
                 && a.props.len() == b.props.len()
                 && a.props.iter().all(|(k, e)| {
                     b.props.get(k).is_some_and(|f| {
-                        e.presence == f.presence && match_alias(&e.ty, &f.ty, params, bound)
+                        prints_alike(&e.presence, &f.presence)
+                            && match_alias(&e.ty, &f.ty, params, bound)
                     })
                 })
         }
@@ -1017,7 +1031,8 @@ fn match_alias(
                     _ => false,
                 }
                 && p1.iter().zip(p2).all(|(x, y)| {
-                    x.presence == y.presence && match_alias(&x.ty, &y.ty, params, bound)
+                    prints_alike(&x.presence, &y.presence)
+                        && match_alias(&x.ty, &y.ty, params, bound)
                 })
                 && match_alias(r1, r2, params, bound)
         }

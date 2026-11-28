@@ -537,12 +537,22 @@ impl InferState {
                     &self.type_aliases,
                 )
                 .at_source_offset(alias.content_start);
+                // Its presence variables (`b?: T`) are numbered from the
+                // state's, as an annotation's are: numbered from zero,
+                // each alias's optional parameters were the same
+                // variables as other aliases' and as those inference
+                // makes, so one decided elsewhere (a `Worker`'s
+                // `postMessage(x)` with no transfer list) decided another
+                // (a `WorkerScope`'s, which then took no transfer list).
+                parser.seed_pvar_id(self.next_pvar_id());
                 for (name, id) in alias.params.iter().zip(ids.iter()) {
                     parser.preset_var(name.clone(), *id);
                 }
                 let parsed = parser.parse();
                 let next = parser.next_var_id();
+                let next_pvar = parser.next_pvar_id_value();
                 self.bump_var_id_to(next);
+                self.bump_pvar_id_to(next_pvar);
                 match parsed {
                     Ok(ty) => ty,
                     // As a statement that fails binds its names to
