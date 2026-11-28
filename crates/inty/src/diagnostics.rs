@@ -405,7 +405,11 @@ fn write_error_with<W: Write>(
                 obj_type,
                 span,
             } => (
-                format!("Property '{}' not found in type {}", prop, obj_type),
+                format!(
+                    "Property '{}' not found in type {}",
+                    crate::error::shown_prop(prop),
+                    obj_type
+                ),
                 *span,
                 None,
             ),

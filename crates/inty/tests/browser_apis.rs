@@ -270,3 +270,38 @@ fn a_worker_scope() {
     // Not declared on a page's main thread.
     bad("self.postMessage(1);", "self");
 }
+
+/// The rules that make one of the standard library's types (a
+/// generator's iterator, a typed array's buffer, a WebAssembly module)
+/// make the library's, not a program's own alias of the same name.
+#[test]
+fn a_program_s_alias_does_not_stand_in_for_the_library_s_type() {
+    // A generator is the library's iterator, which a program's own
+    // `Iterator` doesn't describe.
+    ok("/** type Iterator<T> = {current: T} */\n\
+        function* g() { yield 1; }\n\
+        const xs = [...g()];\n\
+        const n = xs[0] + 1;");
+    bad(
+        "/** type Iterator<T> = {current: T} */\n\
+         /** function g() => Iterator<Number> */ function* g() { yield 1; }",
+        "Symbol.iterator",
+    );
+    // A typed array's `buffer` is the library's `ArrayBuffer`.
+    ok("/** type ArrayBuffer = {mine: Number} */\n\
+        const b = new Uint8Array(4).buffer;\n\
+        const n = b.byteLength;");
+    bad(
+        "/** type ArrayBuffer = {mine: Number} */\n\
+         const b = new Uint8Array(4).buffer;\n\
+         const n = b.mine;",
+        "mine",
+    );
+    // `instantiate` of a program's own `WebAssemblyModule` is of bytes.
+    bad(
+        "/** nominal type WebAssemblyModule = {} */\n\
+         /** function own(m: WebAssemblyModule) => Undefined */\n\
+         function own(m) { WebAssembly.instantiate(m); }",
+        "BufferSource",
+    );
+}

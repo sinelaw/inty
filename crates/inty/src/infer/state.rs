@@ -410,6 +410,11 @@ pub struct InferState {
     /// the body cloning structure, and substitute argument types in
     /// for the parameters.
     pub type_aliases: HashMap<String, AliasDef>,
+    /// The aliases the standard library declares (`ArrayBuffer`,
+    /// `Iterator`, …), as loaded: the rules that make one of its types
+    /// (a generator's iterator, a typed array's buffer) take it from here,
+    /// so a program's own alias of the same name doesn't stand in for it.
+    pub stdlib_aliases: HashMap<String, AliasDef>,
 
     /// Names of factory functions a frontend lowered a `class` to and
     /// which should be branded nominally (from `Program::class_brands`).
@@ -726,6 +731,7 @@ impl InferState {
             timing_nested: std::time::Duration::ZERO,
             config,
             type_aliases: HashMap::new(),
+            stdlib_aliases: HashMap::new(),
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
             exhaustive_switches: std::collections::HashSet::new(),

@@ -85,6 +85,9 @@ pub fn initial_env_with_stdlib() -> Result<(TypeEnv, InferState), IntyError> {
     for (source, _name) in DEFAULT_LIBS {
         env = load_lib(&mut state, env, source)?;
     }
+    // Every alias so far is the standard library's (see
+    // `InferState::stdlib_aliases`).
+    state.stdlib_aliases = state.type_aliases.clone();
     Ok((env, state))
 }
 

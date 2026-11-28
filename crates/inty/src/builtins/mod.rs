@@ -426,7 +426,7 @@ pub fn typed_array_member_type(
 
 /// The stdlib's `ArrayBuffer` type (`None` without the stdlib).
 pub fn array_buffer_type(state: &InferState) -> Option<Type> {
-    let def = state.type_aliases.get("ArrayBuffer")?;
+    let def = state.stdlib_aliases.get("ArrayBuffer")?;
     Some(match def.rec_id {
         Some(id) => Type::Named(id, Vec::new()),
         None => def.body.clone(),

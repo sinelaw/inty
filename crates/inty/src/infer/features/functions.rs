@@ -1177,7 +1177,7 @@ impl InferState {
     /// elements `element`; without the stdlib, a record iterating them.
     pub(in crate::infer) fn iterator_type(&mut self, element: Type) -> Type {
         use crate::types::{FieldEntry, PropName, RowType, ITER_KEY};
-        match self.type_aliases.get("Iterator").cloned() {
+        match self.stdlib_aliases.get("Iterator").cloned() {
             Some(def) if def.params.len() == 1 => match def.rec_id.or(def.nominal_id) {
                 Some(id) => Type::Named(id, vec![element]),
                 None => {
@@ -1342,7 +1342,7 @@ impl InferState {
         {
             return None;
         }
-        let module = self.type_aliases.get("WebAssemblyModule")?.nominal_id?;
+        let module = self.stdlib_aliases.get("WebAssemblyModule")?.nominal_id?;
         let member_span = *member_span;
         Some((|| {
             let wasm = self.infer_expr(env, object)?;
